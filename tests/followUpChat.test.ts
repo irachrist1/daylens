@@ -130,6 +130,32 @@ test('stats answer does not reuse narrative follow-up context', () => {
   assert.match(result.effectivePrompt, /explain/i)
 })
 
+test('moment detail follow-up reuses prior time window for Watching exactly what?', () => {
+  const momentState: AIConversationState = {
+    ...statsState(),
+    routingContext: {
+      dateMs: new Date(2026, 6, 7).getTime(),
+      timeWindowStartMs: new Date(2026, 6, 7, 14, 50).getTime(),
+      timeWindowEndMs: new Date(2026, 6, 7, 15, 10).getTime(),
+      weeklyBrief: null,
+      entity: null,
+    },
+  }
+  const result = resolveFollowUp('Watching exactly what?', momentState, [
+    {
+      id: 1,
+      role: 'user',
+      content: 'What was I doing on Tuesday at 3 p.m.?',
+      createdAt: Date.now(),
+    },
+  ])
+  assert.equal(result.kind, 'followup_reuse_context')
+  assert.equal(result.followUpClass, 'literalize')
+  assert.equal(result.shouldReuseContext, true)
+  assert.equal(result.shouldResetContext, false)
+  assert.equal(result.effectivePrompt, 'Watching exactly what?')
+})
+
 test('repair prompts stay classified as repair', () => {
   const result = resolveFollowUp('be more specific', weeklyState(), threadHistory())
   assert.equal(result.kind, 'followup_repair')

@@ -37,6 +37,34 @@ test('a focus question yields a focus phrase, not a clipped clause', () => {
   assert.match(title, /focus/i)
 })
 
+test('a watching moment question becomes a topic phrase, not a truncated prompt', () => {
+  const title = deriveTitleFromMessage(
+    'What was I watching on Tuesday, July 7 at 3:00pm? Name the exact video title — not just YouTube or the browser.',
+  )
+  assert.equal(title, 'Tuesday Watching')
+  assert.equal(isWeakThreadTitle(title), false)
+  assert.ok(!title.endsWith('…'))
+  assert.ok(!/^what\b/i.test(title))
+})
+
+test('"What was I watching yesterday?" → Yesterday Watching', () => {
+  assert.equal(deriveTitleFromMessage('What was I watching yesterday?'), 'Yesterday Watching')
+})
+
+test('"What was I looking at on Thursday…?" → Thursday Page', () => {
+  assert.equal(
+    deriveTitleFromMessage('What was I looking at on Thursday, July 9 at 1:00pm? Name the exact page.'),
+    'Thursday Page',
+  )
+})
+
+test('"What page was I on Friday…?" → Friday Page', () => {
+  assert.equal(
+    deriveTitleFromMessage('What page was I on Friday, July 10 at 4:50pm? Exact title.'),
+    'Friday Page',
+  )
+})
+
 test('isWeakThreadTitle flags bare stopwords/timeframes and ellipsis', () => {
   assert.equal(isWeakThreadTitle('today'), true)
   assert.equal(isWeakThreadTitle('the week'), true)

@@ -76,6 +76,30 @@ function timeframeWordCased(normalized: string): string | null {
   return null
 }
 
+const WEEKDAY_NAMES = [
+  'monday',
+  'tuesday',
+  'wednesday',
+  'thursday',
+  'friday',
+  'saturday',
+  'sunday',
+] as const
+
+function weekdayWordCased(normalized: string): string | null {
+  for (const day of WEEKDAY_NAMES) {
+    if (new RegExp(`\\b${day}\\b`).test(normalized)) {
+      return day.charAt(0).toUpperCase() + day.slice(1)
+    }
+  }
+  return null
+}
+
+/** Prefer a named weekday ("Tuesday") over a relative timeframe ("Today"). */
+function topicTimeAnchor(normalized: string): string | null {
+  return weekdayWordCased(normalized) ?? timeframeWordCased(normalized)
+}
+
 function collapseWhitespace(value: string): string {
   return value.trim().replace(/\s+/g, ' ')
 }
@@ -169,13 +193,28 @@ function intentTitleFromPrompt(message: string): string | null {
     || /\baccomplish/.test(normalized)
     || /\bwhat\s+did\s+i\s+do\b/.test(normalized)
   ) {
-    const tf = timeframeWordCased(normalized)
+    const tf = topicTimeAnchor(normalized)
     if (tf) return `${tf}'s work`
+  }
+
+  // Moment / watching questions must never keep the raw "What was I watching…"
+  // clause — that truncates with an ellipsis and stays forever-weak, so the
+  // sidebar never upgrades past the first prompt fragment.
+  if (
+    /\bwatch(?:ing|ed)?\b|\bvideo(?:s)?\b/.test(normalized)
+    || /\blooking at\b/.test(normalized)
+    || /\bwhat page\b/.test(normalized)
+    || /\bpage was i on\b/.test(normalized)
+  ) {
+    const tf = topicTimeAnchor(normalized)
+    const noun = /\bwatch(?:ing|ed)?\b|\bvideo(?:s)?\b/.test(normalized) ? 'watching' : 'page'
+    if (tf) return noun === 'watching' ? `${tf} watching` : `${tf} page`
+    return noun === 'watching' ? 'Watching' : 'Page'
   }
 
   // FB6: "when was I most focused this week" → "This week focus", not a clipped clause.
   if (/\bfocused\b|\bdeep work\b/.test(normalized)) {
-    const tf = timeframeWordCased(normalized)
+    const tf = topicTimeAnchor(normalized)
     if (tf) return `${tf} focus`
   }
 

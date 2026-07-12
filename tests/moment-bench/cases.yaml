@@ -1,0 +1,98 @@
+# Moment / watching answer-quality cases against the live Daylens DB.
+# Free: deterministic router only — no provider calls, no chat UI.
+#
+# Ground truth: website_visits overlapping the asked clock time
+# (verified with sqlite before pinning mustContain).
+#
+# UI linkage: chat sendMessage calls the same shouldUseRouter +
+# routeInsightsQuestion path (aiService.ts). A PASS here is the same
+# string the UI streams when the router hits.
+
+cases:
+  - id: tuesday_3pm_youtube
+    question: >-
+      What was I watching on Tuesday, July 7 at 3:00pm? Name the exact video
+      title — not just YouTube or the browser.
+    referenceNow: "2026-07-12T15:30:00"
+    expectTitle: "Tuesday Watching"
+    mustContain:
+      - Chinese Performance Cars
+      - watching
+    mustNotContain:
+      - Grades for Gentil
+      - "Pages:"
+      - page titles didn't come through
+      - Top apps in that block
+
+  - id: sunday_1510_nyc_apartment
+    question: >-
+      What was I watching today at 3:10pm? Name the exact video title.
+    referenceNow: "2026-07-12T16:00:00"
+    expectTitle: "Today Watching"
+    mustContain:
+      - DREAM New York City apartment
+      - watching
+    mustNotContain:
+      - "Pages:"
+      - page titles didn't come through
+      - Top apps in that block
+
+  - id: sunday_1445_run_faster
+    question: >-
+      What was I watching on Sunday, July 12 at 2:45pm? Exact video title.
+    referenceNow: "2026-07-12T16:00:00"
+    expectTitle: "Sunday Watching"
+    mustContain:
+      - Smartest Way To Run Faster
+      - watching
+    mustNotContain:
+      - "Pages:"
+      - DREAM New York City apartment
+
+  - id: saturday_1000_build_this
+    question: >-
+      What was I watching on Saturday, July 11 at 10:00am? Name the video.
+    referenceNow: "2026-07-12T16:00:00"
+    expectTitle: "Saturday Watching"
+    mustContain:
+      - If I was 25 with $0
+      - watching
+    mustNotContain:
+      - "Pages:"
+      - page titles didn't come through
+      - nothing was foregrounded
+
+  - id: saturday_1300_uganda
+    question: >-
+      What was I watching on July 11 at 1:00pm? Exact title please.
+    referenceNow: "2026-07-12T16:00:00"
+    expectTitle: "Watching"
+    mustContain:
+      - Geography Facts About Uganda
+      - watching
+    mustNotContain:
+      - "Pages:"
+      - Top apps in that block
+      - Weekend Long Read
+      - " today "
+  - id: thursday_1300_meet
+    question: >-
+      What was I looking at on Thursday, July 9 at 1:00pm? Name the exact page.
+    referenceNow: "2026-07-12T16:00:00"
+    expectTitle: "Thursday Page"
+    mustContain:
+      - Machine Learning Pipeline
+    mustNotContain:
+      - "Pages:"
+      - page titles didn't come through
+
+  - id: friday_1650_hackathon
+    question: >-
+      What page was I on Friday, July 10 at 4:50pm? Exact title.
+    referenceNow: "2026-07-12T16:00:00"
+    expectTitle: "Friday Page"
+    mustContain:
+      - Frontiers PAIO Hackathon
+    mustNotContain:
+      - "Pages:"
+      - page titles didn't come through

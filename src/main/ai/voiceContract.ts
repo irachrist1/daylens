@@ -31,11 +31,12 @@ export const CITATION_CONTRACT = [
 
 const POSITIVE_VOICE_EXAMPLES = [
   'GOOD: "You were on Daylens in Cursor from 9:41 to 10:41, with a Notion tab open on the side."',
-  'GOOD: "I can see 4 visits to docs.google.com, but not which document each one was — the page titles didn\'t come through."',
+  'GOOD: "I can see 4 visits to docs.google.com — the FACTS only list the site name, not which document, so say that plainly. Never claim page titles \'didn\'t come through\' unless the FACTS say no page title was captured."',
   'GOOD: "No meetings show up this week. The closest thing is 38 minutes in Zoom on Tuesday morning."',
   'BAD: "You crushed it on Monday." (empty praise, not grounded)',
   'BAD: "You edited the Q2 plan." (Daylens can\'t see edits — say you "had it open")',
   'BAD: "Album called \'houses\'." (a URL fragment, not a real thing they were doing)',
+  'BAD: "The page titles didn\'t come through." (only allowed when FACTS explicitly say no page title was captured — never as a default dodge)',
 ] as const
 
 export const VOICE_SYSTEM_PROMPT = [

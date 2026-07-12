@@ -90,6 +90,30 @@ const FOLLOW_UP_PATTERNS = [
   'then',
   'doing what',
   'what exactly',
+  'exactly what',
+  'watching what',
+  'watching exactly',
+  'which video',
+  'what video',
+  'which page',
+  'what was i watching',
+  'that moment',
+]
+
+// Subset safe for shouldUseRouter — excludes vague tokens like "then" that
+// appear in ordinary questions and would steal them from the planner.
+const DETAIL_FOLLOW_UP_PATTERNS = [
+  'that time',
+  'at that point',
+  'doing what',
+  'what exactly',
+  'exactly what',
+  'watching what',
+  'watching exactly',
+  'which video',
+  'what video',
+  'which page',
+  'what was i watching',
   'that moment',
 ]
 
@@ -333,6 +357,32 @@ function resolveTargetDate(question: string, defaultDate: Date, previousContext:
   }
   if (normalized.includes('today')) return new Date(defaultDate.getFullYear(), defaultDate.getMonth(), defaultDate.getDate())
 
+  // Absolute calendar dates must win over weekday heuristics — "July 11 at
+  // 1pm" is that day, not "today" just because no weekday word was present.
+  const isoMatch = normalized.match(/\b(20\d{2})-(\d{2})-(\d{2})\b/)
+  if (isoMatch) {
+    const year = Number(isoMatch[1])
+    const month = Number(isoMatch[2]) - 1
+    const day = Number(isoMatch[3])
+    return new Date(year, month, day)
+  }
+  const monthNames: Record<string, number> = {
+    january: 0, february: 1, march: 2, april: 3, may: 4, june: 5,
+    july: 6, august: 7, september: 8, october: 9, november: 10, december: 11,
+    jan: 0, feb: 1, mar: 2, apr: 3, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+  }
+  const monthDayMatch = normalized.match(
+    /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s*(20\d{2}))?\b/,
+  )
+  if (monthDayMatch) {
+    const month = monthNames[monthDayMatch[1]!]
+    const day = Number(monthDayMatch[2])
+    const year = monthDayMatch[3] ? Number(monthDayMatch[3]) : defaultDate.getFullYear()
+    if (month != null && day >= 1 && day <= 31) {
+      return new Date(year, month, day)
+    }
+  }
+
   const weekdayMatch = normalized.match(/\b(last|this)?\s*(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/)
   if (weekdayMatch) {
     const weekdayMap: Record<string, number> = {
@@ -345,7 +395,7 @@ function resolveTargetDate(question: string, defaultDate: Date, previousContext:
       saturday: 6,
     }
     const modifier = weekdayMatch[1] ?? 'this'
-    const targetWeekday = weekdayMap[weekdayMatch[2]]
+    const targetWeekday = weekdayMap[weekdayMatch[2]!]
     const result = new Date(calendarDate)
     const currentWeekday = result.getDay()
     let delta = targetWeekday - currentWeekday
@@ -1048,10 +1098,159 @@ function monthlyConsumptionTopicAnswer(question: string, normalized: string, ref
 }
 
 // F2: block-led answer for moment/range questions. Picks the renderer's
-// covering block, names it, and reports the apps inside the asked window.
-// Deliberately omits raw page titles and window titles — those are how
-// URL-fragment artefacts (e.g. "houses - Google Photos") leak past the
-// page-title sanitizer for time-of-day questions.
+// covering block, names it, reports apps, and includes sanitized page titles
+// (never raw URL-fragment chrome — those are filtered below).
+function looksLikeUrlFragmentTitle(value: string): boolean {
+  if (/^https?:\/\//i.test(value)) return true
+  const stripped = value.trim()
+  if (!stripped.includes(' ') && stripped.length >= 24 && /^[A-Za-z0-9_\-./?&=%]+$/.test(stripped)) return true
+  if (/^[A-Za-z0-9+/=_-]{20,}$/.test(stripped) && !/\s/.test(stripped)) return true
+  return false
+}
+
+const GENERIC_MOMENT_TITLE_PATTERNS = [
+  /^youtube$/i,
+  /^\(\d+\)\s*youtube$/i,
+  /^youtube\s*[-–—]\s*home$/i,
+  /^new tab$/i,
+  /^home$/i,
+]
+
+function momentTitleLooksGeneric(title: string, domain: string | null | undefined): boolean {
+  const normalized = title.trim()
+  if (!normalized) return true
+  if (GENERIC_MOMENT_TITLE_PATTERNS.some((pattern) => pattern.test(normalized))) return true
+  if (!domain) return false
+  const lower = normalized.toLowerCase()
+  const simplified = domain.toLowerCase().replace(/^www\./, '')
+  return lower === simplified || lower === simplified.replace(/\.(com|org|io|net)$/g, '')
+}
+
+type MomentPageCandidate = {
+  pageTitle?: string | null
+  displayTitle?: string
+  host?: string | null
+  domain?: string
+  subtitle?: string | null
+  totalSeconds?: number
+  overlapMs?: number
+  url?: string | null
+}
+
+function sanitizeMomentPageTitle(
+  page: MomentPageCandidate,
+): { title: string; host: string | null } | null {
+  const host = (page.host ?? page.domain ?? page.subtitle ?? '').trim() || null
+  for (const raw of [page.pageTitle, page.displayTitle]) {
+    if (!raw) continue
+    const value = String(raw).trim()
+    if (!value || looksLikeUrlFragmentTitle(value)) continue
+    if (momentTitleLooksGeneric(value, host)) continue
+    return { title: value, host }
+  }
+  return null
+}
+
+function isVideoWatchHost(host: string | null | undefined, url?: string | null): boolean {
+  const haystack = `${host ?? ''} ${url ?? ''}`.toLowerCase()
+  return /youtube\.com|youtu\.be|vimeo\.com|netflix\.com|twitch\.tv|disneyplus\.com|hulu\.com/.test(haystack)
+}
+
+/**
+ * Visits whose interval covers the asked clock time — not merely visits that
+ * started somewhere inside the surrounding block. A 3:00pm question must
+ * resolve the tab open at 3:00pm, not the four longest pages from 2:14–3:00.
+ */
+export function getVisitsOverlappingMoment(
+  db: Database.Database,
+  momentMs: number,
+): Array<{
+  pageTitle: string | null
+  domain: string
+  url: string | null
+  visitTime: number
+  durationSec: number
+  overlapMs: number
+}> {
+  const lookbackMs = 6 * 60 * 60 * 1000
+  const rows = db.prepare(`
+    SELECT
+      domain,
+      page_title AS pageTitle,
+      url,
+      visit_time AS visitTime,
+      duration_sec AS durationSec
+    FROM website_visits
+    WHERE visit_time <= ?
+      AND visit_time >= ?
+      AND (visit_time + (MAX(duration_sec, 1) * 1000)) >= ?
+    ORDER BY duration_sec DESC, visit_time DESC
+    LIMIT 20
+  `).all(momentMs, momentMs - lookbackMs, momentMs) as Array<{
+    pageTitle: string | null
+    domain: string
+    url: string | null
+    visitTime: number
+    durationSec: number
+  }>
+
+  return rows.map((row) => {
+    const endMs = row.visitTime + Math.max(1, row.durationSec) * 1000
+    const overlapMs = Math.max(0, Math.min(endMs, momentMs + 1) - Math.max(row.visitTime, momentMs))
+    return { ...row, overlapMs: Math.max(overlapMs, 1) }
+  })
+}
+
+/**
+ * Exported for regression tests — picks the page that answers a moment
+ * question. Prefers visits overlapping the clock time; falls back to the
+ * longest useful pageRef in the covering block. Returns one title, never a
+ * dump of everything in the stretch.
+ */
+export function resolveMomentPageEvidence(
+  pages: MomentPageCandidate[],
+  overlappingVisits: MomentPageCandidate[] = [],
+): { title: string; host: string | null; verb: 'watching' | 'viewing' } | null {
+  const rankedVisits = [...overlappingVisits].sort((left, right) => {
+    const overlapDelta = (right.overlapMs ?? 0) - (left.overlapMs ?? 0)
+    if (overlapDelta !== 0) return overlapDelta
+    return (right.totalSeconds ?? 0) - (left.totalSeconds ?? 0)
+  })
+  for (const visit of rankedVisits) {
+    const cleaned = sanitizeMomentPageTitle(visit)
+    if (!cleaned) continue
+    const verb = isVideoWatchHost(cleaned.host, visit.url) ? 'watching' : 'viewing'
+    return { ...cleaned, verb }
+  }
+
+  const rankedPages = [...pages].sort((left, right) => (right.totalSeconds ?? 0) - (left.totalSeconds ?? 0))
+  let fallbackHost: string | null = null
+  for (const page of rankedPages) {
+    const host = (page.host ?? page.domain ?? page.subtitle ?? '').trim() || null
+    if (host && !fallbackHost) fallbackHost = host
+    const cleaned = sanitizeMomentPageTitle(page)
+    if (!cleaned) continue
+    const verb = isVideoWatchHost(cleaned.host, page.url) ? 'watching' : 'viewing'
+    return { ...cleaned, verb }
+  }
+  if (fallbackHost) {
+    return { title: `${fallbackHost} (no specific page title captured)`, host: fallbackHost, verb: 'viewing' }
+  }
+  return null
+}
+
+/** @deprecated Prefer resolveMomentPageEvidence — kept for older tests. */
+export function formatMomentPageEvidence(
+  pages: MomentPageCandidate[],
+): string | null {
+  const resolved = resolveMomentPageEvidence(pages)
+  if (!resolved) return null
+  if (resolved.title.includes('(no specific page title captured)')) {
+    return `Pages: ${resolved.title}.`
+  }
+  return `Pages: "${resolved.title}".`
+}
+
 function blockLedMomentAnswer(
   window: { start: Date; end: Date },
   date: Date,
@@ -1074,7 +1273,23 @@ function blockLedMomentAnswer(
   const askHHMM = `${String(new Date(midMs).getHours()).padStart(2, '0')}:${String(new Date(midMs).getMinutes()).padStart(2, '0')}`
   const relativeDay = relativeDayLabel(date).toLowerCase()
   const dayQualifier = relativeDay === 'today' ? 'today' : relativeDay === 'yesterday' ? 'yesterday' : `on ${localDateString(date)}`
+  const overlapping = getVisitsOverlappingMoment(db, midMs).map((visit) => ({
+    pageTitle: visit.pageTitle,
+    displayTitle: visit.pageTitle ?? undefined,
+    host: visit.domain,
+    domain: visit.domain,
+    url: visit.url,
+    totalSeconds: visit.durationSec,
+    overlapMs: visit.overlapMs,
+  }))
+
   if (!covering) {
+    // Visits can exist even when timeline_blocks has a hole (idle/away miss,
+    // late rebuild). A moment question must still name the page open then.
+    const visitOnly = resolveMomentPageEvidence([], overlapping)
+    if (visitOnly) {
+      return `Around ${askHHMM} ${dayQualifier} you were ${visitOnly.verb} "${visitOnly.title}".`
+    }
     let nearest: typeof payload.blocks[number] | null = null
     let nearestGapMs = Number.POSITIVE_INFINITY
     for (const block of payload.blocks) {
@@ -1101,12 +1316,20 @@ function blockLedMomentAnswer(
   }
   const label = userVisibleLabelForBlock(covering)
   if (!label) return null
+  const primaryApp = covering.topApps
+    .filter((a) => a.category !== 'system')
+    .sort((left, right) => right.totalSeconds - left.totalSeconds)[0]
+  const blockRange = `${formatTime(covering.startTime)}-${formatTime(covering.endTime)}`
+  const momentPage = resolveMomentPageEvidence(covering.pageRefs ?? [], overlapping)
+  if (momentPage) {
+    const appBit = primaryApp ? ` in ${primaryApp.appName}` : ''
+    return `Around ${askHHMM} ${dayQualifier} you were ${momentPage.verb} "${momentPage.title}"${appBit} (in the "${label}" block, ${blockRange}).`
+  }
   const apps = covering.topApps
     .filter((a) => a.category !== 'system')
     .slice(0, 4)
     .map((a) => `${a.appName} (${formatDuration(Math.max(0, Math.round(a.totalSeconds)))})`)
     .join(', ')
-  const blockRange = `${formatTime(covering.startTime)}-${formatTime(covering.endTime)}`
   const head = `Around ${askHHMM} ${dayQualifier} you were in the "${label}" block (${blockRange}).`
   return apps ? `${head} Top apps in that block: ${apps}.` : head
 }
@@ -2209,12 +2432,9 @@ export async function routeInsightsQuestion(
         resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null },
       }
     }
-    // F2: moment/range questions must lead with the renderer's block label,
-    // not raw window titles or page titles. The previous path called
-    // exactMomentAnswer which pulled topSite.topTitle straight out of the
-    // website summaries — that's how URL-fragment artefacts like
-    // "houses - Google Photos" reached the user. Block label first; apps
-    // and sites become evidence.
+    // Moment/range questions resolve the page active at the asked clock time
+    // (website_visits overlapping the midpoint), then name that one title —
+    // never dump every pageRef from the covering block.
     const blockLed = blockLedMomentAnswer(resolvedContext.timeWindow, resolvedContext.date, db)
     if (blockLed) {
       return { kind: 'answer', answer: blockLed, resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null } }
@@ -2813,6 +3033,11 @@ export function shouldUseRouter(message: string): boolean {
   for (const pattern of TIME_AT_MOMENT_PATTERNS) {
     if (pattern.test(lower)) return true
   }
+
+  // Detail follow-ups on a prior moment ("Watching exactly what?") must hit
+  // the router so previousContext.timeWindow is reused — freeform invents
+  // "page titles didn't come through" when titles were never fetched.
+  if (DETAIL_FOLLOW_UP_PATTERNS.some((pattern) => lower.includes(pattern))) return true
 
   if (
     /\b(consume|consumed|consuming|read|reading|watched|watching|learn|learned|studied|study|research|researched)\b/.test(lower)

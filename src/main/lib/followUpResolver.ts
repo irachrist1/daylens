@@ -1,7 +1,19 @@
 import type { AIConversationState, AIThreadMessage, FollowUpClass, FollowUpResolution } from '@shared/types'
 
 const DEEPEN_PATTERNS = ['go deeper', 'deeper', 'what stood out', 'say more']
-const LITERAL_PATTERNS = ['exactly what did i read', 'exactly what have i read', 'list them', 'be literal']
+const LITERAL_PATTERNS = [
+  'exactly what did i read',
+  'exactly what have i read',
+  'list them',
+  'be literal',
+  'exactly what',
+  'watching exactly',
+  'watching what',
+  'which video',
+  'what video',
+  'which page',
+  'what was i watching',
+]
 const NARROW_PATTERNS = ['only ', 'just ', 'show only', 'just browser', 'only browser', 'just ai', 'only ai']
 const EXPAND_PATTERNS = ['what else', 'anything i missed', 'what other', 'what else did i']
 const COMPARE_PATTERNS = ['compare', 'different from', 'versus', 'vs ']
@@ -81,6 +93,11 @@ function buildStatsRepairPrompt(question: string, messages: AIThreadMessage[]): 
   return `${lastUser.content}\n\nFollow-up: ${question}`
 }
 
+function hasMomentTimeWindow(state: AIConversationState): boolean {
+  return typeof state.routingContext?.timeWindowStartMs === 'number'
+    && typeof state.routingContext?.timeWindowEndMs === 'number'
+}
+
 export function resolveFollowUp(
   question: string,
   state: AIConversationState | null,
@@ -106,6 +123,23 @@ export function resolveFollowUp(
       effectivePrompt: question,
       shouldReuseContext: false,
       shouldResetContext: true,
+    }
+  }
+
+  // Moment detail follow-ups ("Watching exactly what?") must keep the prior
+  // time window so the router can re-answer with page titles. Resetting here
+  // dropped context and sent the turn to freeform hallucination.
+  if (
+    state.answerKind === 'deterministic_stats'
+    && hasMomentTimeWindow(state)
+    && (followUpClass === 'literalize' || followUpClass === 'deepen' || followUpClass === 'expand' || followUpClass === 'repair')
+  ) {
+    return {
+      kind: 'followup_reuse_context',
+      followUpClass,
+      effectivePrompt: question,
+      shouldReuseContext: true,
+      shouldResetContext: false,
     }
   }
 

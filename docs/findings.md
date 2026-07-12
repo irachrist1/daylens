@@ -12,6 +12,44 @@ for a problem in the eyes.
 
 ---
 
+## 2026-07-12 — AI: "page titles didn't come through" for YouTube that was fully captured
+
+**Status:** Fixed in code · **Source:** live `DaylensWindows/daylens.sqlite` + `ai_messages`
+750/751 for thread "Watching exactly what".
+
+Capture was fine. Tuesday 3pm Dia sessions and `website_visits` held real titles
+(*I Found Out Why Chinese Performance Cars Are Taking Over*, etc.) and the covering
+block's `evidence_summary_json.pages` had them too.
+
+Two answer-path bugs stacked:
+
+1. **`blockLedMomentAnswer` omitted page titles** (F2 over-correction after a Google
+   Photos URL-fragment leak). Moment questions returned block label + apps only, so the
+   first answer could say "YouTube in Dia for 37m" (apps) but never the video name.
+2. **"Watching exactly what?" went freeform.** It matched neither `shouldUseRouter` nor
+   `followUpResolver` literalize patterns, so no resolver ran; Haiku followed the voice
+   contract GOOD example that literally taught "page titles didn't come through," and
+   jumped to 10:24pm (evening rows that really are titled only "YouTube").
+
+Fix: include sanitized page titles in moment answers; route detail follow-ups through the
+router with prior time window reused; stop teaching the model to claim missing titles
+unless FACTS say so. Regression: `tests/momentPageTitles.test.ts`.
+
+Follow-up (same day, founder retest): titles came through, but the answer dumped every
+pageRef in the 2:14–3:00 block (Grades + three YouTube videos) instead of the visit
+overlapping 15:00. Root fix: `getVisitsOverlappingMoment` + `resolveMomentPageEvidence`
+name the one page active at the asked clock time. Chat titles also stayed as truncated
+"What was I watching…" clauses because `deriveTitleFromMessage` had no watching/weekday
+intent — added `Tuesday Watching`-style topic phrases.
+
+Also added `npm run moment:bench` (new) — live-DB terminal cases. Rigorous run exposed
+two more foundation bugs: absolute dates like "July 11" fell through to today, and
+moments with visits but no covering `timeline_blocks` row said "nothing was
+foregrounded." Both fixed. UI still runs a Haiku prose pass *after* the same router
+facts; titles stay deterministic (no model).
+
+---
+
 ## 2026-07-07 (evening) — Wrapped: ungrounded clock times, spillover framing, tool-brand inversion, export canvas cap
 
 **Status:** Fixed in code · **Source:** founder screenshots of the live Jul 7 wrap +

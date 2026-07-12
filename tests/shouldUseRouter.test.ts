@@ -58,6 +58,14 @@ test('routes "what happened yesterday at 3pm?" (time-at-moment on prior day)', (
   assert.equal(shouldUseRouter('What happened yesterday at 3pm?'), true)
 })
 
+test('routes "Watching exactly what?" (moment detail follow-up)', () => {
+  assert.equal(shouldUseRouter('Watching exactly what?'), true)
+})
+
+test('routes "which video was that?" (moment detail follow-up)', () => {
+  assert.equal(shouldUseRouter('which video was that?'), true)
+})
+
 test('routes "who are my clients" (client-list)', () => {
   assert.equal(shouldUseRouter('who are my clients'), true)
 })
