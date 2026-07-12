@@ -1368,6 +1368,10 @@ export function loadPersistedAppDetailBlocksForDates(
   const grouped = new Map<string, AppDetailBlockSlice[]>()
   if (dates.length === 0) return grouped
 
+  // Corrected block facts (invariant 7 / apps.md invariant 13): a block the
+  // user deleted (review state 'ignored') never reaches the Apps panel, and a
+  // rename or recategorization the user made on the Timeline is what Apps
+  // shows too — the same filter and corrections every timeline read applies.
   const placeholders = dates.map(() => '?').join(', ')
   const rows = db.prepare(`
     SELECT
@@ -1378,9 +1382,13 @@ export function loadPersistedAppDetailBlocksForDates(
       dominant_category,
       label_current,
       evidence_summary_json
-    FROM timeline_blocks
+    FROM timeline_blocks b
     WHERE invalidated_at IS NULL
       AND date IN (${placeholders})
+      AND NOT EXISTS (
+        SELECT 1 FROM timeline_block_reviews r
+        WHERE r.block_id = b.id AND r.review_state = 'ignored'
+      )
     ORDER BY start_time ASC
   `).all(...dates) as Array<{
     id: string
@@ -1393,6 +1401,24 @@ export function loadPersistedAppDetailBlocksForDates(
   }>
 
   const workflowsByBlock = workflowRefsByBlockId(db, rows.map((row) => row.id))
+  const correctionsByBlock = new Map<string, { label: string | null; category: AppCategory | null }>()
+  if (rows.length > 0) {
+    const reviewRows = db.prepare(`
+      SELECT block_id, correction_json
+      FROM timeline_block_reviews
+      WHERE review_state = 'corrected' AND block_id IN (${sqlPlaceholders(rows.length)})
+      ORDER BY updated_at ASC
+    `).all(...rows.map((row) => row.id)) as Array<{ block_id: string; correction_json: string }>
+    for (const reviewRow of reviewRows) {
+      const correction = parseReviewJson(reviewRow.correction_json)
+      const label = stringValue(correction.label)
+      const category = isAppCategory(correction.category) ? correction.category : null
+      if (label || category) {
+        // updated_at ASC: the latest correction for a block wins.
+        correctionsByBlock.set(reviewRow.block_id, { label, category })
+      }
+    }
+  }
 
   for (const row of rows) {
     let evidence: Partial<TimelineEvidenceSummary> = {}
@@ -1408,14 +1434,15 @@ export function loadPersistedAppDetailBlocksForDates(
       .sort((left, right) => right.totalSeconds - left.totalSeconds)
       .slice(0, 8)
 
+    const correction = correctionsByBlock.get(row.id)
     const current = grouped.get(row.date) ?? []
     current.push({
       id: row.id,
       startTime: row.start_time,
       endTime: row.end_time,
-      dominantCategory: row.dominant_category,
+      dominantCategory: correction?.category ?? row.dominant_category,
       label: {
-        current: row.label_current,
+        current: correction?.label ?? row.label_current,
       },
       topApps: Array.isArray(evidence.apps)
         ? normalizeAppSummariesForBlockDisplay(evidence.apps as WorkContextAppSummary[])

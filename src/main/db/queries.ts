@@ -58,6 +58,24 @@ const UX_NOISE_EXACT_NAMES = new Set([
 const MIN_DISPLAY_SEC = 15
 const SAME_APP_MERGE_GAP_MS = 15_000
 const MIN_CAPTURE_DWELL_SEC = 10
+
+// ─── Correction spans (one truth, three views — invariant 7) ─────────────────
+// The time spans of Timeline blocks the user deleted (review state 'ignored').
+// Raw capture is never mutated; a correction is applied at read time, with the
+// SAME membership rule everywhere: a session belongs to a corrected-away span
+// when it STARTED inside it (matching the timeline rebuild's
+// withoutIgnoredSpans, so Apps/AI totals reconcile with the Timeline exactly).
+export interface CorrectionSpan {
+  startMs: number
+  endMs: number
+}
+
+export function sessionStartsInsideSpans(
+  session: { startTime: number },
+  spans: readonly CorrectionSpan[],
+): boolean {
+  return spans.some((span) => session.startTime >= span.startMs && session.startTime < span.endMs)
+}
 const ENGAGEMENT_RETURN_GAP_MS = 2 * 60_000
 
 // How far before a range's start we look for sessions that began earlier but
@@ -635,8 +653,10 @@ export function getAppSummariesForRange(
   db: Database.Database,
   fromMs: number,
   toMs: number,
+  options: { excludeSpans?: readonly CorrectionSpan[] } = {},
 ): AppUsageSummary[] {
   const overrides = getCategoryOverrides(db)
+  const excludeSpans = options.excludeSpans ?? []
 
   const rows = db
     .prepare<[number, number, number]>(`
@@ -650,6 +670,11 @@ export function getAppSummariesForRange(
   const clippedSessions = mergeSessions(
     rows
       .filter((row) => !isUxNoise(row))
+      // Corrected truth (invariant 7): a session inside a span the user
+      // deleted from the Timeline never counts toward an app total. Applied
+      // BEFORE the quick-return merge so an excluded session can't smuggle
+      // its seconds into a kept neighbour.
+      .filter((row) => excludeSpans.length === 0 || !sessionStartsInsideSpans({ startTime: row.start_time }, excludeSpans))
       .map((row) => {
         // User overrides first; fall through to catalog's default category for
         // sessions that were captured before the catalog was fully populated.
@@ -2093,7 +2118,9 @@ export function getBrowserActivityBreakdown(
   fromMs: number,
   toMs: number,
   canonicalBrowserId: string,
+  options: { excludeSpans?: readonly CorrectionSpan[] } = {},
 ): BrowserActivityBreakdown {
+  const excludeSpans = options.excludeSpans ?? []
   // Reconcile over the WHOLE range and every browser — the claim pool a page
   // draws from is shared with every other visit inside the same browser, and
   // filtering before reconciling would let a page fill time another visit had
@@ -2107,6 +2134,9 @@ export function getBrowserActivityBreakdown(
   const foreground: { start: number; end: number }[] = []
   for (const session of getSessionsForRange(db, fromMs, toMs)) {
     if ((session.canonicalAppId ?? session.bundleId) !== canonicalBrowserId && session.bundleId !== canonicalBrowserId) continue
+    // Corrected truth (invariant 7): a deleted Timeline block's foreground
+    // windows carry no page credit — its domains/pages vanish with its total.
+    if (excludeSpans.length > 0 && sessionStartsInsideSpans(session, excludeSpans)) continue
     const start = Math.max(session.startTime, fromMs)
     const end = Math.min(
       Math.min(
