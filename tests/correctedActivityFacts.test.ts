@@ -142,6 +142,69 @@ test('a category override on a block reaches Timeline and Apps consistently', ()
   assert.ok(appearance, 'the corrected block must appear in the app detail')
   assert.equal(appearance.dominantCategory, 'design', 'Apps must show the corrected category')
 
+  const [fromMs, toMs] = localDayBounds(TEST_DATE)
+  const summaries = getCorrectedAppSummariesForRange(db, fromMs, toMs)
+  assert.equal(summaries[0]?.category, 'design', 'Apps/AI aggregate category must use the block correction')
+  assert.ok(
+    getCorrectedSessionsForRange(db, fromMs, toMs).some((session) => session.category === 'design'),
+    'AI session facts must carry the corrected block category',
+  )
+
+  db.close()
+})
+
+test('ignored spans subtract exact overlap instead of keeping or dropping a whole session', () => {
+  const db = createDb()
+  insertSession(db, 'One continuous session', 9, 0, 60)
+  const now = Date.now()
+  db.prepare(`
+    INSERT INTO timeline_block_reviews (
+      id, block_id, date, evidence_key, review_state, original_block_json,
+      correction_json, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, 'ignored', ?, '{}', ?, ?)
+  `).run(
+    'review_partial', 'partial', TEST_DATE, 'partial',
+    JSON.stringify({ startTime: localMs(9, 15), endTime: localMs(9, 45) }), now, now,
+  )
+
+  const corrected = getCorrectedSessionsForRange(db, localMs(9), localMs(10))
+  assert.equal(corrected.reduce((sum, session) => sum + session.durationSeconds, 0), 30 * 60)
+  assert.deepEqual(corrected.map((session) => [session.startTime, session.endTime]), [
+    [localMs(9), localMs(9, 15)],
+    [localMs(9, 45), localMs(10)],
+  ])
+  assert.equal(getCorrectedAppSummariesForRange(db, localMs(9), localMs(10))[0]?.totalSeconds, 30 * 60)
+  db.close()
+})
+
+test('past-day derived projection recomputes header totals, focus, and app count from corrected sessions', () => {
+  const db = createDb()
+  const insertDerived = db.prepare(`
+    INSERT INTO derived_sessions (
+      date, start_ts_ms, end_ts_ms, active_seconds, app_bundle_id, app_name,
+      window_title, confidence, category, is_browser, projection_version
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'observed', ?, 0, 1)
+  `)
+  insertDerived.run(TEST_DATE, localMs(9), localMs(10), 3600, 'ghostty', 'Ghostty', 'Work', 'development')
+  insertDerived.run(TEST_DATE, localMs(9, 15), localMs(9, 45), 1800, 'slack', 'Slack', 'Chat', 'communication')
+  db.prepare(`
+    INSERT INTO derived_projection_runs
+      (date, projection_version, events_in, sessions_out, blocks_out, finalized_at, started_at)
+    VALUES (?, 1, 0, 2, 0, ?, ?)
+  `).run(TEST_DATE, Date.now(), Date.now())
+  const now = Date.now()
+  db.prepare(`
+    INSERT INTO timeline_block_reviews (
+      id, block_id, date, evidence_key, review_state, original_block_json,
+      correction_json, created_at, updated_at
+    ) VALUES ('review_derived_partial', 'derived_partial', ?, 'derived_partial', 'ignored', ?, '{}', ?, ?)
+  `).run(TEST_DATE, JSON.stringify({ startTime: localMs(9, 15), endTime: localMs(9, 45) }), now, now)
+
+  const payload = materializeTimelineDayProjection(db, TEST_DATE, null)
+  assert.equal(payload.totalSeconds, 30 * 60)
+  assert.equal(payload.focusSeconds, 30 * 60)
+  assert.equal(payload.appCount, 1, 'the fully deleted Slack session must not remain in the header count')
+  assert.equal(payload.sessions.reduce((sum, session) => sum + session.durationSeconds, 0), payload.totalSeconds)
   db.close()
 })
 

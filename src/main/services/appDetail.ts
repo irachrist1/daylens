@@ -11,12 +11,13 @@ import type {
 import { appDetailRangeKey } from '@shared/appNarrativeContract'
 import { withLiveAppSummary } from '@shared/liveAppSummaries'
 import {
-  getAppSummariesForRange,
   getBrowserActivityBreakdown,
-  getSessionsForRange,
-  sessionStartsInsideSpans,
 } from '../db/queries'
-import { getIgnoredBlockSpansForRange } from './activityFacts'
+import {
+  getCorrectedAppSummariesForRange,
+  getCorrectedSessionsForRange,
+  getIgnoredBlockSpansForRange,
+} from './activityFacts'
 import { localDayBounds, shiftLocalDateString } from '../lib/localDate'
 import {
   artifactIdFor,
@@ -146,8 +147,7 @@ export function getAppDetailPayload(
   // totals, domain/page credit, appearances — so the Apps panel never
   // disagrees with the Timeline. Raw capture stays stored untouched.
   const correctionSpans = getIgnoredBlockSpansForRange(db, fromMs, todayTo)
-  const rawSessions = getSessionsForRange(db, fromMs, todayTo)
-    .filter((session) => correctionSpans.length === 0 || !sessionStartsInsideSpans(session, correctionSpans))
+  const rawSessions = getCorrectedSessionsForRange(db, fromMs, todayTo)
   const allSessions = mergeLiveSession(rawSessions, effectiveLiveSession)
   const sessions = allSessions.filter((session) => {
     const identity = resolveCanonicalApp(session.bundleId, session.appName)
@@ -236,7 +236,7 @@ export function getAppDetailPayload(
   const blockMemoryRollups = memoryRollupsForBlocks(db, blockAppearances)
 
   const summariesForRange = withLiveAppSummary(
-    getAppSummariesForRange(db, fromMs, todayTo, { excludeSpans: correctionSpans }),
+    getCorrectedAppSummariesForRange(db, fromMs, todayTo),
     effectiveLiveSession ?? null,
     fromMs,
     Date.now(),

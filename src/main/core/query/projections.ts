@@ -12,7 +12,7 @@ import type {
 } from '@shared/types'
 import { getArtifactDetails, getHistoryDayPayload, getTimelineDayPayload, getWorkflowSummaries, buildTimelineBlocksForDay, buildSegmentsForDay } from '../../services/workBlocks'
 import { getAppDetailPayload } from '../../services/appDetail'
-import { getFocusSessionsForDateRange, getWeeklySummary, getWebsiteSummariesForRange } from '../../db/queries'
+import { getFocusSessionsForDateRange, getWeeklySummary } from '../../db/queries'
 import { readDerivedDay, PROJECTION_VERSION, type DerivedDayResult } from '../projections/chunk2'
 import { localDateString } from '../../lib/localDate'
 import { ownedDayBounds } from '../../lib/dayOwnership'
@@ -21,6 +21,7 @@ import { resolveCanonicalApp } from '../../lib/appIdentity'
 import { getSettings } from '../../services/settings'
 import { isSystemNoiseApp } from '@shared/systemNoise'
 import { isTrustedTimelineBlock } from '@shared/timelineReview'
+import { applyTimelineCorrectionsToSessions, getCorrectedWebsiteSummariesForRange } from '../../services/activityFacts'
 
 const APP_CATEGORIES: ReadonlySet<string> = new Set([
   'development',
@@ -87,10 +88,11 @@ function getDerivedDayTimelinePayload(
   // in getSessionsForRange; this derived path must apply the same shared
   // policy, or an overnight loginwindow session becomes a 9-hour
   // "Uncategorized long idle period" block on a past day.
-  const sessions = day.sessions
+  const rawSessions = day.sessions
     .filter((session) => !isSystemNoiseApp({ bundleId: session.app_bundle_id, appName: session.app_name }))
     .map((session) => derivedSessionToAppSession(session, focusApps))
-  const websites = getWebsiteSummariesForRange(db, fromMs, toMs)
+  const sessions = applyTimelineCorrectionsToSessions(db, rawSessions, fromMs, toMs)
+  const websites = getCorrectedWebsiteSummariesForRange(db, fromMs, toMs)
   const focusSessions = getFocusSessionsForDateRange(db, fromMs, toMs)
   // Past days must go through the same coalescing pipeline as today. The
   // precomputed derived_blocks are raw, un-coalesced chunks (the source of the
