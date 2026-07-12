@@ -20,6 +20,20 @@ export function hasMaintenanceRun(db: Database.Database, key: string): boolean {
   return Boolean(row)
 }
 
+// Timestamp variant of hasMaintenanceRun, for callers that need to gate on
+// "has it run recently" (e.g. once/day) rather than "has it ever run" (a
+// one-off repair). Returns null when the key has never completed.
+export function maintenanceRunAt(db: Database.Database, key: string): number | null {
+  ensureMaintenanceRunsTable(db)
+  const row = db.prepare(`
+    SELECT completed_at
+    FROM maintenance_runs
+    WHERE key = ?
+    LIMIT 1
+  `).get(key) as { completed_at: number } | undefined
+  return row?.completed_at ?? null
+}
+
 export function markMaintenanceRun(db: Database.Database, key: string, completedAt = Date.now()): void {
   ensureMaintenanceRunsTable(db)
   db.prepare(`

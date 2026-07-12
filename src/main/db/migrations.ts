@@ -2051,6 +2051,41 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 44,
+    description: 'Provider circuit breaker state + ai_usage_events daily rollup — persist quota/credit cooldowns across restarts, and give the telemetry retention job (aiUsageRetention.ts) a compact aggregate to roll old per-event rows into (W1-B: 888k rows / ~364 MB of ai_usage_events in the largest real DB)',
+    up: () => {
+      getDb().exec(`
+        CREATE TABLE IF NOT EXISTS provider_breaker_state (
+          provider            TEXT PRIMARY KEY,
+          opened_at           INTEGER NOT NULL,
+          cooldown_until      INTEGER NOT NULL,
+          reason              TEXT NOT NULL,
+          retry_after_seconds INTEGER,
+          updated_at          INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS ai_usage_daily_rollup (
+          day                TEXT NOT NULL,
+          job_type           TEXT NOT NULL,
+          screen             TEXT NOT NULL DEFAULT '',
+          trigger_source     TEXT NOT NULL DEFAULT '',
+          provider           TEXT NOT NULL DEFAULT '',
+          model              TEXT NOT NULL DEFAULT '',
+          billing_mode       TEXT NOT NULL DEFAULT 'own_key',
+          calls              INTEGER NOT NULL DEFAULT 0,
+          successes          INTEGER NOT NULL DEFAULT 0,
+          failures           INTEGER NOT NULL DEFAULT 0,
+          input_tokens       INTEGER NOT NULL DEFAULT 0,
+          output_tokens      INTEGER NOT NULL DEFAULT 0,
+          cache_read_tokens  INTEGER NOT NULL DEFAULT 0,
+          cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+          cost_usd           REAL NOT NULL DEFAULT 0,
+          PRIMARY KEY (day, job_type, screen, trigger_source, provider, model, billing_mode)
+        );
+        CREATE INDEX IF NOT EXISTS idx_ai_usage_daily_rollup_day ON ai_usage_daily_rollup (day);
+      `)
+    },
+  },
 ]
 
 function attentionClassForCategory(category: string): 'focus' | 'supporting' | 'ambient' {

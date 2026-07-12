@@ -39,6 +39,10 @@ export const ANALYTICS_EVENT = {
   AI_EMPTY_RESPONSE_RETRY: 'ai_empty_response_retry',
   AI_JOB_COMPLETED: 'ai_job_completed',
   AI_JOB_FAILED: 'ai_job_failed',
+  AI_PROVIDER_BREAKER_OPENED: 'ai_provider_breaker_opened',
+  AI_PROVIDER_BREAKER_CLOSED: 'ai_provider_breaker_closed',
+  AI_PROVIDER_BREAKER_SKIPPED: 'ai_provider_breaker_skipped',
+  AI_USAGE_RETENTION_RUN: 'ai_usage_retention_run',
 
   FOCUS_SESSION_STARTED: 'focus_session_started',
   FOCUS_SESSION_STOPPED: 'focus_session_stopped',

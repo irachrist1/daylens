@@ -5,9 +5,10 @@ import { capture, captureAIGeneration } from './analytics'
 import { estimateUsageCostUsd } from './modelPricing'
 import { ANALYTICS_EVENT, classifyFailureKind } from '@shared/analytics'
 import { getApiKey, getSettings, getSettingsAsync } from './settings'
-import { friendlyProviderError as friendlyProviderErrorClassified } from './providerErrors'
+import { classifyProviderError, friendlyProviderError as friendlyProviderErrorClassified } from './providerErrors'
 import { getBillingAccess, getManagedAIConfig } from './billing'
 import { selectJobProvider } from '../lib/providerRouting'
+import { getProviderBreakerState, recordProviderHardFailure, resetProviderBreaker } from './providerCircuitBreaker'
 import type {
   AIInvocationSource,
   AIJobType,
@@ -548,6 +549,36 @@ export async function executeTextAIJob(
 
   const settings = await getSettingsAsync()
   const definition = JOB_DEFINITIONS[payload.jobType]
+
+  // Provider circuit breaker (W1-B): machine-initiated runs of background job
+  // types (`foreground: false` in JOB_DEFINITIONS) are refused outright while
+  // the intended provider is cooling down from a quota/credit hard wall. This
+  // never touches ai_usage_events — a skip is not a call — mirroring the
+  // early-exit style of the background daily budget check above. Anything the
+  // user explicitly asked for is never gated: foreground job types, and
+  // background job types running with triggerSource 'user' (the manual
+  // Analyze click runs block_cleanup_relabel as 'user'). Those still get one
+  // honest attempt and the existing friendly error if the provider is out.
+  if (!definition.foreground && payload.triggerSource !== 'user') {
+    const intendedProvider = payload.preferredProviderOverride ?? preferredProviderForJob(payload.jobType, settings)
+    const breaker = getProviderBreakerState(getDb(), intendedProvider)
+    if (breaker.open) {
+      const label = providerLabel(intendedProvider)
+      const humanReason = breaker.reason === 'credit_exhausted' ? 'credit balance' : 'usage limit'
+      console.warn(
+        `[ai:breaker] skipping background ${payload.jobType} — ${label} ${humanReason} cooldown active until ${new Date(breaker.cooldownUntil ?? 0).toISOString()}`,
+      )
+      capture(ANALYTICS_EVENT.AI_PROVIDER_BREAKER_SKIPPED, {
+        provider: intendedProvider,
+        job_type: payload.jobType,
+        reason: breaker.reason,
+      })
+      throw new Error(
+        `Background AI paused for ${label}: its ${humanReason} tripped a cooldown. It resumes automatically, or fix it now in Settings → AI.`,
+      )
+    }
+  }
+
   const executionOptions: AITextJobExecutionOptions = {
     cachePolicy: definition.cachePolicy,
     promptCachingEnabled: settings.aiPromptCachingEnabled ?? true,
@@ -601,6 +632,10 @@ export async function executeTextAIJob(
         costUsd: usage?.costUsd ?? null,
         billingMode: config.billingMode ?? 'own_key',
       })
+      // A successful call is the clearest possible signal the provider has
+      // recovered — close its breaker immediately rather than waiting out
+      // the rest of the cooldown.
+      resetProviderBreaker(getDb(), config.provider, 'success')
       capture(ANALYTICS_EVENT.AI_JOB_COMPLETED, {
         job_type: payload.jobType,
         screen: payload.screen ?? definition.screen,
@@ -645,6 +680,17 @@ export async function executeTextAIJob(
 
   const completedAt = Date.now()
   const friendlyError = friendlyProviderError(lastError, providerLabel(lastConfig?.provider ?? configs[0]?.provider ?? 'anthropic'))
+
+  // A confirmed hard wall (quota/credit) opens the breaker for this provider
+  // regardless of who triggered the call — the fact "this provider is out"
+  // is true either way, even though only background dispatch above actually
+  // consults it. Retry-After (when the provider gave one) sets how long.
+  if (lastConfig) {
+    const meta = classifyProviderError(lastError)
+    if (meta.code === 'quota_exhausted' || meta.code === 'credit_exhausted') {
+      recordProviderHardFailure(getDb(), lastConfig.provider, meta.code, meta.retryAfterSeconds ?? null, completedAt)
+    }
+  }
 
   finishAIUsageEvent(getDb(), {
     id: eventId,

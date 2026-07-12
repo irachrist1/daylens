@@ -149,6 +149,48 @@ CREATE TABLE IF NOT EXISTS ai_usage_events (
 CREATE INDEX IF NOT EXISTS idx_ai_usage_events_started_at ON ai_usage_events (started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_ai_usage_events_job_type ON ai_usage_events (job_type, started_at DESC);
 
+-- Provider circuit breaker (W1-B): when a provider comes back quota_exhausted
+-- or credit_exhausted, this is the persisted "cooldown until" fact so a
+-- background relabel loop stops hammering a wall provider across app
+-- restarts. One row per provider; absence or cooldown_until <= now means the
+-- breaker is closed. See src/main/services/providerCircuitBreaker.ts.
+CREATE TABLE IF NOT EXISTS provider_breaker_state (
+  provider            TEXT PRIMARY KEY,
+  opened_at           INTEGER NOT NULL,
+  cooldown_until      INTEGER NOT NULL,
+  reason              TEXT NOT NULL,
+  retry_after_seconds INTEGER,
+  updated_at          INTEGER NOT NULL
+);
+
+-- Retention rollup for ai_usage_events (W1-B / storage hygiene): one row per
+-- (day, job_type, screen, trigger_source, provider, model, billing_mode),
+-- carrying the same call/success/failure counts and token sums the raw rows
+-- had. Pricing is linear in tokens (see billing.ts priceTokensUsd), so a
+-- summed group prices identically to summing each original row — nothing the
+-- Settings Usage screen or billing reporting reads is lost, only per-event
+-- rows older than the detail window. See src/main/services/aiUsageRetention.ts.
+CREATE TABLE IF NOT EXISTS ai_usage_daily_rollup (
+  day                TEXT NOT NULL,
+  job_type           TEXT NOT NULL,
+  screen             TEXT NOT NULL DEFAULT '',
+  trigger_source     TEXT NOT NULL DEFAULT '',
+  provider           TEXT NOT NULL DEFAULT '',
+  model              TEXT NOT NULL DEFAULT '',
+  billing_mode       TEXT NOT NULL DEFAULT 'own_key',
+  calls              INTEGER NOT NULL DEFAULT 0,
+  successes          INTEGER NOT NULL DEFAULT 0,
+  failures           INTEGER NOT NULL DEFAULT 0,
+  input_tokens       INTEGER NOT NULL DEFAULT 0,
+  output_tokens      INTEGER NOT NULL DEFAULT 0,
+  cache_read_tokens  INTEGER NOT NULL DEFAULT 0,
+  cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+  cost_usd           REAL NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, job_type, screen, trigger_source, provider, model, billing_mode)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_usage_daily_rollup_day ON ai_usage_daily_rollup (day);
+
 CREATE TABLE IF NOT EXISTS distraction_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   session_id INTEGER REFERENCES focus_sessions(id) ON DELETE SET NULL,
