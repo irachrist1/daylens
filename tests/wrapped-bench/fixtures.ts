@@ -32,4 +32,22 @@ export const DAY_FIXTURES: WrapBenchFixture[] = [
   { date: '2026-04-06', shape: 'floor', note: '~1m tracked: must return the honest fallback without calling the provider' },
 ]
 
-export const WEEK_FIXTURES: string[] = ['2026-07-06'] // anchor inside a full recent week
+// ─── Period fixtures (week / month / year) ────────────────────────────────────
+// All three period cadences are REQUIRED gate members. Week held the founder's
+// live bar; month and year were implemented with no quality fixture at all —
+// nothing would have caught a regression in either. One honest fixture each,
+// anchored where the real DB verifiably has data (the day fixtures span
+// April–July 2026).
+
+export interface WrapPeriodFixture {
+  period: 'week' | 'month' | 'year'
+  anchorDate: string
+  /** Why this period is in the set — what it exercises. */
+  note: string
+}
+
+export const PERIOD_FIXTURES: WrapPeriodFixture[] = [
+  { period: 'week', anchorDate: '2026-07-06', note: 'full recent closed week (Jun 30 – Jul 6): threads, day edges, meetings, compare' },
+  { period: 'month', anchorDate: '2026-06-15', note: 'June 2026: a full closed month of real days; weekly buckets + bestbucket + thread-0…3' },
+  { period: 'year', anchorDate: '2026-06-15', note: '2026 to date: the widest cadence; monthly buckets, long-range totals, superlatives must stay grounded' },
+]

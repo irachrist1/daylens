@@ -2591,3 +2591,39 @@ Deck average (prose slides): **9.21** · all slides passed: **true**
 - **reflection** (10): Every detail traces to facts: 16 commits (8+8), both project names from shipped, highlights accurately summarized, midnight start and the research-then-building progression matching the story timeline. Reads warm and human without hype, and the closing read on how the day spread adds motion beyond the printed numbers.
 
 </details>
+
+
+## Harness change 2026-07-12 (no scored run — hermetic session, W1-D)
+
+No provider was called in this session; this entry records what the next paid
+run will measure differently, so its scores are read against the right ruler.
+
+1. **Whole-deck judge added to the required gate.** After per-slide scoring,
+   one judgment of the entire deck in order (majority of
+   `WRAPPED_DECK_JUDGE_SAMPLES`, default 3) fails a deck on cross-slide
+   repetition beyond one deliberate callback, a broken arc, or an internal
+   contradiction; a deterministic pass fails >1 emoji per deck and exact
+   duplicate lines. `DeckResult` now carries `deckJudge` + `passed`, and both
+   the runner and the gate test gate on `passed`, not per-slide scores alone.
+2. **Period judge grounding fixed.** The week/month/year judge now receives
+   `compactPeriodFacts` — the SAME projection the writer saw — instead of the
+   old hand-rolled subset that dropped dayEdges/days/buckets/categories. In the
+   2026-07-08 week runs the judge docked TRUE claims ("every day ran past
+   11pm", split-slide timing, reflection late-night reads) as invented because
+   its facts were thinner than the writer's; that alone accounts for several of
+   the accuracy-0s behind the 8.05/8.26 week averages.
+3. **Duration grounding + week ask upgrades.** The other week failures were
+   real writer errors: an off-by-one "8h 57m" (facts: 8h 58m) and a
+   self-computed delta. Compact duration tokens are now validated against the
+   facts (repair round on miss), and the week opening/consistency/thread/
+   average/split asks demand the concrete anchor the judge kept docking.
+4. **Gate widened.** The gate now runs the complete day set TWICE consecutively
+   (`WRAPPED_BENCH_DAY_PASSES`, default 2) plus week, month, AND year fixtures
+   (month/year previously had no quality fixture at all).
+5. **New deterministic pre-check classes** (fail regardless of judge score):
+   consumption claims ("you read/watched"), unobserved-time activity,
+   attention grades ("focused", "deep focus"), invented plans, and — context-
+   gated on verified output — completion claims.
+
+Command for the next paid run (whole required gate, one invocation):
+`npm run wrapped:bench`
