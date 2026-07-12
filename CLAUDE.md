@@ -20,7 +20,7 @@ the Claude-specific adapter.
 - **Mechanical implementation** → `fast-worker` (Sonnet-class Claude, effort scaled to the
   task). Use it for boilerplate, focused edits, file mapping, and test scaffolding.
 - **Independent GPT lane** → Codex, not a fake Claude subagent. Use Codex when you need
-  GPT-5.5 as a peer implementer, rescuer, or blind reviewer.
+  GPT-5.6 SOL as a peer implementer, rescuer, or blind reviewer.
 - **Review-only GPT pass** → run `codex exec -s read-only` with a self-contained prompt and
   ask for concrete findings, expected/actual behavior, and missing tests.
 - **Implementation/rescue GPT pass** → run Codex with an implementation prompt, then verify
@@ -32,8 +32,11 @@ When invoking Codex from Claude, pin the model and effort instead of relying on 
 defaults, for example:
 
 ```bash
-codex exec --model gpt-5.5 --effort xhigh -s read-only "<self-contained review prompt>"
+codex exec --model gpt-5.6-sol -c model_reasoning_effort=xhigh -s read-only "<self-contained review prompt>"
 ```
+
+(`gpt-5.6-sol` needs Codex CLI ≥ 0.144; older CLIs reject it with "requires a newer
+version of Codex". The old `--effort` flag is gone — use `-c model_reasoning_effort=…`.)
 
 Keep your own context lean, but never outsource judgment. Verify every subagent claim that
 changes code, behavior, data, or product direction.
