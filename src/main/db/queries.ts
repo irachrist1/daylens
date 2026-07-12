@@ -26,6 +26,7 @@ import { resolveBrowserApplication } from '../services/browserRegistry'
 import { learnFromBlockOverride } from '../services/workMemory'
 import { isSystemNoiseApp } from '@shared/systemNoise'
 import { activityCategoryLabel } from '@shared/activityCategories'
+import { REAL_ABSENCE_MIN_MS } from '../lib/absenceGuard'
 
 function resolveDisplayName(bundleId: string, fallbackName: string): string {
   return resolveCanonicalApp(bundleId, fallbackName).displayName
@@ -235,7 +236,12 @@ export interface LiveAppSessionSnapshot {
 }
 
 function sessionEndTime(row: Pick<AppSessionRow, 'start_time' | 'end_time' | 'duration_sec'>): number {
-  return row.end_time ?? (row.start_time + row.duration_sec * 1_000)
+  const capturedEnd = row.start_time + Math.max(0, row.duration_sec) * 1_000
+  if (row.end_time == null) return capturedEnd
+  // `end_time` is sometimes only a stale wall-clock envelope. Keep normal
+  // polling/rounding drift, but never turn a >=15-minute uncovered tail into
+  // captured activity before the absence guard gets to inspect the session.
+  return row.end_time - capturedEnd >= REAL_ABSENCE_MIN_MS ? capturedEnd : row.end_time
 }
 
 function appSessionEndTime(session: Pick<AppSession, 'startTime' | 'endTime' | 'durationSeconds'>): number {

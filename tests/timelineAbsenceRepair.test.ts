@@ -6,7 +6,8 @@ import { SCHEMA_SQL } from '../src/main/db/schema.ts'
 import { materializeTimelineDayProjection } from '../src/main/core/query/projections.ts'
 import { analyzeTimelineDay } from '../src/main/services/analyzeDay.ts'
 import { mergeTimelineEpisodes, writeTimelineBlockReview } from '../src/main/services/workBlocks.ts'
-import { setBlockLabelOverride } from '../src/main/db/queries.ts'
+import { getSessionsForRange, setBlockLabelOverride } from '../src/main/db/queries.ts'
+import { absenceSpannedBy } from '../src/main/lib/absenceGuard.ts'
 
 // The absence guard end-to-end (v2-ship-plan W1-A). The founder's real July 10
 // had a block from 3:49 PM to 10:05 PM with a real absence from 8:01 PM to
@@ -95,6 +96,38 @@ test('mergeTimelineEpisodes refuses to join blocks across a real absence', () =>
     `SELECT COUNT(*) AS n FROM timeline_boundary_corrections WHERE kind = 'merge' AND date = ?`,
   ).get(TEST_DATE) as { n: number }
   assert.equal(corrections.n, 0)
+  db.close()
+})
+
+test('the real session read path preserves captured duration so an inflated end cannot erase the gap', () => {
+  const db = createDb()
+  const start = localMs(9)
+  const inflatedEnd = start + 2_139_000
+  db.prepare(`
+    INSERT INTO app_sessions (
+      bundle_id, app_name, start_time, end_time, duration_sec,
+      category, is_focused, window_title, raw_app_name, capture_source, capture_version
+    ) VALUES ('company.thebrowser.Browser', 'Dia', ?, ?, 236,
+      'browsing', 0, 'Work', 'Dia', 'test', 1)
+  `).run(start, inflatedEnd)
+  db.prepare(`
+    INSERT INTO app_sessions (
+      bundle_id, app_name, start_time, end_time, duration_sec,
+      category, is_focused, window_title, raw_app_name, capture_source, capture_version
+    ) VALUES ('company.thebrowser.Browser', 'Dia', ?, ?, 1500,
+      'browsing', 0, 'Work', 'Dia', 'test', 1)
+  `).run(inflatedEnd, inflatedEnd + 1_500_000)
+
+  const sessions = getSessionsForRange(db, localMs(8), localMs(11), { minimumDurationSeconds: 0 })
+  assert.equal(sessions[0]?.durationSeconds, 236, 'range hydration must not replace captured duration with the stale wall span')
+  assert.deepEqual(absenceSpannedBy(sessions), { startMs: start + 236_000, endMs: inflatedEnd })
+
+  const payload = materializeTimelineDayProjection(db, TEST_DATE, null)
+  const hiddenGapMid = (start + 236_000 + inflatedEnd) / 2
+  assert.ok(
+    payload.blocks.every((block) => !(block.startTime < hiddenGapMid && block.endTime > hiddenGapMid)),
+    'the hydrated sessions must reach the block guard unchanged',
+  )
   db.close()
 })
 
