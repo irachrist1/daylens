@@ -159,6 +159,10 @@ export async function analyzeTimelineDay(
         correctedCategory: correction.category,
       })
       if (correction.label?.trim()) setBlockLabelOverride(db, target.id, correction.label, null)
+      // The correction has moved to the selected half. Demote the obsolete
+      // fused review so interval readers cannot keep applying its category to
+      // both sides of the repaired absence.
+      writeTimelineBlockReview(db, dateStr, correction.block, { state: 'approved' })
     }
     if (splitCorrections.length > 0) payload = materialize()
     invalidateProjectionScope('timeline', 'absence-repair')

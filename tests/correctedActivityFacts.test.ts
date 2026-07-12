@@ -187,6 +187,9 @@ test('ignored spans subtract exact overlap instead of keeping or dropping a whol
     30 * 60,
     'AI/site totals must subtract the same exact ignored overlap',
   )
+  const timeline = materializeTimelineDayProjection(db, TEST_DATE, null)
+  assert.equal(timeline.websites[0]?.totalSeconds, 30 * 60, 'the main Timeline payload must use corrected website facts too')
+  assert.equal(timeline.siteCount, 1)
   db.close()
 })
 
@@ -237,5 +240,50 @@ test('a rename correction on a block is what Apps shows', () => {
   assert.ok(appearance, 'the renamed block must appear in the app detail')
   assert.equal(appearance.label, 'Building the absence guard')
 
+  db.close()
+})
+
+test('corrected app summaries recompute session count after one return is ignored', () => {
+  const db = createDb()
+  insertSession(db, 'First return', 9, 0, 30)
+  insertSession(db, 'Second return', 10, 0, 30)
+  const now = Date.now()
+  db.prepare(`
+    INSERT INTO timeline_block_reviews (
+      id, block_id, date, evidence_key, review_state, original_block_json,
+      correction_json, created_at, updated_at
+    ) VALUES ('review_first_return', 'first_return', ?, 'first_return', 'ignored', ?, '{}', ?, ?)
+  `).run(TEST_DATE, JSON.stringify({ startTime: localMs(9), endTime: localMs(9, 30) }), now, now)
+
+  const [fromMs, toMs] = localDayBounds(TEST_DATE)
+  assert.equal(getAppSummariesForRange(db, fromMs, toMs)[0]?.sessionCount, 2)
+  assert.equal(getCorrectedAppSummariesForRange(db, fromMs, toMs)[0]?.sessionCount, 1)
+  db.close()
+})
+
+test('corrected website summaries keep the same domain separate by browser owner', () => {
+  const db = createDb()
+  const insertSessionRow = db.prepare(`
+    INSERT INTO app_sessions (
+      bundle_id, app_name, start_time, end_time, duration_sec, category,
+      is_focused, window_title, raw_app_name, canonical_app_id, capture_source, capture_version
+    ) VALUES (?, ?, ?, ?, 1800, 'browsing', 0, ?, ?, ?, 'test', 2)
+  `)
+  insertSessionRow.run('com.apple.Safari', 'Safari', localMs(9), localMs(9, 30), 'Safari', 'Safari', 'safari')
+  insertSessionRow.run('company.thebrowser.Browser', 'Dia', localMs(10), localMs(10, 30), 'Dia', 'Dia', 'dia')
+  const insertVisit = db.prepare(`
+    INSERT INTO website_visits (
+      domain, page_title, url, visit_time, visit_time_us, duration_sec,
+      browser_bundle_id, canonical_browser_id, source
+    ) VALUES ('example.com', ?, ?, ?, ?, 1800, ?, ?, 'active_browser_context')
+  `)
+  insertVisit.run('Safari page', 'https://example.com/safari', localMs(9), BigInt(localMs(9)) * 1_000n, 'com.apple.Safari', 'safari')
+  insertVisit.run('Dia page', 'https://example.com/dia', localMs(10), BigInt(localMs(10)) * 1_000n, 'company.thebrowser.Browser', 'dia')
+
+  const summaries = getCorrectedWebsiteSummariesForRange(db, localMs(8), localMs(11))
+    .filter((summary) => summary.domain === 'example.com')
+  assert.equal(summaries.length, 2)
+  assert.deepEqual(summaries.map((summary) => summary.canonicalBrowserId).sort(), ['dia', 'safari'])
+  assert.deepEqual(summaries.map((summary) => summary.totalSeconds).sort((a, b) => a - b), [1800, 1800])
   db.close()
 })

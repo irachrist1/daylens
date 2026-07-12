@@ -205,12 +205,24 @@ export function getCorrectedAppSummariesForRange(
 ): AppUsageSummary[] {
   const raw = getAppSummariesForRange(db, fromMs, toMs)
   const corrected = getCorrectedSessionsForRange(db, fromMs, toMs)
-  const totals = new Map<string, { seconds: number; categorySeconds: Map<AppCategory, number> }>()
+  const totals = new Map<string, {
+    seconds: number
+    categorySeconds: Map<AppCategory, number>
+    sessionCount: number
+    lastEnd: number | null
+  }>()
   for (const session of corrected) {
     const key = session.canonicalAppId ?? session.bundleId
-    const entry = totals.get(key) ?? { seconds: 0, categorySeconds: new Map<AppCategory, number>() }
+    const entry = totals.get(key) ?? {
+      seconds: 0,
+      categorySeconds: new Map<AppCategory, number>(),
+      sessionCount: 0,
+      lastEnd: null,
+    }
     entry.seconds += session.durationSeconds
     entry.categorySeconds.set(session.category, (entry.categorySeconds.get(session.category) ?? 0) + session.durationSeconds)
+    if (entry.lastEnd == null || session.startTime - entry.lastEnd >= 2 * 60_000) entry.sessionCount += 1
+    entry.lastEnd = Math.max(entry.lastEnd ?? session.startTime, session.endTime ?? session.startTime + session.durationSeconds * 1_000)
     totals.set(key, entry)
   }
   return raw.flatMap((summary) => {
@@ -218,7 +230,7 @@ export function getCorrectedAppSummariesForRange(
     const entry = totals.get(key)
     if (!entry || entry.seconds <= 0) return []
     const category = [...entry.categorySeconds.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? summary.category
-    return [{ ...summary, totalSeconds: entry.seconds, category, isFocused: FOCUSED_CATEGORIES.includes(category) }]
+    return [{ ...summary, totalSeconds: entry.seconds, sessionCount: entry.sessionCount, category, isFocused: FOCUSED_CATEGORIES.includes(category) }]
   }).sort((a, b) => b.totalSeconds - a.totalSeconds)
 }
 
@@ -265,28 +277,49 @@ export function getCorrectedWebsiteSummariesForRange(
   fromMs: number,
   toMs: number,
 ): WebsiteSummary[] {
-  const rawByDomain = new Map(getWebsiteSummariesForRange(db, fromMs, toMs).map((row) => [row.domain, row]))
+  const browserKey = (browserBundleId: string | null, canonicalBrowserId: string | null | undefined): string =>
+    canonicalBrowserId ?? browserBundleId ?? ''
+  const rawByDomainAndBrowser = new Map(getWebsiteSummariesForRange(db, fromMs, toMs).map((row) => [
+    `${row.domain}\u0000${browserKey(row.browserBundleId, row.canonicalBrowserId)}`,
+    row,
+  ]))
   const visitsById = new Map(getWebsiteVisitsForRange(db, fromMs, toMs).map((visit) => [visit.id, visit]))
-  const grouped = new Map<string, { milliseconds: number; visitIds: Set<number>; titleMs: Map<string, number> }>()
+  const grouped = new Map<string, {
+    domain: string
+    browserBundleId: string | null
+    canonicalBrowserId: string | null
+    milliseconds: number
+    visitIds: Set<number>
+    titleMs: Map<string, number>
+  }>()
   for (const interval of getCorrectedDomainIntervals(db, fromMs, toMs)) {
-    const entry = grouped.get(interval.domain) ?? { milliseconds: 0, visitIds: new Set<number>(), titleMs: new Map<string, number>() }
+    const visit = visitsById.get(interval.visitId)
+    const key = `${interval.domain}\u0000${browserKey(visit?.browserBundleId ?? null, visit?.canonicalBrowserId)}`
+    const entry = grouped.get(key) ?? {
+      domain: interval.domain,
+      browserBundleId: visit?.browserBundleId ?? null,
+      canonicalBrowserId: visit?.canonicalBrowserId ?? null,
+      milliseconds: 0,
+      visitIds: new Set<number>(),
+      titleMs: new Map<string, number>(),
+    }
     const milliseconds = interval.end - interval.start
     entry.milliseconds += milliseconds
     entry.visitIds.add(interval.visitId)
     const title = visitsById.get(interval.visitId)?.pageTitle?.trim()
     if (title) entry.titleMs.set(title, (entry.titleMs.get(title) ?? 0) + milliseconds)
-    grouped.set(interval.domain, entry)
+    grouped.set(key, entry)
   }
-  return [...grouped.entries()].map(([domain, entry]) => {
-    const raw = rawByDomain.get(domain)
+  return [...grouped.entries()].map(([key, entry]) => {
+    const raw = rawByDomainAndBrowser.get(key)
     const topTitle = [...entry.titleMs.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null
     return {
-      domain,
+      domain: entry.domain,
       totalSeconds: Math.round(entry.milliseconds / 1000),
       visitCount: entry.visitIds.size,
       topTitle,
-      browserBundleId: raw?.browserBundleId ?? null,
-      canonicalBrowserId: raw?.canonicalBrowserId ?? null,
+      browserBundleId: raw?.browserBundleId ?? entry.browserBundleId,
+      canonicalBrowserId: raw?.canonicalBrowserId ?? entry.canonicalBrowserId,
     }
   }).filter((summary) => summary.totalSeconds > 0)
     .sort((a, b) => b.totalSeconds - a.totalSeconds)

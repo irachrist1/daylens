@@ -126,6 +126,42 @@ test('AI search cannot surface session or page content from an ignored Timeline 
   assert.equal(result.matchKind, 'empty')
 })
 
+test('AI search pages past ignored matches to return the next visible result', (t) => {
+  const db = setupDb()
+  t.after(() => db.close())
+  const today = new Date()
+  const insert = db.prepare(`
+    INSERT INTO app_sessions (
+      bundle_id, app_name, start_time, end_time, duration_sec, category,
+      is_focused, window_title, raw_app_name, capture_source, capture_version
+    ) VALUES ('search.app', 'Search App', ?, ?, 30, 'research', 1,
+      'Needle project', 'Search App', 'test', 1)
+  `)
+  const visibleStart = localMs(today, 8)
+  insert.run(visibleStart, visibleStart + 30_000)
+  for (let minute = 0; minute < 25; minute++) {
+    const start = localMs(today, 9, minute)
+    insert.run(start, start + 30_000)
+  }
+  const now = Date.now()
+  db.prepare(`
+    INSERT INTO timeline_block_reviews (
+      id, block_id, date, evidence_key, review_state, original_block_json,
+      correction_json, created_at, updated_at
+    ) VALUES ('review_search_limit', 'search_limit', ?, 'search_limit', 'ignored', ?, '{}', ?, ?)
+  `).run(dateStr(today), JSON.stringify({ startTime: localMs(today, 9), endTime: localMs(today, 10) }), now, now)
+
+  const result = execSearchSessions({
+    query: 'Needle',
+    startDate: dateStr(today),
+    endDate: dateStr(today),
+    limit: 25,
+  }, db)
+  assert.equal(result.matchKind, 'strict')
+  assert.equal(result.hits.length, 1)
+  assert.equal(result.hits[0].startTime, visibleStart)
+})
+
 function seedYouTubeVisits(db: Database.Database, day: Date, durationSec: number): void {
   // The reconciler credits site time only when the hosting browser was
   // foreground, so seed a Safari session covering the visit window.

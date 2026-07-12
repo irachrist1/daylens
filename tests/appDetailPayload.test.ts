@@ -142,6 +142,42 @@ test('browser detail reconciles overlapping visits into deduped pages under thei
   db.close()
 })
 
+test('browser detail subtracts a partial ignored span from both header and page credit', () => {
+  const db = new Database(':memory:')
+  db.exec(SCHEMA_SQL)
+  const date = '2026-04-22'
+  const start = localMs(date, 9)
+  const end = localMs(date, 10)
+  db.prepare(`
+    INSERT INTO app_sessions (
+      bundle_id, app_name, start_time, end_time, duration_sec, category,
+      is_focused, window_title, raw_app_name, canonical_app_id, capture_source, capture_version
+    ) VALUES ('com.apple.Safari', 'Safari', ?, ?, 3600, 'browsing', 0,
+      'Safari', 'Safari', 'safari', 'test', 2)
+  `).run(start, end)
+  db.prepare(`
+    INSERT INTO website_visits (
+      domain, page_title, url, normalized_url, page_key, visit_time,
+      visit_time_us, duration_sec, browser_bundle_id, canonical_browser_id, source
+    ) VALUES ('example.com', 'Example', 'https://example.com', 'https://example.com',
+      'example.com', ?, ?, 3600, 'com.apple.Safari', 'safari', 'active_browser_context')
+  `).run(start, BigInt(start) * 1_000n)
+  const now = Date.now()
+  db.prepare(`
+    INSERT INTO timeline_block_reviews (
+      id, block_id, date, evidence_key, review_state, original_block_json,
+      correction_json, created_at, updated_at
+    ) VALUES ('review_partial_browser', 'partial_browser', ?, 'partial_browser', 'ignored', ?, '{}', ?, ?)
+  `).run(date, JSON.stringify({ startTime: localMs(date, 9, 15), endTime: localMs(date, 9, 45) }), now, now)
+
+  const detail = getAppDetailPayload(db, 'safari', date, null)
+  assert.equal(detail.totalSeconds, 1800)
+  assert.equal(detail.browserActivity?.attributedSeconds, 1800)
+  assert.equal(detail.browserActivity?.domains[0]?.totalSeconds, 1800)
+  assert.ok((detail.browserActivity?.attributedSeconds ?? 0) <= detail.totalSeconds)
+  db.close()
+})
+
 test('past-day app detail never mixes in the current live session', () => {
   const db = new Database(':memory:')
   db.exec(SCHEMA_SQL)

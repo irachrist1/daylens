@@ -8,6 +8,7 @@ import { analyzeTimelineDay } from '../src/main/services/analyzeDay.ts'
 import { mergeTimelineEpisodes, writeTimelineBlockReview } from '../src/main/services/workBlocks.ts'
 import { getSessionsForRange, setBlockLabelOverride } from '../src/main/db/queries.ts'
 import { absenceSpannedBy } from '../src/main/lib/absenceGuard.ts'
+import { getCorrectedSessionsForRange } from '../src/main/services/activityFacts.ts'
 
 // The absence guard end-to-end (v2-ship-plan W1-A). The founder's real July 10
 // had a block from 3:49 PM to 10:05 PM with a real absence from 8:01 PM to
@@ -245,6 +246,12 @@ test('re-analyze REPAIRS a stored day and carries the fused block correction to 
   const largest = [...repaired].sort((a, b) => (b.endTime - b.startTime) - (a.endTime - a.startTime))[0]
   assert.equal(corrected[0].id, largest.id)
   assert.equal(corrected[0].dominantCategory, 'research', 'the fused category correction must survive too')
+  const correctedSessions = getCorrectedSessionsForRange(db, localMs(9), localMs(12, 30))
+  assert.ok(correctedSessions.some((session) => session.startTime < localMs(GAP_START_H) && session.category === 'research'))
+  assert.ok(
+    correctedSessions.some((session) => session.startTime >= localMs(GAP_END.h, GAP_END.m) && session.category === 'development'),
+    'the obsolete fused review must not recategorize the non-selected half',
+  )
   db.close()
 })
 

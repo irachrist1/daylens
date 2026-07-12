@@ -249,7 +249,10 @@ export function getAppDetailPayload(
 
   let browserActivity: AppDetailPayload['browserActivity']
   if (sessions.some((session) => isBrowserSession(session))) {
-    const breakdown = getBrowserActivityBreakdown(db, fromMs, todayTo, canonicalAppId, { excludeSpans: correctionSpans })
+    const breakdown = getBrowserActivityBreakdown(db, fromMs, todayTo, canonicalAppId, {
+      excludeSpans: correctionSpans,
+      sessions: rawSessions,
+    })
     browserActivity = {
       totalSeconds,
       attributedSeconds: breakdown.attributedSeconds,

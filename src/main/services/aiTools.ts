@@ -587,13 +587,44 @@ export function execSearchSessions(params: SearchSessionsParams, db: Database.Da
     url: h.url ?? null,
   })
 
+  // Filtering after a single SQL LIMIT can hide an older visible result when
+  // the newest matches all belong to ignored blocks. Page each FTS source
+  // backward until it has enough corrected hits (or exhausts the range), then
+  // merge the two visible result sets by recency.
+  const collectVisibleSessions = (query: string, wanted: number): SessionSearchHit[] => {
+    const visible: SessionSearchHit[] = []
+    let maxStartMs: number | undefined
+    while (visible.length < wanted) {
+      const batch = dbSearchSessions(db, query, { ...searchOpts, limit: 100, maxStartMs })
+      if (batch.length === 0) break
+      visible.push(...batch.map(mapSessionHit).filter(isVisibleHit))
+      const nextMax = Math.min(...batch.map((hit) => hit.startTime))
+      if (maxStartMs !== undefined && nextMax >= maxStartMs) break
+      maxStartMs = nextMax
+      if (batch.length < 100) break
+    }
+    return visible.slice(0, wanted)
+  }
+  const collectVisiblePages = (query: string, wanted: number): SessionSearchHit[] => {
+    const visible: SessionSearchHit[] = []
+    let maxStartMs: number | undefined
+    while (visible.length < wanted) {
+      const batch = dbSearchBrowser(db, query, { ...searchOpts, limit: 100, maxStartMs })
+      if (batch.length === 0) break
+      visible.push(...batch.map(mapBrowserHit).filter(isVisibleHit))
+      const nextMax = Math.min(...batch.map((hit) => hit.startTime))
+      if (maxStartMs !== undefined && nextMax >= maxStartMs) break
+      maxStartMs = nextMax
+      if (batch.length < 100) break
+    }
+    return visible.slice(0, wanted)
+  }
+
   // B2: search both app_sessions_fts and website_visits_fts so the AI can
   // cite specific page titles (e.g. Coursera lesson names), not just app names.
-  const strictSessions = dbSearchSessions(db, params.query, searchOpts)
-  const strictPages = dbSearchBrowser(db, params.query, searchOpts)
   const strictHits = [
-    ...strictSessions.map(mapSessionHit).filter(isVisibleHit),
-    ...strictPages.map(mapBrowserHit).filter(isVisibleHit),
+    ...collectVisibleSessions(params.query, limit),
+    ...collectVisiblePages(params.query, limit),
   ].sort((a, b) => b.startTime - a.startTime).slice(0, limit)
 
   if (strictHits.length > 0) {
@@ -621,10 +652,8 @@ export function execSearchSessions(params: SearchSessionsParams, db: Database.Da
   for (const token of tokens) {
     if (byKey.size >= limit) break
     const remaining = limit - byKey.size
-    const partialSessions = dbSearchSessions(db, token, { ...searchOpts, limit: remaining })
-      .map(mapSessionHit).filter(isVisibleHit)
-    const partialPages = dbSearchBrowser(db, token, { ...searchOpts, limit: remaining })
-      .map(mapBrowserHit).filter(isVisibleHit)
+    const partialSessions = collectVisibleSessions(token, remaining)
+    const partialPages = collectVisiblePages(token, remaining)
     tokenMatches[token] = partialSessions.length + partialPages.length
     for (const hit of partialSessions) {
       const key = `session:${hit.id}`

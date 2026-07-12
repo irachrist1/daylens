@@ -368,6 +368,9 @@ export interface SearchOptions {
   // raises this as it collects results so lower-yield tables only scan rows that
   // could still land in the final top-`limit` set. Not set by IPC callers.
   minStartMs?: number
+  // Internal pagination ceiling used after corrected search filters ignored
+  // Timeline spans. Not exposed over IPC.
+  maxStartMs?: number
 }
 
 export interface SessionSearchResult {
@@ -442,7 +445,10 @@ function searchBounds(opts: SearchOptions): { fromMs: number; toMs: number; limi
   const dateFloor = parseDateBound(opts.startDate, 'start') ?? 0
   return {
     fromMs: Math.max(dateFloor, opts.minStartMs ?? 0),
-    toMs: parseDateBound(opts.endDate, 'end') ?? Number.MAX_SAFE_INTEGER,
+    toMs: Math.min(
+      parseDateBound(opts.endDate, 'end') ?? Number.MAX_SAFE_INTEGER,
+      opts.maxStartMs ?? Number.MAX_SAFE_INTEGER,
+    ),
     limit: normalizedSearchLimit(opts.limit),
   }
 }
@@ -2125,7 +2131,7 @@ export function getBrowserActivityBreakdown(
   fromMs: number,
   toMs: number,
   canonicalBrowserId: string,
-  options: { excludeSpans?: readonly CorrectionSpan[] } = {},
+  options: { excludeSpans?: readonly CorrectionSpan[]; sessions?: readonly AppSession[] } = {},
 ): BrowserActivityBreakdown {
   const excludeSpans = options.excludeSpans ?? []
   // Reconcile over the WHOLE range and every browser — the claim pool a page
@@ -2139,11 +2145,11 @@ export function getBrowserActivityBreakdown(
   // total can never exceed what the app header counts (the header sums
   // duration_sec, not wall-clock spans).
   const foreground: { start: number; end: number }[] = []
-  for (const session of getSessionsForRange(db, fromMs, toMs)) {
+  for (const session of options.sessions ?? getSessionsForRange(db, fromMs, toMs)) {
     if ((session.canonicalAppId ?? session.bundleId) !== canonicalBrowserId && session.bundleId !== canonicalBrowserId) continue
     // Corrected truth (invariant 7): a deleted Timeline block's foreground
     // windows carry no page credit — its domains/pages vanish with its total.
-    if (excludeSpans.length > 0 && sessionStartsInsideSpans(session, excludeSpans)) continue
+    if (!options.sessions && excludeSpans.length > 0 && sessionStartsInsideSpans(session, excludeSpans)) continue
     const start = Math.max(session.startTime, fromMs)
     const end = Math.min(
       Math.min(
