@@ -17,6 +17,7 @@ import type { AIProvider, AIProviderMode, AppSettings, EnrichmentSourcesState } 
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { getDb } from '../services/database'
 import { recordActivityStateEvent } from '../db/queries'
+import { resetProviderBreaker } from '../services/providerCircuitBreaker'
 
 export function registerSettingsHandlers(): void {
   ipcMain.handle(IPC.SETTINGS.GET, async () => {
@@ -82,6 +83,18 @@ export function registerSettingsHandlers(): void {
       invalidateProjectionScope('insights', 'ai_settings_changed')
     }
 
+    // Provider circuit breaker (W1-B): picking a provider in Settings is the
+    // user saying "try this one now" — never make them wait out a cooldown
+    // that a background job tripped on a DIFFERENT provider selection, and
+    // never make a fresh pick of the SAME provider wait either (they may
+    // have just fixed billing on the provider's own dashboard).
+    if (rawChangedKeys.includes('aiProvider') && partial.aiProvider) {
+      resetProviderBreaker(getDb(), partial.aiProvider, 'provider_changed')
+    }
+    if (rawChangedKeys.includes('aiChatProvider') && partial.aiChatProvider) {
+      resetProviderBreaker(getDb(), partial.aiChatProvider, 'provider_changed')
+    }
+
     if ('mcpServerEnabled' in partial) {
       if (partial.mcpServerEnabled) {
         startMcpServer()
@@ -122,12 +135,16 @@ export function registerSettingsHandlers(): void {
       await clearApiKey(resolvedProvider)
     }
     invalidateProjectionScope('insights', 'ai_credentials_changed')
+    // A re-pasted key is the user saying "this should work now" — give it a
+    // clean slate instead of a leftover cooldown from the old key.
+    resetProviderBreaker(getDb(), resolvedProvider, 'key_changed')
   })
 
   ipcMain.handle(IPC.SETTINGS.CLEAR_API_KEY, async (_e, provider?: AIProviderMode) => {
     const resolvedProvider = provider ?? (await getSettingsAsync()).aiProvider ?? 'anthropic'
     await clearApiKey(resolvedProvider)
     invalidateProjectionScope('insights', 'ai_credentials_changed')
+    resetProviderBreaker(getDb(), resolvedProvider, 'key_changed')
   })
 
   ipcMain.handle(IPC.SETTINGS.VALIDATE_API_KEY, async (_e, payload: { provider: AIProvider; key: string }) => {
