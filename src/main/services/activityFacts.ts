@@ -288,3 +288,49 @@ export function getCorrectedWebsiteSummariesForRange(
   }).filter((summary) => summary.totalSeconds > 0)
     .sort((a, b) => b.totalSeconds - a.totalSeconds)
 }
+
+export interface CorrectedPeakHoursResult {
+  peakStart: number
+  peakEnd: number
+  focusPct: number
+}
+
+export function getCorrectedPeakHours(
+  db: Database.Database,
+  fromMs: number,
+  toMs: number,
+): CorrectedPeakHoursResult | null {
+  const sessions = getCorrectedSessionsForRange(db, fromMs, toMs)
+  const distinctDays = new Set<string>()
+  const hours = Array.from({ length: 24 }, () => ({ total: 0, focused: 0 }))
+  for (const session of sessions) {
+    let cursor = session.startTime
+    const end = session.endTime ?? session.startTime + session.durationSeconds * 1000
+    if (end <= cursor) continue
+    distinctDays.add(new Date(cursor).toLocaleDateString('en-CA'))
+    while (cursor < end) {
+      const date = new Date(cursor)
+      const nextHour = new Date(date.getFullYear(), date.getMonth(), date.getDate(), date.getHours() + 1).getTime()
+      const pieceEnd = Math.min(end, nextHour)
+      const seconds = (pieceEnd - cursor) / 1000
+      hours[date.getHours()].total += seconds
+      if (session.isFocused) hours[date.getHours()].focused += seconds
+      cursor = pieceEnd
+    }
+  }
+  if (distinctDays.size < 3) return null
+  let best: CorrectedPeakHoursResult | null = null
+  let bestFocused = -1
+  for (let start = 0; start < 24; start++) {
+    const next = (start + 1) % 24
+    const total = hours[start].total + hours[next].total
+    if (total <= 0) continue
+    const focused = hours[start].focused + hours[next].focused
+    const focusPct = Math.round((focused / total) * 100)
+    if (!best || focusPct > best.focusPct || (focusPct === best.focusPct && focused > bestFocused)) {
+      best = { peakStart: start, peakEnd: (start + 2) % 24, focusPct }
+      bestFocused = focused
+    }
+  }
+  return best
+}

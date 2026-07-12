@@ -7,6 +7,7 @@ import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
 import { SCHEMA_SQL } from '../src/main/db/schema'
 import { getPeakHours } from '../src/main/db/queries'
+import { getCorrectedPeakHours } from '../src/main/services/activityFacts'
 
 function freshDb(): Database.Database {
   const db = new Database(':memory:')
@@ -72,6 +73,34 @@ test('getPeakHours picks the 2-hour window with the highest focus percentage', (
   assert.equal(peak.peakStart, 9, 'peak should start at 09:00 where focus time concentrates')
   assert.equal(peak.peakEnd, 11)
   assert.equal(peak.focusPct, 100, 'the 09–11 window is entirely focused work')
+  db.close()
+})
+
+test('corrected peak hours cannot use focused blocks the user ignored', () => {
+  const db = freshDb()
+  for (let day = 1; day <= 3; day++) {
+    insertSession(db, { appName: 'Cursor', bundleId: 'dev', start: localMs(2026, 4, day, 9), end: localMs(2026, 4, day, 11), category: 'development' })
+    insertSession(db, { appName: 'Slack', bundleId: 'social', start: localMs(2026, 4, day, 14), end: localMs(2026, 4, day, 16), category: 'social' })
+    const now = Date.now() + day
+    db.prepare(`
+      INSERT INTO timeline_block_reviews (
+        id, block_id, date, evidence_key, review_state, original_block_json,
+        correction_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, 'ignored', ?, '{}', ?, ?)
+    `).run(
+      `ignored_${day}`, `ignored_${day}`, `2026-05-0${day}`, `ignored_${day}`,
+      JSON.stringify({ startTime: localMs(2026, 4, day, 9), endTime: localMs(2026, 4, day, 11) }), now, now,
+    )
+  }
+  const from = localMs(2026, 4, 1, 0)
+  const to = localMs(2026, 4, 8, 0)
+  const rawPeakStart = getPeakHours(db, from, to)?.peakStart
+  assert.notEqual(rawPeakStart, 13, 'raw query demonstrates the stale answer')
+  const corrected = getCorrectedPeakHours(db, from, to)
+  assert.ok(corrected)
+  assert.equal(corrected.peakStart, 13, 'the earliest equal 0%-focus window containing surviving 14:00 activity wins')
+  assert.notEqual(corrected.peakStart, rawPeakStart)
+  assert.equal(corrected.focusPct, 0)
   db.close()
 })
 

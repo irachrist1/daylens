@@ -7,11 +7,10 @@
 // `executeTool` remains as a typed name→resolver dispatch for tests/the MCP layer.
 import type Database from 'better-sqlite3'
 import {
-  getReconciledDomainIntervals,
-  getWebsiteSummariesForRange,
   searchSessions as dbSearchSessions,
   searchBrowser as dbSearchBrowser,
   searchArtifacts as dbSearchArtifacts,
+  getWebsiteVisitsForRange,
 } from '../db/queries'
 // AI facts read the corrected activity truth (invariant 7): a Timeline block
 // the user deleted is subtracted from every total the AI quotes, so the AI
@@ -20,6 +19,8 @@ import {
   getCorrectedAppSummariesForRange as getAppSummariesForRange,
   getCorrectedSessionsForRange as getSessionsForRange,
   getIgnoredBlockSpansForRange,
+  getCorrectedDomainIntervals,
+  getCorrectedWebsiteSummariesForRange,
 } from './activityFacts'
 import { localDateString } from '../lib/localDate'
 import { computeFocusScoreV2 } from '../lib/focusScore'
@@ -459,26 +460,31 @@ function aggregateSiteUsage(
     })
   if (matchedDomains.length === 0) return null
 
-  const placeholders = matchedDomains.map(() => '?').join(', ')
-
   // Visit COUNT stays a raw navigation count, but the TIME is reconciled:
   // raw SUM(duration_sec) double-counts the two capture sources and keeps
   // crediting background tabs, so the AI's "how long on youtube" answer
   // disagreed with every other surface (invariant 7).
   const wanted = new Set(matchedDomains)
   const daySeconds = new Map<string, number>()
-  for (const interval of getReconciledDomainIntervals(db, fromMs, toMs, (domain) => wanted.has(domain))) {
+  const intervals = getCorrectedDomainIntervals(db, fromMs, toMs, (domain) => wanted.has(domain))
+  const survivingVisitIds = new Set(intervals.map((interval) => interval.visitId))
+  for (const interval of intervals) {
     const day = localDateString(new Date(interval.start))
     daySeconds.set(day, (daySeconds.get(day) ?? 0) + (interval.end - interval.start) / 1000)
   }
 
-  const visitRows = db.prepare(`
-    SELECT strftime('%Y-%m-%d', visit_time / 1000, 'unixepoch', 'localtime') AS day,
-           COUNT(*) AS visits
-    FROM website_visits
-    WHERE visit_time >= ? AND visit_time < ? AND domain IN (${placeholders})
-    GROUP BY day ORDER BY day DESC
-  `).all(fromMs, toMs, ...matchedDomains) as { day: string; visits: number }[]
+  const ignoredSpans = getIgnoredBlockSpansForRange(db, fromMs, toMs)
+  const survivingVisits = getWebsiteVisitsForRange(db, fromMs, toMs)
+    .filter((visit) => wanted.has(visit.domain) && (
+      survivingVisitIds.has(visit.id)
+      || (visit.durationSec <= 0 && !ignoredSpans.some((span) => span.startMs <= visit.visitTime && span.endMs > visit.visitTime))
+    ))
+  const visitCountByDay = new Map<string, number>()
+  for (const visit of survivingVisits) {
+    const day = localDateString(new Date(visit.visitTime))
+    visitCountByDay.set(day, (visitCountByDay.get(day) ?? 0) + 1)
+  }
+  const visitRows = [...visitCountByDay.entries()].map(([day, visits]) => ({ day, visits }))
 
   const visitsByDay = new Map(visitRows.map((r) => [r.day, r.visits ?? 0]))
   const allDays = [...new Set([...daySeconds.keys(), ...visitsByDay.keys()])].sort().reverse()
@@ -487,12 +493,11 @@ function aggregateSiteUsage(
   const visitCount = visitRows.reduce((s, r) => s + (r.visits ?? 0), 0)
   if (visitCount <= 0) return null
 
-  const titleRows = db.prepare(`
-    SELECT DISTINCT page_title FROM website_visits
-    WHERE visit_time >= ? AND visit_time < ? AND domain IN (${placeholders})
-      AND page_title IS NOT NULL AND page_title != ''
-    ORDER BY visit_time DESC LIMIT 10
-  `).all(fromMs, toMs, ...matchedDomains) as { page_title: string }[]
+  const titleRows = survivingVisits
+    .filter((visit) => visit.pageTitle?.trim())
+    .sort((a, b) => b.visitTime - a.visitTime)
+    .filter((visit, index, all) => all.findIndex((other) => other.pageTitle === visit.pageTitle) === index)
+    .slice(0, 10)
 
   return {
     // Show the shortest matched domain — usually the registrable host (youtube.com).
@@ -506,7 +511,7 @@ function aggregateSiteUsage(
         sessionCount: visitsByDay.get(day) ?? 0,
       }))
       .filter((r) => r.totalSeconds > 0 || r.sessionCount > 0),
-    titles: titleRows.map((r) => r.page_title),
+    titles: titleRows.map((visit) => visit.pageTitle as string),
   }
 }
 
@@ -659,7 +664,7 @@ export function execGetDaySummary(params: GetDaySummaryParams, db: Database.Data
   const [fromMs, toMs] = localDayBounds(params.date)
   const summaries = getAppSummariesForRange(db, fromMs, toMs)
   const sessions = getSessionsForRange(db, fromMs, toMs)
-  const websites = getWebsiteSummariesForRange(db, fromMs, toMs)
+  const websites = getCorrectedWebsiteSummariesForRange(db, fromMs, toMs)
   const focusScore = computeFocusScoreV2({
     sessions: sessions.map((s) => ({
       startTime: s.startTime,

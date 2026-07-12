@@ -11,6 +11,7 @@ import {
   getCorrectedAppSummariesForRange,
   getCorrectedSessionsForRange,
   getIgnoredBlockSpansForRange,
+  getCorrectedWebsiteSummariesForRange,
 } from '../src/main/services/activityFacts.ts'
 import { localDayBounds } from '../src/main/lib/localDate.ts'
 
@@ -156,6 +157,13 @@ test('a category override on a block reaches Timeline and Apps consistently', ()
 test('ignored spans subtract exact overlap instead of keeping or dropping a whole session', () => {
   const db = createDb()
   insertSession(db, 'One continuous session', 9, 0, 60)
+  db.prepare(`
+    INSERT INTO website_visits (
+      domain, page_title, url, visit_time, visit_time_us, duration_sec,
+      browser_bundle_id, source
+    ) VALUES ('example.com', 'Continuous page', 'https://example.com', ?, ?, 3600,
+      'com.mitchellh.ghostty', 'active_browser_context')
+  `).run(localMs(9), localMs(9) * 1000)
   const now = Date.now()
   db.prepare(`
     INSERT INTO timeline_block_reviews (
@@ -174,6 +182,11 @@ test('ignored spans subtract exact overlap instead of keeping or dropping a whol
     [localMs(9, 45), localMs(10)],
   ])
   assert.equal(getCorrectedAppSummariesForRange(db, localMs(9), localMs(10))[0]?.totalSeconds, 30 * 60)
+  assert.equal(
+    getCorrectedWebsiteSummariesForRange(db, localMs(9), localMs(10))[0]?.totalSeconds,
+    30 * 60,
+    'AI/site totals must subtract the same exact ignored overlap',
+  )
   db.close()
 })
 
