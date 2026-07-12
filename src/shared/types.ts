@@ -708,6 +708,11 @@ export interface AIThreadMessage {
 export interface AIChatTurnResult {
   assistantMessage: AIThreadMessage
   conversationState: AIConversationState | null
+  // The thread this turn was persisted into. sendMessage auto-creates a thread
+  // when the renderer sends from a new-chat draft; returning the id lets the
+  // renderer adopt THAT thread instead of guessing "the newest one" from a
+  // list refresh — the guess is what created duplicate sidebar threads.
+  threadId: number | null
   // R1 instrumentation: number of provider HTTP calls this turn made
   // (tool-loop roundtrips + retries + prose pass). Used to keep the per-turn
   // median low; absent for deterministic turns that made no provider call.
@@ -2115,6 +2120,7 @@ export const IPC = {
   },
   AI: {
     SEND_MESSAGE: 'ai:send-message',
+    CANCEL_MESSAGE: 'ai:cancel-message',
     STREAM_EVENT: 'ai:stream-event',
     GET_STARTER_SUGGESTIONS: 'ai:get-starter-suggestions',
     COMMIT_ACTION: 'ai:commit-action',

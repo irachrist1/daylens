@@ -8,6 +8,7 @@ import { getApiKey, getSettings, getSettingsAsync } from './settings'
 import { friendlyProviderError as friendlyProviderErrorClassified } from './providerErrors'
 import { getBillingAccess, getManagedAIConfig } from './billing'
 import { selectJobProvider } from '../lib/providerRouting'
+import { abortError, getAmbientAbortSignal, isAbortError } from '../lib/aiCancellation'
 import type {
   AIInvocationSource,
   AIJobType,
@@ -48,6 +49,9 @@ export interface AITextJobExecutionOptions {
   // omitted. Long-form jobs (reports, week reviews) override upward; chat
   // answers stay at the default.
   maxOutputTokens?: number
+  // Real cancel (W1-C): the chat turn's abort signal. Provider send functions
+  // hand it to their SDK call so Stop aborts the in-flight HTTP request.
+  signal?: AbortSignal
 }
 
 // R5 context-32k: the cap is an upper bound, not a target — the model still
@@ -546,6 +550,11 @@ export async function executeTextAIJob(
     )
   }
 
+  // Real cancel (W1-C): a chat turn makes several provider calls (planner,
+  // phrase, follow-ups). If the user already hit Stop, don't start the next one.
+  const ambientSignal = getAmbientAbortSignal()
+  if (ambientSignal?.aborted) throw abortError()
+
   const settings = await getSettingsAsync()
   const definition = JOB_DEFINITIONS[payload.jobType]
   const executionOptions: AITextJobExecutionOptions = {
@@ -553,6 +562,7 @@ export async function executeTextAIJob(
     promptCachingEnabled: settings.aiPromptCachingEnabled ?? true,
     onDelta: streamOptions?.onDelta,
     maxOutputTokens: definition.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+    signal: ambientSignal,
   }
   const eventId = randomUUID()
   const startedAt = Date.now()
@@ -637,6 +647,11 @@ export async function executeTextAIJob(
     } catch (error) {
       lastError = error
       lastConfig = config
+      // A user-initiated Stop must not fall through to the next configured
+      // provider — the whole turn is over.
+      if (ambientSignal?.aborted || isAbortError(error)) {
+        break
+      }
       if (!isQuotaOrAuthError(error)) {
         break
       }

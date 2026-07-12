@@ -43,8 +43,8 @@ import { appNarrativeScopeKey, THIN_APP_NARRATIVE_SUMMARY } from '@shared/appNar
 import { userProfileDirective } from '@shared/userProfile'
 import { parseDaySummaryResultText } from '../lib/daySummarySuggestions'
 import {
-  fallbackGeneratedReportContent,
   parseGeneratedReportResult,
+  type GeneratedReportContent,
 } from '../lib/dayReportFallback'
 import {
   detectRequestedFormats,
@@ -63,6 +63,7 @@ import {
 } from '../core/query/attributionResolvers'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { deriveTitleFromMessage, isWeakThreadTitle, type ThreadTitleContext } from '../lib/threadTitles'
+import { abortError, isAbortError, registerAICancellation, runWithAbortSignal, unregisterAICancellation } from '../lib/aiCancellation'
 import { getDb } from '../services/database'
 import { workMemoryPromptBlock, chatMemoryPromptBlock, getWorkMemoryProfile, getClientMemory, findClientScopeForWrite, clientScope as clientScopeId } from '../services/workMemoryProfile'
 import { looksLikeMemoryInstruction, extractMemoryOps } from '../ai/memoryWrite'
@@ -1011,7 +1012,7 @@ async function sendWithAnthropic(
     model: config.model,
     max_tokens: options?.maxOutputTokens ?? 1024,
     ...promptInput,
-  })
+  }, { signal: options?.signal })
   stream.on('text', (delta) => {
     void options?.onDelta?.(delta)
   })
@@ -1073,7 +1074,7 @@ async function sendWithOpenRouter(
       max_tokens: options?.maxOutputTokens ?? 1024,
       stream: true,
       stream_options: { include_usage: true },
-    }),
+    }, { signal: options?.signal }),
     { label: 'text job' },
   )
   let text = ''
@@ -1117,7 +1118,7 @@ async function sendWithManagedProxy(
     max_tokens: options?.maxOutputTokens ?? 1024,
     stream: true,
     stream_options: { include_usage: true },
-  })
+  }, { signal: options?.signal })
   let text = ''
   let inputTokens: number | null = null
   let outputTokens: number | null = null
@@ -1173,7 +1174,7 @@ async function sendWithOpenAI(
       max_output_tokens: options?.maxOutputTokens ?? 1024,
       store: false,
       stream: true,
-    }),
+    }, { signal: options?.signal }),
     { label: 'text job' },
   )
   let text = ''
@@ -1234,6 +1235,9 @@ async function sendWithGoogle(
     config: {
       systemInstruction: systemPrompt,
       maxOutputTokens: options?.maxOutputTokens ?? 1024,
+      // Real cancel (W1-C): the chat-level config applies to sendMessageStream,
+      // so Stop aborts the in-flight Gemini request.
+      abortSignal: options?.signal,
     },
     history: toGoogleHistory(prior) as GoogleContent[],
   })
@@ -1269,7 +1273,9 @@ async function runCLIProvider(
   tool: CLITool,
   prompt: string,
   model?: string,
+  signal?: AbortSignal,
 ): Promise<string> {
+  if (signal?.aborted) throw abortError()
   const resolvedTool = await resolveCLITool(tool)
   if (!resolvedTool) {
     throw new CLIProviderError('not_found', `${tool} CLI not found`)
@@ -1333,6 +1339,17 @@ async function runCLIProvider(
         child.kill()
         reject(new CLIProviderError('timeout', `${tool} CLI timed out after ${CLI_TIMEOUT_MS / 1000}s`))
       }, CLI_TIMEOUT_MS)
+
+      // Real cancel (W1-C): Stop kills the CLI child process outright.
+      const onAbort = () => {
+        if (finished) return
+        finished = true
+        clearTimeout(timer)
+        child.kill()
+        reject(abortError())
+      }
+      signal?.addEventListener('abort', onAbort, { once: true })
+      child.on('close', () => signal?.removeEventListener('abort', onAbort))
 
       stdoutStream.on('data', (chunk) => {
         stdout += chunk.toString()
@@ -1403,7 +1420,7 @@ async function sendWithProvider(
           : config.provider === 'gemini-cli'
             ? 'gemini'
             : 'codex'
-      const text = await runCLIProvider(tool, cliPrompt, config.model)
+      const text = await runCLIProvider(tool, cliPrompt, config.model, options?.signal)
       await emitTextDeltas(text, options?.onDelta)
       return {
         text,
@@ -1577,6 +1594,41 @@ function sanitizeConversationHistory(history: AIThreadMessage[]): { role: 'user'
     role: message.role,
     content: message.content,
   }))
+}
+
+// ── Provider history bound (W1-C) ───────────────────────────────────────────
+// The SCREEN may hold a whole thread (message paging), but what each turn
+// SENDS to the provider must not grow with thread length. The bound is
+// recent-N messages: the newest MAX_PROVIDER_HISTORY_MESSAGES entries
+// (= MAX_PROVIDER_HISTORY_MESSAGES / 2 user↔assistant exchanges) are kept and
+// everything older is dropped. Ten exchanges is enough context for the
+// follow-up shapes the app supports ("what about yesterday?", "make that
+// shorter", "are you sure?") — those reference the last few turns, and
+// longer-range recall goes through the resolvers, not chat history. After the
+// cut, any leading assistant message is dropped so the history still starts
+// with a user turn (Anthropic/Google reject assistant-first histories).
+export const MAX_PROVIDER_HISTORY_MESSAGES = 20
+
+export function boundProviderHistory(prior: ConversationMessage[]): ConversationMessage[] {
+  let bounded = prior.length > MAX_PROVIDER_HISTORY_MESSAGES
+    ? prior.slice(prior.length - MAX_PROVIDER_HISTORY_MESSAGES)
+    : prior.slice()
+  const firstUser = bounded.findIndex((message) => message.role === 'user')
+  if (firstUser > 0) bounded = bounded.slice(firstUser)
+  return firstUser === -1 ? [] : bounded
+}
+
+// First send from a new-chat draft (threadId null): reuse the newest EMPTY
+// unarchived thread when one exists — a send that failed after thread creation
+// leaves exactly such a row behind — and only create a fresh row otherwise.
+// Without the reuse, every failed first send minted another identically-titled
+// thread, which is how the sidebar grew duplicate "This Week Focus" /
+// "Focus Session" entries.
+function threadForFirstMessage(userMessage: string): number {
+  const thread = createThread(null) // createThread(null) adopts an existing empty draft
+  const title = deriveTitleFromMessage(userMessage)
+  if (title !== thread.title) renameThread(thread.id, title)
+  return thread.id
 }
 
 function blockDurationSeconds(block: Pick<WorkContextBlock, 'startTime' | 'endTime' | 'sessions'>): number {
@@ -1921,6 +1973,7 @@ async function persistChatTurn(
   return {
     assistantMessage: assistantEntry,
     conversationState: envelope.conversationState,
+    threadId,
   }
 }
 
@@ -3214,10 +3267,15 @@ async function maybeGenerateRequestedOutput(params: {
 
   // Fully AI-written reports: the model writes the whole report — narrative and
   // numbers — from the deterministic scaffold, fresh every time, so it never
-  // reads like a fixed template. The deterministic renderer is kept ONLY as a
-  // fallback when the model call fails or times out, so a bad provider moment
-  // degrades to a correct, templated report instead of nothing.
-  let reportContent = fallbackGeneratedReportContent(bundle)
+  // reads like a fixed template.
+  //
+  // No fake AI (W1-C / invariant 10): when the model call fails or its output
+  // can't be parsed, the user gets the honest error card with Retry — never
+  // templated prose dressed up as an AI answer. The one exception is a bundle
+  // with renderDeterministic (the week review): its output SAYS it is
+  // deterministic in both the chat card and the report body ("no AI synthesis
+  // was used"), so degrading to it is honest.
+  let reportContent: GeneratedReportContent
   const trace = getCurrentTrace()
   try {
     if (trace) {
@@ -3245,19 +3303,22 @@ async function maybeGenerateRequestedOutput(params: {
     if (trace) {
       trace.addEvent({ kind: 'prose_pass', input: '[report_generation_raw_output]', output: text })
     }
-    reportContent = parseGeneratedReportResult(text, bundle.title) ?? reportContent
-  } catch (error) {
-    console.warn('[ai] report_generation fell back to the deterministic template:', error)
-    const deterministic = bundle.renderDeterministic?.()
-    if (deterministic) {
-      reportContent = {
-        assistantResponse: deterministic.assistantResponse,
-        reportTitle: bundle.title,
-        reportMarkdown: deterministic.reportMarkdown,
-      }
+    const parsed = parseGeneratedReportResult(text, bundle.title)
+    if (!parsed) {
+      throw new Error('The AI response could not be read as a report. Tap retry to run it again.')
     }
+    reportContent = parsed
+  } catch (error) {
     if (trace) {
       trace.addEvent({ kind: 'error', message: error instanceof Error ? error.message : String(error), phase: 'report_generation' })
+    }
+    const deterministic = bundle.renderDeterministic?.()
+    if (!deterministic) throw error
+    console.warn('[ai] report_generation fell back to the self-labelled deterministic renderer:', error)
+    reportContent = {
+      assistantResponse: deterministic.assistantResponse,
+      reportTitle: bundle.title,
+      reportMarkdown: deterministic.reportMarkdown,
     }
   }
 
@@ -4056,17 +4117,24 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
     scenarioId: options.traceScenarioId ?? null,
     tag: 'sendMessage',
   })
+  // Real cancel (W1-C): register this turn's AbortController under the
+  // renderer's clientRequestId so ai:cancel-message can abort the in-flight
+  // provider request. The signal rides an AsyncLocalStorage context down to
+  // every executeTextAIJob call this turn makes.
+  const cancelController = new AbortController()
+  const cancelKey = payload.clientRequestId ?? null
+  if (cancelKey) registerAICancellation(cancelKey, cancelController)
   try {
     // R1: count every provider call this turn makes (tool-loop roundtrips,
     // retries, prose pass) so we can keep the per-turn median low and prove it.
-    const result = await withProviderCallCount(async (getProviderCallCount) => {
+    const result = await runWithAbortSignal(cancelController.signal, () => withProviderCallCount(async (getProviderCallCount) => {
       const inner = await sendMessageInner(payload, options)
       const providerCalls = getProviderCallCount()
       if (process.env.NODE_ENV === 'development') {
         console.log(`[ai:chat] turn used ${providerCalls} provider call(s)`)
       }
       return { ...inner, providerCallCount: providerCalls }
-    })
+    }))
     // SOFT voice guard (ai.md §5 voice). The answer has already streamed to the
     // user by now, so this only ever LOGS a banned phrase for voice monitoring —
     // it never throws and never rewrites the answer. A hard guard here would
@@ -4081,12 +4149,20 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
     }
     return result
   } catch (err) {
+    // A user-initiated Stop is not a provider failure: nothing was persisted,
+    // so surface a plain, recognizable cancellation instead of a branded error.
+    if (cancelController.signal.aborted || isAbortError(err)) {
+      const cancelled = abortError()
+      if (recorder) recorder.finish(undefined, cancelled.message)
+      throw cancelled
+    }
     const friendly = friendlyChatError(err)
     if (recorder) {
       recorder.finish(undefined, friendly.message)
     }
     throw friendly
   } finally {
+    if (cancelKey) unregisterAICancellation(cancelKey, cancelController)
     if (recorder) setCurrentTrace(null)
   }
 }
@@ -4097,16 +4173,14 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
   const conversationId = getOrCreateConversation(db)
   let threadId = payload.threadId ?? null
   if (threadId == null) {
-    // Silently create a thread titled from the first user message so legacy
-    // call-sites that omit threadId still end up with durable thread rows.
-    const created = createThread(deriveTitleFromMessage(userMessage))
-    threadId = created.id
+    // First send from a new-chat draft: adopt (or create) the draft thread and
+    // title it from the message.
+    threadId = threadForFirstMessage(userMessage)
   } else {
     // Ensure the referenced thread exists; if not, fall back to a fresh one.
     const existing = getThread(threadId)
     if (!existing) {
-      const created = createThread(deriveTitleFromMessage(userMessage))
-      threadId = created.id
+      threadId = threadForFirstMessage(userMessage)
     } else {
       maybeRenameWeakThread(threadId, existing.title, userMessage)
     }
@@ -4139,7 +4213,7 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
     console.log(`[ai:chat] ← "${userMessage.slice(0, 120)}"`)
   }
 
-  const prior = sanitizeConversationHistory(history)
+  const prior = boundProviderHistory(sanitizeConversationHistory(history))
 
   // A bare greeting or check-in ("hi", "how's it going") gets a real, warm
   // reply from the model — never a canned line (ai.md §5). The fast-path regex
@@ -4418,12 +4492,32 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
   let assistantText: string
 
   // The identity question ("what model is this?") stays deterministic so the
-  // model/provider string the user sees can never drift from what's running.
+  // model/provider string the user sees can never drift from what's running
+  // (invariant 12) — a model asked which model it is reliably confabulates.
+  // No fake AI (W1-C): because no model produced this line, the turn is
+  // labelled deterministic (sourceKind/answerKind), the same class as the
+  // router's fact answers — never disguised as a freeform model reply.
   if (/\b(what|which)\b[\s\S]{0,40}\b(model|ai|llm|engine)\b/i.test(effectiveUserMessage)
       && /\b(you|this|chat|powering|running|using|are)\b/i.test(effectiveUserMessage)) {
     assistantText = `You're talking to Daylens, currently routed through ${providerLabel(chatProvider)} (${chatModel}).`
     await stream.streamText(assistantText)
-  } else {
+    const identityAnswerKind: AIAnswerKind = 'deterministic_stats'
+    return persistTurn({
+      assistantText,
+      answerKind: identityAnswerKind,
+      sourceKind: 'deterministic',
+      resolvedTemporalContext: previousContext,
+      conversationState: buildConversationState(
+        identityAnswerKind,
+        'deterministic',
+        previousContext ?? { date: new Date(), timeWindow: null, weeklyBrief: null, entity: null },
+        inferFollowUpAffordances(identityAnswerKind),
+      ),
+      suggestedFollowUps: [],
+    })
+  }
+
+  {
     const now = new Date()
     const firstSessionRow = db
       .prepare('SELECT MIN(start_time) as t FROM app_sessions')
