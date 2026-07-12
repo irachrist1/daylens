@@ -14,9 +14,9 @@ It reads from the **same blocks and threads** as the Timeline and the Apps view.
 Timeline says 3 hours of network work, the AI says the same. One truth, three views.
 
 The one architectural rule that makes this work, and that everything else depends on:
-**the app looks up your real data first, then hands it to the AI only to phrase it
-nicely.** The AI never decides whether data exists. It never goes looking. It narrates
-facts the app already fetched. This is non-negotiable — section 4 is how.
+**every claim traces to real data a tool returned.** The AI reads the world through
+read-only tools that answer with real rows or an explicit miss; it never invents a row
+and never fills a gap with a guess. This is non-negotiable — section 4 is how.
 
 ## 2. What's broken now and how it should work
 
@@ -115,77 +115,90 @@ good answer. Never pattern-match their wording or structure; write fresh every t
 Notice the pattern across all three: lead with the answer, ground every claim in real
 times and real activities, and pick the format that fits the question (section 6).
 
-## 4. How answers work — plan → resolve → phrase
+## 4. How answers work — one agent, grounded tools
 
-This is the heart of the tab, and it's where the current build is wrong at the root. Today
-the AI tab has **two** answering systems bolted together behind a `shouldUseRouter` gate
-(`aiService.ts`): a deterministic router, and — when the router doesn't recognize a
-question — an **agentic tool-loop** where the model is handed nine tools (`getDaySummary`,
-`getAppUsage`, …) and left to orchestrate them. The most important question in the app,
-*"what did I work on today,"* falls into the tool-loop, and the tool-loop is exactly what
-begs *"could you share the getDaySummary output again?"* **We delete the tool-loop.** We do
-not patch it. (See `docs/adr/0002-ai-data-access.md` for the decision and the why.)
+This is the heart of the tab. Chat is **one agent loop** (`docs/adr/0003-chat-agent-loop.md`):
+the model reads the question and the conversation, calls read-only tools to look at the real
+data, asks the user a clarifying question when it's genuinely stuck between readings, and
+answers in the Daylens voice. There is no keyword router, no regex follow-up classifier, and
+no separate phrasing pass — the history the loop carries *is* the follow-up context, which is
+why "break that hour into 10-minute increments" works: the hour is right there in the
+conversation, and the tools can be called again at finer grain.
 
-Every answer is built in three steps, always in this order.
+The previous design (ADR 0002's plan → resolve → phrase, and the deterministic router that
+fronted it) was retired for chat because it could not scale past the questions someone had
+already predicted. An older tool-loop failed before it — by begging the user for tool output —
+but that loop had a thin tool surface and no grounding contract. This one is built on the
+opposite premises:
 
-**Step 1 — plan.** A question comes in. A planner maps it to **one or more resolver calls**
-from a fixed, typed set (below) — picking which resolvers and filling their parameters
-(which period, which app, which kind of thing). The common shapes ("what did I do today,"
-"how long in X last week") route deterministically. For the long tail, the planner may use a
-**single constrained model call** that *only emits a structured query* against the resolver
-schema. The planner **never executes anything, never loops, never fetches** — it just
-decides what to ask for.
+**The grounding contract.**
 
-**Step 2 — resolve.** The app runs the chosen resolvers against the **same store the
-Timeline and Apps views read** — blocks, threads, times, history. This step is fully
-deterministic. It either finds data or it doesn't, and it knows which. The resolvers are the
-*only* way the AI tab touches data.
+1. **Tools return real rows or an explicit miss.** Every Daylens tool answers from the same
+   store the Timeline and Apps read, and returns either data or `{ found: false, reason }`.
+   The model is never left to decide whether data exists — the tool tells it.
+2. **The tool trace is the evidence.** Every turn records which tools ran and what they
+   returned, stored with the message. Every claim in an answer traces to something a tool
+   returned — a visit, a session, a block, a commit, a file. Judgment on top of evidence is
+   fine ("this YouTube video is a podcast"); a fact with no evidence is a defect.
+3. **Answers are verified before they ship.** Clock times, dates, and durations in the final
+   text are checked against the turn's tool results. A violation triggers one retry with the
+   problem named; if it fails again, the honest miss ships, never the fabrication.
+4. **Read-only.** No tool writes, edits, or deletes anything — not files, not the DB, not
+   git. In-app mutations (rename a block, merge, focus sessions, memory) stay outside the
+   loop as the existing confirm-gated action widgets.
+5. **Bounded.** Steps and output tokens are capped per turn. Cancel aborts the loop and all
+   in-flight tools.
 
-**Step 3 — phrase.** The resolved facts are handed to the model with the question, and the
-model writes the answer in the Daylens voice using the right format. The model is given
-**only** the facts the resolvers returned. It does not decide what's true; it narrates what
-it was handed.
+### 4.1 The tool surface (the app owns these)
 
-The difference from a tool-loop is the whole point: the model may **select and parameterize**
-resolvers (step 1) and **phrase** their output (step 3), but it never **executes** them,
-never loops on them, and never decides whether data exists. The data is on the table before
-the phrasing model is ever called.
+Daylens data first — these wrap the same query layer the Timeline and Apps views read, so
+the views cannot disagree:
 
-### 4.1 The resolver set (the app owns these, not the model)
+- **get_day_overview(date)** / period totals — blocks, threads, totals.
+- **get_moment(date, time)** — what was actually on screen at that minute: the covering
+  block plus the specific page/app active at the asked clock time, not the whole block's
+  evidence.
+- **get_visits(range, filters)** — website visits with titles, URLs, and observed durations.
+- **search_history(query, range)** — fuzzy recall over pages, titles, blocks ("that
+  drowning video").
+- **get_app_usage(range, app?)** — per-app time, the Apps-view numbers.
 
-A small, fixed, typed set of data functions. This is the same capability the nine tools have
-today, but executed by the app, not orchestrated by the model:
+The world beyond the store, still read-only:
 
-- **getDay(date)** / **getRange(from, to)** — blocks, threads, totals for a period.
-- **getApp(appOrBundle, period)** — one app's story (the Apps-view resolver).
-- **getBlockAtTime(date, time)** — the block covering a moment.
-- **recall(query, period)** — link/artifact/page search over history (section 8.1).
-- **getAttribution(period)** — work grouped by client/project/thread (section 8.2).
-- **listClients()** — the client/project roster.
+- **read_file / list_dir** — files on the machine, read only.
+- **git** — allowlisted read subcommands (log, show, diff) for "what did I ship."
+- **MCP** — tools from MCP servers the user has configured; the standard interface for
+  "whatever's installed on this laptop," never a parallel plugin system.
+- **ask_user(question, options)** — one clarifying question with tappable options and a
+  free-text escape, only when the evidence genuinely underdetermines the answer.
+- **create_artifact(format, content)** — a real downloadable file (CSV, Excel, Markdown)
+  when the user asks for an export or report.
 
-New question types are served by **adding a resolver**, never by loosening the model. The set
-is declared in one place with types, so the resolver the AI reads is the same one the
-Timeline and Apps views read — they cannot drift.
+New capabilities are served by **adding a tool**, never by loosening the prompt. Tool
+implementations live in one place and are shared with the MCP server.
 
-### 4.2 The long tail — when nothing maps
+### 4.2 The long tail — when no tool fits
 
-If the planner can't map a question to any resolver — a greeting, a how-are-you, an aside,
-general chat — the AI still answers with a **real model call**, in character: warm, brief,
-and human. It is *never* a hardcoded line and *never* a recited menu of capabilities (§5).
-It does **not** fall back to free-form tool calling, it does **not** guess about the day,
-and it does **not** ask the user to paste data. "Hey — good to see you. Ask me anything
-about your day whenever you're ready" is a real answer; a static capability dump, and
-begging, are not. When it fits, the reply can name the nearest thing it *can* answer, but it
-says it like a person, not a form.
+A greeting, a how-are-you, an aside: the agent answers in character — warm, brief, human —
+without calling tools it doesn't need. It never recites a capability menu, never guesses
+about the day, never asks the user to paste data. When the question is about the day but the
+tools come back empty, the answer says so plainly (section 7).
 
 Rules that fall out of this:
 
-- **The AI never claims data that the resolvers didn't return.** If they found three blocks,
-  the answer describes three blocks — no invented fourth.
-- **The AI never says "I don't have the tool results."** It is always handed the results. If
-  there are none, the resolver says so and the answer reflects that honestly (section 7).
-- **Every number matches the Timeline.** The resolvers read the same blocks, so a total in
-  the AI tab equals the same total on the Timeline. They can't disagree.
+- **The AI never claims data the tools didn't return.** Three blocks found means three
+  blocks described — no invented fourth.
+- **The AI never begs.** The tools always answer, with data or an explicit miss, and the
+  answer reflects which honestly.
+- **Every number matches the Timeline.** Same store, same query layer — they can't disagree.
+
+### 4.3 Bench parity — the terminal is the UI
+
+The chat entrypoint is one function; the IPC handler and the terminal bench
+(`npm run moment:bench`) both call it with real provider settings. A bench answer **is** the
+answer the UI would stream for the same question on the same data — same code path, same
+model, same tools. The bench covers the hard families (moments, increments, recall, podcasts,
+exports, shipped-this-month) against the live DB and is the acceptance gate for this spec.
 
 ## 5. The no-credits rule
 
@@ -310,11 +323,11 @@ behavior above), the implementing agent gets reference screenshots from Tonny fi
 
 ## 11. Invariants (rules this view must always obey)
 
-1. The app resolves the real data first; the AI only phrases facts it was handed. The model
-   may select and parameterize resolvers and phrase their output, but it never executes a
-   resolver, never loops on tools, and never decides whether data exists. There is no
-   agentic tool-loop.
-2. The AI never claims a number, block, app, page, or time the resolver didn't return.
+1. Chat is one agent loop over read-only, real-data tools (ADR 0003). Tools return real
+   rows or an explicit miss; the model never invents rows and never decides unaided whether
+   data exists. There is no keyword router in front of it.
+2. The AI never claims a number, block, app, page, or time its tools didn't return, and
+   answers are verified against the turn's tool results before they ship.
 3. Every response passes through a real API call. No fallbacks, no static text, no hardcoded
    summaries — anywhere the AI speaks, including recaps and wraps.
 4. With no provider connected or no credits, the tab shows one message pointing to Settings

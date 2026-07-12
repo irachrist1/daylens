@@ -13,10 +13,15 @@
 type Listener = () => void
 
 const snapshots = new Map<string, string>()
+const statuses = new Map<string, string>()
 const listeners = new Map<string, Set<Listener>>()
 
-export function setStreamingSnapshot(messageId: string, snapshot: string): void {
+export function setStreamingSnapshot(messageId: string, snapshot: string, status?: string): void {
   snapshots.set(messageId, snapshot)
+  // A tool-status line ("Searching for…") rides the same event stream (ADR
+  // 0003). Text arriving clears the status — the answer replaces the activity.
+  if (status !== undefined) statuses.set(messageId, status)
+  else if (snapshot) statuses.delete(messageId)
   const subs = listeners.get(messageId)
   if (subs) for (const fn of subs) fn()
 }
@@ -25,8 +30,13 @@ export function getStreamingSnapshot(messageId: string): string {
   return snapshots.get(messageId) ?? ''
 }
 
+export function getStreamingStatus(messageId: string): string {
+  return statuses.get(messageId) ?? ''
+}
+
 export function clearStreamingSnapshot(messageId: string): void {
   snapshots.delete(messageId)
+  statuses.delete(messageId)
   // Leave listeners in place; the unsubscribe path will drop the set when
   // the component unmounts. Clearing here would orphan a still-mounted
   // <StreamingMessage> waiting for a final flush.

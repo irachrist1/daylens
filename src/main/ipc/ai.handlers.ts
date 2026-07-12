@@ -1,4 +1,6 @@
 import { ipcMain } from 'electron'
+import { randomUUID } from 'node:crypto'
+import type { AIAgentQuestionEvent } from '@shared/types'
 import { cancelAIRequest } from '../lib/aiCancellation'
 import { getThreadMessagesPage, updateAIMessageFeedback, writeAIBlockLabel } from '../db/queries'
 import { getDb } from '../services/database'
@@ -54,13 +56,47 @@ function toThreadSummary(row: ReturnType<typeof listThreadsLite>[number]): AIThr
   }
 }
 
+// The agent's clarifying questions (ADR 0003): the ask_user tool pauses the
+// loop on a promise; the renderer shows the question card and answers over
+// AGENT_ANSWER, which resolves it. A timeout resolves with a no-answer note so
+// an unanswered question can never hang a turn forever.
+const pendingAgentQuestions = new Map<string, (answer: string) => void>()
+const AGENT_QUESTION_TIMEOUT_MS = 5 * 60 * 1000
+
 export function registerAIHandlers(): void {
   ipcMain.handle(IPC.AI.SEND_MESSAGE, async (event, payload: AIChatSendRequest) => {
     return sendMessage(payload, {
       onStreamEvent: (streamEvent) => {
         event.sender.send(IPC.AI.STREAM_EVENT, streamEvent)
       },
+      onAgentQuestion: (question) => new Promise<string>((resolve) => {
+        const questionId = randomUUID()
+        const timeout = setTimeout(() => {
+          pendingAgentQuestions.delete(questionId)
+          resolve('(No answer arrived — pick the most defensible reading, answer it, and say in one clause what you assumed.)')
+        }, AGENT_QUESTION_TIMEOUT_MS)
+        pendingAgentQuestions.set(questionId, (answer) => {
+          clearTimeout(timeout)
+          pendingAgentQuestions.delete(questionId)
+          resolve(answer)
+        })
+        const questionEvent: AIAgentQuestionEvent = {
+          questionId,
+          requestId: payload.clientRequestId ?? null,
+          question: question.question,
+          options: question.options,
+          allowFreeText: question.allowFreeText,
+        }
+        event.sender.send(IPC.AI.AGENT_QUESTION, questionEvent)
+      }),
     })
+  })
+
+  ipcMain.handle(IPC.AI.AGENT_ANSWER, (_e, payload: { questionId: string; answer: string }): boolean => {
+    const resolver = pendingAgentQuestions.get(payload.questionId)
+    if (!resolver) return false
+    resolver(payload.answer)
+    return true
   })
 
   // Real cancel (W1-C): abort the in-flight provider request for this turn.

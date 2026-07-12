@@ -326,9 +326,9 @@ function MessageListImpl({
                   {(message.artifacts?.length ?? 0) > 0 && (
                     <div style={{ display: 'grid', gap: 10, marginTop: 14 }}>
                       {message.artifacts?.map((artifact) => {
-                        const color = artifact.format === 'csv' ? '#16a34a' : artifact.format === 'html' ? '#7c3aed' : artifact.format === 'json' ? '#f59e0b' : artifact.format === 'docx' ? '#1d4ed8' : artifact.format === 'pdf' ? '#b91c1c' : '#2563eb'
+                        const color = artifact.format === 'csv' ? '#16a34a' : artifact.format === 'xlsx' ? '#15803d' : artifact.format === 'html' ? '#7c3aed' : artifact.format === 'json' ? '#f59e0b' : artifact.format === 'docx' ? '#1d4ed8' : artifact.format === 'pdf' ? '#b91c1c' : '#2563eb'
                         const kind = artifact.format === 'csv' ? 'csv' : artifact.format === 'html' ? 'html_chart' : 'markdown'
-                        const formatLabel = artifact.format === 'docx' ? 'Word' : artifact.format === 'markdown' ? 'Markdown' : artifact.format.toUpperCase()
+                        const formatLabel = artifact.format === 'docx' ? 'Word' : artifact.format === 'xlsx' ? 'Excel' : artifact.format === 'markdown' ? 'Markdown' : artifact.format.toUpperCase()
                         return (
                           <button
                             key={`${message.id}:${artifact.id}`}

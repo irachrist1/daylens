@@ -16,6 +16,7 @@ import { consumePendingChatSeed } from '../../lib/aiSeed'
 import { AICompose, type AIComposeHandle } from './AICompose'
 import { ConversationSidebar } from './ConversationSidebar'
 import { MessageList } from './MessageList'
+import { AgentQuestionCard } from './AgentQuestionCard'
 import { ModelSelector } from './ModelSelector'
 import { ThreadSettingsPanel } from './ThreadSettingsPanel'
 import { IconChevronDown, IconNewChat, IconSidebar, IconSparkle } from './icons'
@@ -60,6 +61,7 @@ export default function AIWorkspace() {
     messageActionState,
     actionWidgetState,
     reducedMotion,
+    agentQuestion,
     latestCompletedAssistantId,
     initialLoading,
     loadError,
@@ -83,6 +85,8 @@ export default function AIWorkspace() {
     switchProviderAndRetry,
     alternateProviders,
     transformAnswer,
+    answerAgentQuestion,
+    dismissAgentQuestion,
     providerAvailability,
     analyticsContext,
   } = chat
@@ -580,6 +584,13 @@ export default function AIWorkspace() {
                 loadingEarlier={loadingEarlier}
                 onLoadEarlier={onLoadEarlier}
               />
+              {agentQuestion && (
+                <AgentQuestionCard
+                  question={agentQuestion}
+                  onAnswer={(answer) => void answerAgentQuestion(answer)}
+                  onDismiss={dismissAgentQuestion}
+                />
+              )}
               <div ref={bottomRef} />
             </>
           ) : threadLoading ? (

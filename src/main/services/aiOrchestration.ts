@@ -430,7 +430,10 @@ function redactAIText(input: string, settings: AppSettings): string {
   return output
 }
 
-async function resolveProviderConfigsForJob(
+// Exported for the chat agent lane (ADR 0003), which resolves its provider the
+// same way every text job does — Settings choice, thread override, managed
+// fallback — but runs the AI SDK loop instead of a single text call.
+export async function resolveProviderConfigsForJob(
   jobType: AIJobType,
   settings: AppSettings,
   preferredProviderOverride?: AIProviderMode | null,
@@ -737,4 +740,72 @@ export async function executeTextAIJob(
   })
 
   throw friendlyError
+}
+
+// Usage accounting for a chat agent turn (ADR 0003). The agent lane makes its
+// provider calls through the AI SDK, not executeTextAIJob, so it reports its
+// summed per-turn usage here — one ai_usage_events row + the same analytics
+// pair every other AI call emits, so Usage and cost tracking never miss chat.
+export function recordChatAgentUsage(input: {
+  config: ResolvedProviderConfig
+  usage: AIProviderUsage | null
+  startedAt: number
+  success: boolean
+  failureReason?: string | null
+}): void {
+  const eventId = randomUUID()
+  const completedAt = Date.now()
+  const latencyMs = completedAt - input.startedAt
+  startAIUsageEvent(getDb(), {
+    id: eventId,
+    jobType: 'chat_answer',
+    screen: 'ai_chat',
+    triggerSource: 'user',
+    provider: input.config.provider,
+    model: input.config.model,
+    startedAt: input.startedAt,
+  })
+  finishAIUsageEvent(getDb(), {
+    id: eventId,
+    provider: input.config.provider,
+    model: input.config.model,
+    success: input.success,
+    failureReason: input.success ? undefined : (input.failureReason ?? 'agent turn failed'),
+    completedAt,
+    latencyMs,
+    inputTokens: input.usage?.inputTokens ?? null,
+    outputTokens: input.usage?.outputTokens ?? null,
+    cacheReadTokens: input.usage?.cacheReadTokens ?? null,
+    cacheWriteTokens: input.usage?.cacheWriteTokens ?? null,
+    cacheHit: Boolean((input.usage?.cacheReadTokens ?? 0) > 0),
+    costUsd: input.usage?.costUsd ?? null,
+    billingMode: input.config.billingMode ?? 'own_key',
+  })
+  capture(input.success ? ANALYTICS_EVENT.AI_JOB_COMPLETED : ANALYTICS_EVENT.AI_JOB_FAILED, {
+    job_type: 'chat_answer',
+    screen: 'ai_chat',
+    provider: input.config.provider,
+    model: input.config.model,
+    trigger_source: 'user',
+    latency_ms: latencyMs,
+    input_tokens: input.usage?.inputTokens ?? null,
+    output_tokens: input.usage?.outputTokens ?? null,
+    cache_hit: Boolean((input.usage?.cacheReadTokens ?? 0) > 0),
+    cache_policy: 'off',
+  })
+  captureAIGeneration({
+    traceId: eventId,
+    jobType: 'chat_answer',
+    provider: input.config.provider,
+    model: input.config.model,
+    latencyMs,
+    inputTokens: input.usage?.inputTokens ?? null,
+    outputTokens: input.usage?.outputTokens ?? null,
+    cacheReadTokens: input.usage?.cacheReadTokens ?? null,
+    cacheWriteTokens: input.usage?.cacheWriteTokens ?? null,
+    daylensCostUsd: input.usage?.costUsd
+      ?? estimateUsageCostUsd(input.config.model, input.usage?.inputTokens, input.usage?.outputTokens, input.usage?.cacheReadTokens, input.usage?.cacheWriteTokens),
+    daylensCostSource: input.usage?.costUsd != null ? 'provider' : 'estimated',
+    isError: !input.success,
+  })
 }

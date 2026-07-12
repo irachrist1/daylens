@@ -36,7 +36,10 @@ export function withProviderCallCount<T>(fn: (getCount: () => number) => Promise
   return callCounterStore.run(counter, () => fn(() => counter.count))
 }
 
-function recordProviderCall(): void {
+// Exported for the chat agent loop (ADR 0003), which makes its provider calls
+// through the AI SDK rather than withProviderRateLimit and must still count
+// per-turn calls for the R1 instrumentation.
+export function recordProviderCall(): void {
   const counter = callCounterStore.getStore()
   if (counter) {
     counter.count += 1

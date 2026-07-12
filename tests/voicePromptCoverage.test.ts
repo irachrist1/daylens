@@ -20,8 +20,8 @@ const REPO_ROOT = path.resolve(HERE, '..')
 // adding a file here is a deliberate gesture that says "this is a chat-facing
 // prompt site and must honour the voice contract."
 const PROMPT_SITES: Array<{ path: string; label: string }> = [
-  { path: 'src/main/jobs/aiService.ts', label: 'aiService (chat_answer, day_summary, week_review, app_narrative, reports, block_insight, suggest_category, weekly_brief)' },
-  { path: 'src/main/ai/converse.ts', label: 'converse (greetings, check-ins, no-resolver chat)' },
+  { path: 'src/main/jobs/aiService.ts', label: 'aiService (day_summary, week_review, app_narrative, reports, block_insight, suggest_category, weekly_brief)' },
+  { path: 'src/main/agent/systemPrompt.ts', label: 'agent systemPrompt (chat agent loop, ADR 0003)' },
   { path: 'src/main/lib/wrappedNarrative.ts', label: 'wrappedNarrative (daily Wrapped)' },
   { path: 'src/main/lib/wrappedPeriodNarrative.ts', label: 'wrappedPeriodNarrative (weekly/monthly Wrapped)' },
 ]

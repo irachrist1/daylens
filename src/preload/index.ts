@@ -7,6 +7,7 @@ import type {
   AppUsageSummary,
   AIChatSendRequest,
   AIChatStreamEvent,
+  AIAgentQuestionEvent,
   AIActionWidget,
   AIActionUndo,
   AIActionCommitResult,
@@ -227,6 +228,13 @@ const api = {
       ipcRenderer.on(IPC.AI.STREAM_EVENT, handler)
       return () => { ipcRenderer.removeListener(IPC.AI.STREAM_EVENT, handler) }
     },
+    onAgentQuestion: (callback: (event: AIAgentQuestionEvent) => void): (() => void) => {
+      const handler = (_e: Electron.IpcRendererEvent, event: AIAgentQuestionEvent) => callback(event)
+      ipcRenderer.on(IPC.AI.AGENT_QUESTION, handler)
+      return () => { ipcRenderer.removeListener(IPC.AI.AGENT_QUESTION, handler) }
+    },
+    answerAgentQuestion: (payload: { questionId: string; answer: string }): Promise<boolean> =>
+      ipcRenderer.invoke(IPC.AI.AGENT_ANSWER, payload),
     setMessageFeedback: (payload: AIMessageFeedbackUpdate): Promise<AIThreadMessage | null> =>
       ipcRenderer.invoke(IPC.AI.SET_MESSAGE_FEEDBACK, payload),
     commitAction: (action: AIActionWidget): Promise<AIActionCommitResult> =>

@@ -1,6 +1,8 @@
 # ADR 0002 — How the AI gets data: plan → resolve → phrase
 
-**Status:** Accepted · **Date:** 2026-06-20
+**Status:** Superseded by [ADR 0003](0003-chat-agent-loop.md) for the **chat** surface
+(2026-07-12). Still accepted for block labeling, wraps, briefs, and recaps. ·
+**Date:** 2026-06-20
 
 ## Context
 

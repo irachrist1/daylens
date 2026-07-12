@@ -642,7 +642,7 @@ export type AIActionUndo =
   | { kind: 'forget_memory_fact'; factId: string }
 
 type AIMessageArtifactKind = 'report' | 'table' | 'chart' | 'export'
-type AIMessageArtifactFormat = 'markdown' | 'csv' | 'html' | 'json' | 'pdf' | 'docx'
+type AIMessageArtifactFormat = 'markdown' | 'csv' | 'html' | 'json' | 'pdf' | 'docx' | 'xlsx'
 
 export interface AIMessageArtifact {
   id: string
@@ -671,9 +671,22 @@ export interface AIChatStreamEvent {
   requestId: string
   delta: string
   snapshot: string
+  /** Short human status line while the agent works ("Searching for…"). */
+  status?: string
+}
+
+/** The agent's one clarifying question (ADR 0003), pushed to the renderer. */
+export interface AIAgentQuestionEvent {
+  questionId: string
+  requestId: string | null
+  question: string
+  options: string[]
+  allowFreeText: boolean
 }
 
 export interface AIThreadMessageMetadata {
+  /** Agent-turn evidence (ADR 0003): which tools ran and what they returned. */
+  agent?: { toolTrace: Array<{ tool: string; input: unknown; output: string }>; stepCount: number; groundingRetried: boolean }
   answerKind?: AIAnswerKind | null
   suggestedFollowUps?: FollowUpSuggestion[]
   retryable?: boolean
@@ -701,6 +714,8 @@ export interface AIThreadMessage {
   actions?: AIMessageAction[]
   actionWidgets?: AIActionWidget[]
   artifacts?: AIMessageArtifact[]
+  /** Agent-turn evidence (ADR 0003), mirrored from metadata so every caller (UI, bench) reads one shape. */
+  agent?: AIThreadMessageMetadata['agent']
   rating?: AIMessageRating | null
   ratingUpdatedAt?: number | null
 }
@@ -1620,6 +1635,9 @@ export interface SyncStatus {
 }
 
 export interface AppSettings {
+  /** MCP servers the chat agent may connect to (ADR 0003). Same shape as
+   *  Claude Desktop entries; edited in settings JSON for now. */
+  mcpServers?: Array<{ name: string; command: string; args?: string[]; env?: Record<string, string> }>
   // Provider API keys are stored in OS keychain via keytar (never in plain-text)
   // Anonymous analytics is always on (2026-07-07); the only kill switch is
   // building without a PostHog key.
@@ -2127,6 +2145,8 @@ export const IPC = {
     SEND_MESSAGE: 'ai:send-message',
     CANCEL_MESSAGE: 'ai:cancel-message',
     STREAM_EVENT: 'ai:stream-event',
+    AGENT_QUESTION: 'ai:agent-question',
+    AGENT_ANSWER: 'ai:agent-answer',
     GET_STARTER_SUGGESTIONS: 'ai:get-starter-suggestions',
     COMMIT_ACTION: 'ai:commit-action',
     UNDO_ACTION: 'ai:undo-action',

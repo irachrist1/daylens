@@ -13,9 +13,7 @@ import {
   getAISurfaceSummary,
   getAISurfaceSummarySignature,
   getConversationMessages,
-  getConversationState,
   getOrCreateConversation,
-  getThreadConversationState,
   getThreadMessages,
   getActiveFocusSession,
   getDistractionCountForSession,
@@ -24,8 +22,6 @@ import {
   upsertConversationState,
   upsertWorkContextInsight,
 } from '../db/queries'
-import { routeInsightsQuestion, shouldUseRouter, type EntityContext, type TemporalContext } from '../lib/insightsQueryRouter'
-import { resolveFollowUp } from '../lib/followUpResolver'
 import {
   buildDeterministicFollowUpCandidates,
   buildFollowUpSuggestionPrompts,
@@ -36,30 +32,14 @@ import {
   parseFollowUpSuggestions,
   parseStarterSuggestions,
 } from '../lib/followUpSuggestions'
-import { transformInstruction, transformLabel } from '@shared/answerTransforms'
+import { transformInstruction } from '@shared/answerTransforms'
 import { looksLikeRawArtifactLabel } from '@shared/blockLabel'
 import { partitionDomainsWorkFirst } from '@shared/workKind'
 import { appNarrativeScopeKey, THIN_APP_NARRATIVE_SUMMARY } from '@shared/appNarrativeContract'
 import { userProfileDirective } from '@shared/userProfile'
 import { parseDaySummaryResultText } from '../lib/daySummarySuggestions'
 import {
-  parseGeneratedReportResult,
-  type GeneratedReportContent,
-} from '../lib/dayReportFallback'
-import {
-  detectRequestedFormats,
-  formatDisplayName,
-  looksLikeBareFormatRequest,
-  type ReportExportFormat,
-} from '../lib/reportFormats'
-import {
-  findClientByName,
-  findProjectByName,
-  listClients,
-  listProjects,
-  resolveClientQuery,
   resolveDayContext,
-  resolveProjectQuery,
 } from '../core/query/attributionResolvers'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { deriveTitleFromMessage, isWeakThreadTitle, type ThreadTitleContext } from '../lib/threadTitles'
@@ -77,8 +57,6 @@ import {
   renameThread,
   touchThreadLastMessage,
 } from '../services/artifacts'
-import { capture } from '../services/analytics'
-import { ANALYTICS_EVENT } from '@shared/analytics'
 import { getApiKey, getSettings } from '../services/settings'
 import { getCurrentSession } from '../services/tracking'
 import type {
@@ -90,20 +68,15 @@ import type {
   AIMessageAction,
   AIActionWidget,
   AIAnswerKind,
-  AIAnswerTransformKind,
   AIInvocationSource,
   AIChatTurnResult,
-  AIConversationDateRange,
   AIConversationSourceKind,
   AIConversationState,
   AIDailyReportPreparationResult,
-  AIEntityStateSnapshot,
-  AIRoutingContextSnapshot,
   AIDaySummaryResult,
   AISurfaceSummary,
   AIThreadMessage,
   AIThreadMessageMetadata,
-  AIWeeklyBriefStateSnapshot,
   AppCategorySuggestion,
   DayTimelinePayload,
   FollowUpSuggestion,
@@ -118,48 +91,35 @@ import { blockActiveSeconds } from '@shared/blockDuration'
 import { isTrustedTimelineBlock } from '@shared/timelineReview'
 import {
   executeTextAIJob,
-  modelForProvider,
   providerLabel,
   type AITextJobExecutionOptions,
   type ProviderTextResponse,
   type ResolvedProviderConfig,
 } from '../services/aiOrchestration'
+import { resolveProviderConfigsForJob, recordChatAgentUsage } from '../services/aiOrchestration'
 import { withProviderCallCount, withProviderRateLimit } from '../services/aiRateLimiter'
 import { friendlyProviderError } from '../services/providerErrors'
 import { buildAnthropicPromptInput } from '../services/anthropicPromptCaching'
-import { planQuestion } from '../ai/planner'
-import { phraseAnswer } from '../ai/phrase'
-import { runResolverQueries } from '../ai/resolvers'
 import {
   fallbackNarrativeForBlock,
   getTimelineDayPayload,
   userVisibleLabelForBlock,
 } from '../services/workBlocks'
 import { getAppDetailPayload } from '../services/appDetail'
-import {
-  buildWeeklyBriefEvidencePack,
-  buildWeeklyBriefScaffold,
-  type WeeklyBriefContext,
-  type WeeklyBriefEvidencePack,
-} from '../lib/weeklyBrief'
 import { buildCLIProcessPayload, buildCLIProcessSpec } from '../services/cliLaunch'
 import { historyWithUserTurn, toChatCompletionMessages, toGoogleHistory } from '../lib/providerChatMessages'
-import {
-  buildBarChartHtml,
-  buildCsvContent,
-  buildReportArtifact,
-  renderReportPdf,
-  writeGeneratedArtifacts,
-  type ReportArtifactSpec,
-} from './reportArtifacts'
 import { inferWorkIntent } from '../../shared/workIntent'
 import { registerWrappedNarrativeProvider } from '../services/wrappedNarrative'
 import { registerWrappedPeriodNarrativeProvider } from '../services/wrappedPeriodNarrative'
 import { registerWrappedQuestionProvider } from '../services/wrappedQuestion'
 import { VOICE_SYSTEM_PROMPT, findBannedVocab } from '../ai/voiceContract'
 import { parseDayRegroupGroups } from '../ai/dayRegroup'
-import { converse, looksLikeGreeting } from '../ai/converse'
-import { getCurrentTrace, maybeStartTrace, setCurrentTrace } from '../ai/trace'
+import { maybeStartTrace, setCurrentTrace } from '../ai/trace'
+import { runChatAgentTurn } from '../agent/chatAgent'
+import { providerSupportsAgentTools } from '../agent/providerModel'
+import type { AgentQuestion } from '../agent/interactionTools'
+import { getAmbientAbortSignal } from '../lib/aiCancellation'
+import { app } from 'electron'
 
 const GOOGLE_CLIENT_HEADER = 'daylens-windows/1.0.0'
 // Block labeling now runs on the user's chosen model (e.g. Sonnet), not a fixed
@@ -173,8 +133,12 @@ interface AnswerEnvelope {
   assistantText: string
   answerKind: AIAnswerKind
   sourceKind: AIConversationSourceKind
-  resolvedTemporalContext: TemporalContext | null
   conversationState: AIConversationState | null
+  agent?: {
+    toolTrace: Array<{ tool: string; input: unknown; output: string }>
+    stepCount: number
+    groundingRetried: boolean
+  }
   suggestedFollowUps: FollowUpSuggestion[]
   actions?: AIMessageAction[]
   actionWidgets?: AIActionWidget[]
@@ -183,12 +147,15 @@ interface AnswerEnvelope {
 
 interface SendMessageOptions {
   onStreamEvent?: (event: AIChatStreamEvent) => void
+  /** Resolves the agent's one clarifying question (ADR 0003). The IPC handler
+   *  wires this to the renderer's question card; the bench scripts it. When
+   *  absent the agent is told to answer with its most defensible reading. */
+  onAgentQuestion?: (question: AgentQuestion) => Promise<string>
   /** When set and DAYLENS_AI_TRACE_DIR is configured, the trace file is
    *  written as <scenarioId>.json so the behavioural harness can match it. */
   traceScenarioId?: string | null
 }
 
-type RequestedOutputKind = 'report' | 'table' | 'chart' | 'export'
 
 interface ReportContextBundle {
   title: string
@@ -204,10 +171,6 @@ interface ReportContextBundle {
   // card response is a brief deterministic summary of the same numbers.
   renderDeterministic?: () => { reportMarkdown: string; assistantResponse: string }
 }
-
-type DirectReportEntity =
-  | { entityType: 'client'; id: string; name: string }
-  | { entityType: 'project'; id: string; name: string }
 
 type CLITool = 'claude' | 'chatgpt' | 'gemini' | 'codex'
 
@@ -240,8 +203,6 @@ class CLIProviderError extends Error {
 }
 
 const CLI_TIMEOUT_MS = 180_000
-const conversationTemporalContext = new Map<string, TemporalContext | null>()
-const weeklyBriefCache = new Map<string, WeeklyBriefEvidencePack>()
 const daySummaryCache = new Map<string, AIDaySummaryResult>()
 const cliToolCache: Partial<Record<CLITool, Promise<ResolvedCLITool | null>>> = {}
 const STREAM_CHUNK_DELAY_MS = 12
@@ -400,7 +361,7 @@ function buildFocusReviewNote(session: FocusSession, distractionCount: number): 
 // so the normal answer path runs untouched.
 async function maybeHandleMemoryInstruction(
   message: string,
-  runner: Parameters<typeof planQuestion>[1],
+  runner: typeof sendWithProvider,
   prior: ConversationMessage[],
 ): Promise<AnswerEnvelope | null> {
   if (!looksLikeMemoryInstruction(message)) return null
@@ -439,7 +400,6 @@ async function maybeHandleMemoryInstruction(
     assistantText,
     answerKind: 'freeform_chat',
     sourceKind: 'freeform',
-    resolvedTemporalContext: null,
     conversationState: null,
     suggestedFollowUps: [],
     actionWidgets: [proposal],
@@ -457,7 +417,6 @@ function maybeHandleRenameInstruction(message: string, contextDate: string | nul
     assistantText: "Here's the rename — confirm and it sticks across your timeline.",
     answerKind: 'deterministic_stats',
     sourceKind: 'deterministic',
-    resolvedTemporalContext: null,
     conversationState: null,
     suggestedFollowUps: [],
     actionWidgets: [proposal],
@@ -475,7 +434,6 @@ function maybeHandleMergeInstruction(message: string, contextDate: string | null
     assistantText: "Here's the merge — confirm and these two become one block on your timeline.",
     answerKind: 'deterministic_stats',
     sourceKind: 'deterministic',
-    resolvedTemporalContext: null,
     conversationState: null,
     suggestedFollowUps: [],
     actionWidgets: [proposal],
@@ -493,7 +451,6 @@ function maybeHandleFocusIntent(message: string): AnswerEnvelope | null {
         assistantText: `A focus session is already running${activeFocusSession.label ? ` for ${activeFocusSession.label}` : ''}. Stop that one first if you want to start a fresh session.`,
         answerKind: 'deterministic_stats',
         sourceKind: 'deterministic',
-        resolvedTemporalContext: null,
         conversationState: null,
         suggestedFollowUps: [],
         actions: [
@@ -517,7 +474,6 @@ function maybeHandleFocusIntent(message: string): AnswerEnvelope | null {
       assistantText: `I can start a focus session${label}${target}.${plannedApps} Use the button below when you want to begin.`,
       answerKind: 'deterministic_stats',
       sourceKind: 'deterministic',
-      resolvedTemporalContext: null,
       conversationState: null,
       suggestedFollowUps: [],
       actions: [
@@ -536,7 +492,6 @@ function maybeHandleFocusIntent(message: string): AnswerEnvelope | null {
         assistantText: 'There is no active focus session running right now, so there is nothing to stop.',
         answerKind: 'deterministic_stats',
         sourceKind: 'deterministic',
-        resolvedTemporalContext: null,
         conversationState: null,
         suggestedFollowUps: [],
       }
@@ -546,7 +501,6 @@ function maybeHandleFocusIntent(message: string): AnswerEnvelope | null {
       assistantText: `Your current focus session has been running for ${formatFocusDuration(focusSessionDurationSeconds(activeFocusSession))}${activeFocusSession.label ? ` on ${activeFocusSession.label}` : ''}. Use the button below when you want to stop it.`,
       answerKind: 'deterministic_stats',
       sourceKind: 'deterministic',
-      resolvedTemporalContext: null,
       conversationState: null,
       suggestedFollowUps: [],
       actions: [
@@ -565,7 +519,6 @@ function maybeHandleFocusIntent(message: string): AnswerEnvelope | null {
         assistantText: 'This focus session is still running. Stop it first, then you can save a reflection right here in the AI surface.',
         answerKind: 'deterministic_stats',
         sourceKind: 'deterministic',
-        resolvedTemporalContext: null,
         conversationState: null,
         suggestedFollowUps: [],
         actions: [
@@ -584,7 +537,6 @@ function maybeHandleFocusIntent(message: string): AnswerEnvelope | null {
         assistantText: 'There is no finished focus session to review yet. Start one from here whenever you are ready.',
         answerKind: 'deterministic_stats',
         sourceKind: 'deterministic',
-        resolvedTemporalContext: null,
         conversationState: null,
         suggestedFollowUps: [],
       }
@@ -595,7 +547,6 @@ function maybeHandleFocusIntent(message: string): AnswerEnvelope | null {
       assistantText: `Your most recent focus session lasted ${formatFocusDuration(recentCompleted.durationSeconds)}${recentCompleted.label ? ` on ${recentCompleted.label}` : ''}.${distractionCount > 0 ? ` Daylens noticed ${distractionCount} distraction alert${distractionCount === 1 ? '' : 's'} during it.` : ''} Add a short review below and Daylens will keep it with the session.`,
       answerKind: 'deterministic_stats',
       sourceKind: 'deterministic',
-      resolvedTemporalContext: null,
       conversationState: null,
       suggestedFollowUps: [],
       actions: [
@@ -613,187 +564,14 @@ function maybeHandleFocusIntent(message: string): AnswerEnvelope | null {
   return null
 }
 
-function toAIConversationDateRange(
-  range: { fromMs: number; toMs: number; label: string } | null | undefined,
-): AIConversationDateRange | null {
-  if (!range) return null
-  return {
-    fromMs: range.fromMs,
-    toMs: range.toMs,
-    label: range.label,
-  }
-}
 
-function serializeWeeklyBriefContext(weeklyBrief: WeeklyBriefContext | null): AIWeeklyBriefStateSnapshot | null {
-  if (!weeklyBrief) return null
-  return {
-    intent: weeklyBrief.intent,
-    responseMode: weeklyBrief.responseMode,
-    topic: weeklyBrief.topic,
-    dateRange: {
-      fromMs: weeklyBrief.dateRange.fromMs,
-      toMs: weeklyBrief.dateRange.toMs,
-      label: weeklyBrief.dateRange.label,
-    },
-    evidenceKey: weeklyBrief.evidenceKey,
-  }
-}
 
-function deserializeWeeklyBriefContext(snapshot: AIWeeklyBriefStateSnapshot | null): WeeklyBriefContext | null {
-  if (!snapshot) return null
-  return {
-    intent: snapshot.intent as WeeklyBriefContext['intent'],
-    responseMode: snapshot.responseMode as WeeklyBriefContext['responseMode'],
-    topic: snapshot.topic,
-    dateRange: {
-      fromMs: snapshot.dateRange.fromMs,
-      toMs: snapshot.dateRange.toMs,
-      label: snapshot.dateRange.label,
-      startDate: new Date(snapshot.dateRange.fromMs).toISOString().slice(0, 10),
-      endDate: new Date(snapshot.dateRange.toMs - 1).toISOString().slice(0, 10),
-    },
-    evidenceKey: snapshot.evidenceKey,
-  }
-}
 
-function serializeEntityContext(entity: TemporalContext['entity']): AIEntityStateSnapshot | null {
-  if (!entity) return null
-  return {
-    entityId: entity.entityId,
-    entityName: entity.entityName,
-    entityType: entity.entityType,
-    rangeStartMs: entity.rangeStartMs,
-    rangeEndMs: entity.rangeEndMs,
-    rangeLabel: entity.rangeLabel,
-    intent: entity.intent,
-  }
-}
 
-function deserializeEntityContext(snapshot: AIEntityStateSnapshot | null): EntityContext | null {
-  if (!snapshot) return null
-  return {
-    entityId: snapshot.entityId,
-    entityName: snapshot.entityName,
-    entityType: snapshot.entityType,
-    rangeStartMs: snapshot.rangeStartMs,
-    rangeEndMs: snapshot.rangeEndMs,
-    rangeLabel: snapshot.rangeLabel,
-    intent: snapshot.intent as EntityContext['intent'],
-  }
-}
 
-function serializeTemporalContext(context: TemporalContext | null): AIRoutingContextSnapshot | null {
-  if (!context) return null
-  return {
-    dateMs: context.date.getTime(),
-    timeWindowStartMs: context.timeWindow?.start.getTime() ?? null,
-    timeWindowEndMs: context.timeWindow?.end.getTime() ?? null,
-    weeklyBrief: serializeWeeklyBriefContext(context.weeklyBrief),
-    entity: serializeEntityContext(context.entity),
-  }
-}
 
-function deserializeTemporalContext(snapshot: AIRoutingContextSnapshot | null): TemporalContext | null {
-  if (!snapshot) return null
-  return {
-    date: new Date(snapshot.dateMs),
-    timeWindow: snapshot.timeWindowStartMs !== null && snapshot.timeWindowEndMs !== null
-      ? {
-        start: new Date(snapshot.timeWindowStartMs),
-        end: new Date(snapshot.timeWindowEndMs),
-      }
-      : null,
-    weeklyBrief: deserializeWeeklyBriefContext(snapshot.weeklyBrief),
-    entity: deserializeEntityContext(snapshot.entity),
-  }
-}
 
-function buildConversationState(
-  answerKind: AIAnswerKind,
-  sourceKind: AIConversationSourceKind,
-  resolvedTemporalContext: TemporalContext | null,
-  followUpAffordances: AIConversationState['followUpAffordances'],
-  extras?: {
-    topic?: string | null
-    responseMode?: string | null
-    lastIntent?: string | null
-    evidenceKey?: string | null
-    dateRange?: AIConversationDateRange | null
-  },
-): AIConversationState {
-  return {
-    dateRange: extras?.dateRange ?? toAIConversationDateRange(resolvedTemporalContext?.weeklyBrief?.dateRange ?? null),
-    topic: extras?.topic ?? resolvedTemporalContext?.weeklyBrief?.topic ?? null,
-    responseMode: extras?.responseMode ?? resolvedTemporalContext?.weeklyBrief?.responseMode ?? null,
-    lastIntent: extras?.lastIntent ?? resolvedTemporalContext?.weeklyBrief?.intent ?? null,
-    evidenceKey: extras?.evidenceKey ?? resolvedTemporalContext?.weeklyBrief?.evidenceKey ?? null,
-    answerKind,
-    sourceKind,
-    followUpAffordances,
-    routingContext: serializeTemporalContext(resolvedTemporalContext),
-  }
-}
 
-function inferDateRangeFromQuestion(
-  question: string,
-  fallback: AIConversationDateRange | null,
-): AIConversationDateRange | null {
-  const normalized = question.toLowerCase()
-  const now = new Date()
-  const isoDate = normalized.match(/\b(20\d{2}-\d{2}-\d{2})\b/)
-  if (isoDate?.[1]) {
-    const [year, month, day] = isoDate[1].split('-').map(Number)
-    const start = new Date(year, month - 1, day)
-    const end = new Date(start)
-    end.setDate(end.getDate() + 1)
-    return {
-      fromMs: start.getTime(),
-      toMs: end.getTime(),
-      label: isoDate[1],
-    }
-  }
-  // "weekly report", "weekly summary", "for the week" — scope to this week
-  // when the user names a weekly artifact without explicit "this/last week".
-  const mentionsWeek =
-    normalized.includes('this week')
-    || normalized.includes('last week')
-    || /\bweekly\b/.test(normalized)
-    || /\bfor the week\b/.test(normalized)
-    || /\bof the week\b/.test(normalized)
-  if (mentionsWeek) {
-    const endInclusive = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-    const start = new Date(endInclusive)
-    start.setDate(start.getDate() - 6)
-    const endExclusive = new Date(endInclusive)
-    endExclusive.setDate(endExclusive.getDate() + 1)
-    return {
-      fromMs: start.getTime(),
-      toMs: endExclusive.getTime(),
-      label: normalized.includes('last week') ? 'last week' : 'this week',
-    }
-  }
-  if (normalized.includes('yesterday')) {
-    const end = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-    const start = new Date(end)
-    start.setDate(start.getDate() - 1)
-    return {
-      fromMs: start.getTime(),
-      toMs: end.getTime(),
-      label: 'yesterday',
-    }
-  }
-  if (normalized.includes('today')) {
-    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-    const end = new Date(start)
-    end.setDate(end.getDate() + 1)
-    return {
-      fromMs: start.getTime(),
-      toMs: end.getTime(),
-      label: 'today',
-    }
-  }
-  return fallback
-}
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -1470,55 +1248,6 @@ function localDateKeyForMs(ms: number): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 }
 
-function detectRequestedOutputKinds(question: string): RequestedOutputKind[] {
-  const normalized = question.toLowerCase()
-
-  // Explicit negation: user wants in-chat display only, no artifact files.
-  if (
-    /\bnot\s+(?:a\s+)?(?:file|download|artifact)\b/.test(normalized)
-    || /\bno\s+(?:file|download|artifact)\b/.test(normalized)
-    || /\bwithout\s+(?:a\s+)?(?:file|download|saving)\b/.test(normalized)
-    || /\bin(?:\s+the)?\s+chat\s+only\b/.test(normalized)
-    || /\bdon'?t\s+(?:save|create|make|generate)\s+(?:a\s+)?(?:file|download|artifact)\b/.test(normalized)
-  ) {
-    return []
-  }
-
-  const kinds = new Set<RequestedOutputKind>()
-
-  if (
-    /\bcsv\b|\bspreadsheet\b|\bline items\b/.test(normalized)
-    || (/\btable\b/.test(normalized) && /\bexport\b|\bdownload\b|\bsave\b/.test(normalized))
-  ) {
-    kinds.add('table')
-  }
-  if (/\bchart\b|\bgraph\b|\bplot\b/.test(normalized)) {
-    kinds.add('chart')
-  }
-  if (
-    /\breport\b/.test(normalized)
-    || /short report i could share/.test(normalized)
-    || (/something i can send/.test(normalized) && /\breport\b|\bexport\b/.test(normalized))
-    || (/\bshareable\b/.test(normalized) && /\breport\b|\bexport\b/.test(normalized))
-  ) {
-    kinds.add('report')
-  }
-  if (/\bexport\b|\bdownload\b/.test(normalized)) {
-    kinds.add('export')
-  }
-
-  // Naming a document format ("a word doc of my week", "pdf of today") implies a
-  // report output even without the word "report".
-  if (detectRequestedFormats(question).length > 0) {
-    kinds.add('report')
-  }
-
-  if (kinds.has('export') && !kinds.has('report') && !kinds.has('table') && !kinds.has('chart')) {
-    kinds.add('report')
-  }
-
-  return [...kinds]
-}
 
 function parseSurfaceSummaryResult(
   raw: string,
@@ -1729,24 +1458,6 @@ function focusSentence(payload: DayTimelinePayload): string {
   return `Focus was more fragmented, with ${formatDuration(payload.focusSeconds)} counted as focused time (${payload.focusPct}%).`
 }
 
-function inferFollowUpAffordances(answerKind: AIAnswerKind): AIConversationState['followUpAffordances'] {
-  switch (answerKind) {
-    case 'weekly_brief':
-      return ['deepen', 'literalize', 'narrow', 'compare', 'switch_topic', 'repair']
-    case 'weekly_literal_list':
-      return ['narrow', 'expand', 'switch_topic', 'switch_timeframe', 'repair']
-    case 'deterministic_stats':
-      return ['deepen', 'expand', 'compare', 'repair']
-    case 'day_summary_style':
-    case 'generated_report':
-      return ['deepen', 'expand', 'narrow', 'repair']
-    case 'freeform_chat':
-      return ['deepen', 'expand', 'repair']
-    case 'error':
-    default:
-      return []
-  }
-}
 
 // Follow-up chips are fully deterministic and grounded in the answer's own
 // named entities. This is a deliberate three-in-one fix:
@@ -1881,32 +1592,8 @@ export async function getStarterSuggestions(): Promise<import('@shared/types').A
   }
 }
 
-function conversationContextKey(conversationId: number, threadId: number | null): string {
-  return threadId == null ? `conversation:${conversationId}` : `thread:${threadId}`
-}
 
-function restoreConversationState(conversationId: number): AIConversationState | null {
-  const db = getDb()
-  const persisted = getConversationState(db, conversationId)
-  if (!persisted) return null
-  const key = conversationContextKey(conversationId, null)
-  if (!conversationTemporalContext.has(key)) {
-    conversationTemporalContext.set(key, deserializeTemporalContext(persisted.routingContext))
-  }
-  return persisted
-}
 
-function restoreChatState(conversationId: number, threadId: number | null): AIConversationState | null {
-  if (threadId == null) return restoreConversationState(conversationId)
-  const db = getDb()
-  const persisted = getThreadConversationState(db, threadId)
-  if (!persisted) return null
-  const key = conversationContextKey(conversationId, threadId)
-  if (!conversationTemporalContext.has(key)) {
-    conversationTemporalContext.set(key, deserializeTemporalContext(persisted.routingContext))
-  }
-  return persisted
-}
 
 function buildAssistantMetadata(
   answerKind: AIAnswerKind,
@@ -1917,6 +1604,7 @@ function buildAssistantMetadata(
   artifacts: AIMessageArtifact[] = [],
   providerError = false,
   actionWidgets: AIActionWidget[] = [],
+  agent: AnswerEnvelope['agent'] = undefined,
 ): AIThreadMessageMetadata {
   return {
     answerKind,
@@ -1928,6 +1616,15 @@ function buildAssistantMetadata(
     actions,
     actionWidgets,
     artifacts,
+    agent,
+  }
+}
+
+function agentArtifactDir(): string {
+  try {
+    return path.join(app?.getPath?.('userData') ?? os.tmpdir(), 'artifacts')
+  } catch {
+    return path.join(os.tmpdir(), 'artifacts')
   }
 }
 
@@ -1955,13 +1652,13 @@ async function persistChatTurn(
         envelope.artifacts ?? [],
         envelope.answerKind === 'error',
         envelope.actionWidgets ?? [],
+        envelope.agent,
       ),
     },
   )
   if (threadId == null) {
     upsertConversationState(db, conversationId, envelope.conversationState)
   }
-  conversationTemporalContext.set(conversationContextKey(conversationId, threadId), envelope.resolvedTemporalContext)
   if (threadId != null) {
     touchThreadLastMessage(db, threadId, Date.now())
     queueWeakThreadTitleUpgrade(threadId, userMessage, envelope)
@@ -1980,9 +1677,9 @@ async function persistChatTurn(
 function threadTitleContextFromEnvelope(envelope: AnswerEnvelope): ThreadTitleContext {
   return {
     answerKind: envelope.answerKind,
-    entityName: envelope.resolvedTemporalContext?.entity?.entityName ?? null,
-    entityIntent: envelope.resolvedTemporalContext?.entity?.intent ?? null,
-    weeklyBriefIntent: envelope.resolvedTemporalContext?.weeklyBrief?.intent ?? null,
+    entityName: null,
+    entityIntent: null,
+    weeklyBriefIntent: null,
   }
 }
 
@@ -2024,7 +1721,11 @@ async function persistMessageArtifacts(
     try {
       let fileContent = ''
       try {
-        fileContent = await fs.readFile(artifact.path, 'utf8')
+        // Binary formats (xlsx) are referenced by path only — a utf8 read of a
+        // zip container would store mojibake as the inline copy.
+        if (artifact.format !== 'xlsx') {
+          fileContent = await fs.readFile(artifact.path, 'utf8')
+        }
       } catch {
         // ignore — createArtifact with existingFilePath still records the row.
       }
@@ -3011,593 +2712,24 @@ async function generateAppNarrative(
   }
 }
 
-function buildClientReportBundle(
-  clientId: string,
-  range: { fromMs: number; toMs: number; label: string },
-  question: string,
-): ReportContextBundle | null {
-  const payload = resolveClientQuery(clientId, range.fromMs, range.toMs, question, getDb())
-  if (!payload || payload.sessions.length === 0) return null
 
-  const dailyTotals = new Map<string, { attributedMs: number; ambiguousMs: number }>()
-  for (const session of payload.sessions) {
-    const key = localDateKeyForMs(new Date(session.start).getTime())
-    const existing = dailyTotals.get(key) ?? { attributedMs: 0, ambiguousMs: 0 }
-    if (session.attribution_status === 'attributed') existing.attributedMs += session.active_ms
-    else if (session.attribution_status === 'ambiguous') existing.ambiguousMs += session.active_ms
-    dailyTotals.set(key, existing)
-  }
 
-  return {
-    title: `${payload.target.client_name} ${range.label} report`,
-    scopeLabel: `${payload.target.client_name} in ${range.label}`,
-    assistantScaffold: JSON.stringify({
-      target: payload.target,
-      range: payload.range,
-      totals: payload.totals,
-      sessions: payload.sessions.slice(0, 16).map((session) => ({
-        start: session.start,
-        end: session.end,
-        active_ms: session.active_ms,
-        title: session.title,
-        project_name: session.project_name,
-        attribution_status: session.attribution_status,
-        confidence: session.confidence,
-        apps: session.apps.slice(0, 4).map((app) => app.app_name),
-        evidence: session.evidence.slice(0, 4).map((item) => item.value),
-      })),
-      ambiguities: payload.ambiguities.slice(0, 8),
-    }, null, 2),
-    reportMarkdownScaffold: '',
-    tableColumns: ['date', 'start', 'end', 'title', 'project', 'status', 'apps', 'active_hours', 'confidence'],
-    tableRows: payload.sessions.slice(0, 32).map((session) => ({
-      date: localDateKeyForMs(new Date(session.start).getTime()),
-      start: formatClock(new Date(session.start).getTime()),
-      end: formatClock(new Date(session.end).getTime()),
-      title: session.title?.trim() || session.project_name || payload.target.client_name,
-      project: session.project_name ?? '',
-      status: session.attribution_status,
-      apps: session.apps.slice(0, 4).map((app) => app.app_name).join(' | ') || 'n/a',
-      active_hours: Number((session.active_ms / 3_600_000).toFixed(2)),
-      confidence: session.confidence == null ? '' : Math.round(session.confidence * 100),
-    })),
-    chartRows: [...dailyTotals.entries()]
-      .sort((left, right) => left[0].localeCompare(right[0]))
-      .map(([date, totals]) => ({
-        label: date.slice(5),
-        value: Number((totals.attributedMs / 3_600_000).toFixed(1)),
-        secondaryValue: Number((totals.ambiguousMs / 3_600_000).toFixed(1)),
-      })),
-    chartValueLabel: 'hours',
-  }
-}
 
-function buildProjectReportBundle(
-  projectId: string,
-  range: { fromMs: number; toMs: number; label: string },
-  question: string,
-): ReportContextBundle | null {
-  const payload = resolveProjectQuery(projectId, range.fromMs, range.toMs, question, getDb())
-  if (!payload || payload.sessions.length === 0) return null
 
-  const dailyTotals = new Map<string, { attributedMs: number; ambiguousMs: number }>()
-  for (const session of payload.sessions) {
-    const key = localDateKeyForMs(new Date(session.start).getTime())
-    const existing = dailyTotals.get(key) ?? { attributedMs: 0, ambiguousMs: 0 }
-    if (session.attribution_status === 'attributed') existing.attributedMs += session.active_ms
-    else if (session.attribution_status === 'ambiguous') existing.ambiguousMs += session.active_ms
-    dailyTotals.set(key, existing)
-  }
-
-  return {
-    title: `${payload.target.project_name} ${range.label} report`,
-    scopeLabel: `${payload.target.project_name} in ${range.label}`,
-    assistantScaffold: JSON.stringify({
-      target: payload.target,
-      range: payload.range,
-      totals: payload.totals,
-      sessions: payload.sessions.slice(0, 16).map((session) => ({
-        start: session.start,
-        end: session.end,
-        active_ms: session.active_ms,
-        title: session.title,
-        attribution_status: session.attribution_status,
-        confidence: session.confidence,
-        apps: session.apps.slice(0, 4).map((app) => app.app_name),
-        evidence: session.evidence.slice(0, 4).map((item) => item.value),
-      })),
-    }, null, 2),
-    reportMarkdownScaffold: '',
-    tableColumns: ['date', 'start', 'end', 'title', 'client', 'status', 'apps', 'active_hours', 'confidence'],
-    tableRows: payload.sessions.slice(0, 32).map((session) => ({
-      date: localDateKeyForMs(new Date(session.start).getTime()),
-      start: formatClock(new Date(session.start).getTime()),
-      end: formatClock(new Date(session.end).getTime()),
-      title: session.title?.trim() || payload.target.project_name,
-      client: payload.target.client_name,
-      status: session.attribution_status,
-      apps: session.apps.slice(0, 4).map((app) => app.app_name).join(' | ') || 'n/a',
-      active_hours: Number((session.active_ms / 3_600_000).toFixed(2)),
-      confidence: session.confidence == null ? '' : Math.round(session.confidence * 100),
-    })),
-    chartRows: [...dailyTotals.entries()]
-      .sort((left, right) => left[0].localeCompare(right[0]))
-      .map(([date, totals]) => ({
-        label: date.slice(5),
-        value: Number((totals.attributedMs / 3_600_000).toFixed(1)),
-        secondaryValue: Number((totals.ambiguousMs / 3_600_000).toFixed(1)),
-      })),
-    chartValueLabel: 'hours',
-  }
-}
-
-function detectDirectEntityForOutput(question: string): DirectReportEntity | null {
-  const normalized = question.toLowerCase()
-  const explicit = question.match(/\b(?:for|on|about)\s+['"]?([A-Za-z][\w\s&.-]{1,40})['"]?(?:\s+(?:this|last|today|yesterday)|\s+as\b|\s+into\b|[?.!,]|$)/i)
-  if (explicit?.[1]) {
-    const project = findProjectByName(explicit[1].trim(), getDb())
-    if (project) return { entityType: 'project', id: project.id, name: project.name }
-    const client = findClientByName(explicit[1].trim(), getDb())
-    if (client) return { entityType: 'client', id: client.id, name: client.name }
-  }
-
-  for (const project of listProjects(getDb())) {
-    const escaped = project.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    if (new RegExp(`\\b${escaped.toLowerCase()}\\b`, 'i').test(normalized)) {
-      return { entityType: 'project', id: project.id, name: project.name }
-    }
-  }
-
-  for (const client of listClients(getDb())) {
-    const escaped = client.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    if (new RegExp(`\\b${escaped.toLowerCase()}\\b`, 'i').test(normalized)) {
-      return { entityType: 'client', id: client.id, name: client.name }
-    }
-  }
-
-  return null
-}
-
-function resolveOutputRange(
-  question: string,
-  restoredState: AIConversationState | null,
-  previousContext: TemporalContext | null,
-): { fromMs: number; toMs: number; label: string } {
-  const explicit = inferDateRangeFromQuestion(question, restoredState?.dateRange ?? null)
-  if (previousContext?.entity) {
-    return explicit ?? {
-      fromMs: previousContext.entity.rangeStartMs,
-      toMs: previousContext.entity.rangeEndMs,
-      label: previousContext.entity.rangeLabel,
-    }
-  }
-  if (previousContext?.weeklyBrief) {
-    const weeklyRange = previousContext.weeklyBrief.dateRange
-    return explicit ?? {
-      fromMs: weeklyRange.fromMs,
-      toMs: weeklyRange.toMs,
-      label: weeklyRange.label,
-    }
-  }
-  if (explicit) {
-    return {
-      fromMs: explicit.fromMs,
-      toMs: explicit.toMs,
-      label: explicit.label,
-    }
-  }
-
-  const start = new Date()
-  start.setHours(0, 0, 0, 0)
-  const end = new Date(start)
-  end.setDate(end.getDate() + 1)
-  return {
-    fromMs: start.getTime(),
-    toMs: end.getTime(),
-    label: 'today',
-  }
-}
-
-async function maybeGenerateRequestedOutput(params: {
-  question: string
-  restoredState: AIConversationState | null
-  previousContext: TemporalContext | null
-  routedContext: TemporalContext | null
-  routedAnswer?: string | null
-  prior: ConversationMessage[]
-}): Promise<AnswerEnvelope | null> {
-  const outputKinds = detectRequestedOutputKinds(params.question)
-  if (outputKinds.length === 0) return null
-
-  const range = resolveOutputRange(params.question, params.restoredState, params.previousContext)
-  const directEntity: DirectReportEntity | null = params.routedContext?.entity
-    && (params.routedContext.entity.entityType === 'client' || params.routedContext.entity.entityType === 'project')
-    ? {
-      entityType: params.routedContext.entity.entityType,
-      id: params.routedContext.entity.entityId,
-      name: params.routedContext.entity.entityName,
-    }
-    : params.previousContext?.entity
-      && (params.previousContext.entity.entityType === 'client' || params.previousContext.entity.entityType === 'project')
-      ? {
-        entityType: params.previousContext.entity.entityType,
-        id: params.previousContext.entity.entityId,
-        name: params.previousContext.entity.entityName,
-      }
-      : detectDirectEntityForOutput(params.question)
-
-  const bundle = directEntity?.entityType === 'client'
-    ? buildClientReportBundle(directEntity.id, range, params.question)
-    : directEntity?.entityType === 'project'
-      ? buildProjectReportBundle(directEntity.id, range, params.question)
-      : (range.label.includes('week') || params.previousContext?.weeklyBrief || params.routedContext?.weeklyBrief)
-        ? buildWeekReviewBundle(localDateKeyForMs(range.fromMs))
-        : buildDayReportBundle(localDateKeyForMs(range.fromMs))
-
-  if (!bundle) return null
-
-  const outputKindsLabel = outputKinds.join(', ')
-  const systemPrompt = [
-    VOICE_SYSTEM_PROMPT,
-    'You are Daylens, generating shareable work-history outputs from deterministic local evidence.',
-    'Do not use emoji in any part of your response.',
-    USER_VISIBLE_ACTIVITY_PROSE_RULE,
-    'Use only the facts in the scaffold below.',
-    'Copy every number, time, and date EXACTLY as it appears in the scaffold. Never compute, round, estimate, or move a figure from one day, app, block, or client to another. If a number is not in the scaffold, do not state it. The figures must match the Timeline exactly.',
-    'When the scaffold has per-day, per-app, or per-client rows, render them as a Markdown table so the exact numbers are easy to scan.',
-    'Return strict JSON with keys "assistantResponse", "reportTitle", and "reportMarkdown".',
-    '"assistantResponse" should be 1-3 short paragraphs for the in-app chat card.',
-    '"reportMarkdown" should read like a thoughtful human reviewed the day with care: specific, calm, useful, and grounded.',
-    'Write in second person. Avoid motivational fluff, vanity-dashboard language, and generic productivity claims.',
-    'Lead with what the day was actually about, then support that read with concrete apps, blocks, artifacts, pages, clients, or projects from the scaffold.',
-    'Treat any day-shape or profile hint as a temporary lens for this report only. Content comes first; do not imply a permanent user role.',
-    'If structured client or project attribution exists, surface it naturally. If it does not, do not force consultant framing.',
-    'Use "looks like" or "suggests" where the evidence is interpretive or attribution is weak.',
-    'If tables or charts are requested, assume CSV and HTML companion files will be generated from the deterministic rows provided.',
-    'Do not invent extra files, numbers, titles, artifacts, or projects beyond the scaffold.',
-  ].join(' ')
-  const userMessage = [
-    `Original request: ${params.question}`,
-    `Requested outputs: ${outputKindsLabel}`,
-    params.routedAnswer?.trim() ? `Existing deterministic answer: ${params.routedAnswer.trim()}` : '',
-    '',
-    'Structured export scaffold (JSON):',
-    bundle.assistantScaffold,
-  ].filter(Boolean).join('\n')
-
-  // Fully AI-written reports: the model writes the whole report — narrative and
-  // numbers — from the deterministic scaffold, fresh every time, so it never
-  // reads like a fixed template.
-  //
-  // No fake AI (W1-C / invariant 10): when the model call fails or its output
-  // can't be parsed, the user gets the honest error card with Retry — never
-  // templated prose dressed up as an AI answer. The one exception is a bundle
-  // with renderDeterministic (the week review): its output SAYS it is
-  // deterministic in both the chat card and the report body ("no AI synthesis
-  // was used"), so degrading to it is honest.
-  let reportContent: GeneratedReportContent
-  const trace = getCurrentTrace()
-  try {
-    if (trace) {
-      trace.addEvent({
-        kind: 'prose_pass',
-        input: `[report_generation_input]\nsystem:\n${systemPrompt}\n\nuser:\n${userMessage}`,
-        output: '(pending)',
-      })
-    }
-    const { text } = await withTimeout(
-      executeTextAIJob(
-        {
-          jobType: 'report_generation',
-          screen: 'ai_chat',
-          triggerSource: 'user',
-          systemPrompt,
-          userMessage,
-          prior: params.prior,
-        },
-        sendWithProvider,
-      ),
-      60_000,
-      'Report generation timed out',
-    )
-    if (trace) {
-      trace.addEvent({ kind: 'prose_pass', input: '[report_generation_raw_output]', output: text })
-    }
-    const parsed = parseGeneratedReportResult(text, bundle.title)
-    if (!parsed) {
-      throw new Error('The AI response could not be read as a report. Tap retry to run it again.')
-    }
-    reportContent = parsed
-  } catch (error) {
-    if (trace) {
-      trace.addEvent({ kind: 'error', message: error instanceof Error ? error.message : String(error), phase: 'report_generation' })
-    }
-    const deterministic = bundle.renderDeterministic?.()
-    if (!deterministic) throw error
-    console.warn('[ai] report_generation fell back to the self-labelled deterministic renderer:', error)
-    reportContent = {
-      assistantResponse: deterministic.assistantResponse,
-      reportTitle: bundle.title,
-      reportMarkdown: deterministic.reportMarkdown,
-    }
-  }
-
-  // Build the report in every format the user named — Word, PDF, Markdown,
-  // HTML — defaulting to PDF when they didn't say.
-  const requestedFormats = detectRequestedFormats(params.question)
-  const reportFormats: ReportExportFormat[] = requestedFormats.length > 0 ? requestedFormats : ['pdf']
-  const reportMarkdownBody = reportContent.reportMarkdown.trim()
-  const artifactSpecs: ReportArtifactSpec[] = []
-  for (const format of reportFormats) {
-    artifactSpecs.push(await buildReportArtifact(format, reportContent.reportTitle, bundle.scopeLabel, reportMarkdownBody))
-  }
-
-  if ((outputKinds.includes('table') || outputKinds.includes('export')) && bundle.tableRows.length > 0) {
-    artifactSpecs.push({
-      kind: 'table',
-      title: 'table-export',
-      format: 'csv',
-      extension: 'csv',
-      subtitle: `${bundle.scopeLabel} table`,
-      contents: buildCsvContent(bundle.tableColumns, bundle.tableRows),
-    })
-  }
-
-  if ((outputKinds.includes('chart') || outputKinds.includes('export')) && bundle.chartRows.length > 0) {
-    artifactSpecs.push({
-      kind: 'chart',
-      title: 'chart-export',
-      format: 'html',
-      extension: 'html',
-      subtitle: `${bundle.scopeLabel} chart`,
-      contents: buildBarChartHtml(
-        reportContent.reportTitle,
-        `Generated from Daylens local evidence for ${bundle.scopeLabel}.`,
-        bundle.chartValueLabel,
-        bundle.chartRows,
-      ),
-    })
-  }
-
-  const artifacts = await writeGeneratedArtifacts(reportContent.reportTitle, artifactSpecs)
-  const resolvedTemporalContext = params.routedContext
-    ?? params.previousContext
-    ?? {
-      date: new Date(range.fromMs),
-      timeWindow: null,
-      weeklyBrief: null,
-      entity: null,
-    }
-
-  const conversationState = buildConversationState(
-    'generated_report',
-    'freeform',
-    resolvedTemporalContext,
-    inferFollowUpAffordances('generated_report'),
-    {
-      dateRange: {
-        fromMs: range.fromMs,
-        toMs: range.toMs,
-        label: range.label,
-      },
-      lastIntent: params.restoredState?.lastIntent ?? null,
-      topic: params.restoredState?.topic ?? null,
-      responseMode: params.restoredState?.responseMode ?? null,
-      evidenceKey: params.restoredState?.evidenceKey ?? null,
-    },
-  )
-  const suggestedFollowUps = await generateSuggestedFollowUps(
-    params.question,
-    reportContent.assistantResponse,
-    'generated_report',
-    conversationState,
-  )
-
-  return {
-    assistantText: reportContent.assistantResponse,
-    answerKind: 'generated_report',
-    sourceKind: 'freeform',
-    resolvedTemporalContext,
-    conversationState,
-    suggestedFollowUps,
-    artifacts,
-  }
-}
 
 // "in word please?", "pdf version", "as markdown" — a bare format request that
 // points back at the answer we just gave. Re-render that answer as the requested
 // file(s) instead of dead-ending with "I can't export to Word". Returns null when
 // the message isn't a pure format ask, names a time period (that's a fresh
 // report), or there's nothing prior to export.
-async function maybeReExportInFormat(params: {
-  question: string
-  history: AIThreadMessage[]
-  previousContext: TemporalContext | null
-  restoredState: AIConversationState | null
-}): Promise<AnswerEnvelope | null> {
-  if (!looksLikeBareFormatRequest(params.question)) return null
-  const formats = detectRequestedFormats(params.question)
-
-  const source = latestAssistantAnswer(params.history)
-  if (!source || !source.trim()) return null
-
-  const titleMatch = /^#\s+(.+)$/m.exec(source)
-  const reportTitle = (titleMatch ? titleMatch[1] : 'Daylens report').trim()
-  const reportBody = source.replace(/^#\s+.+$/m, '').trim()
-
-  const specs: ReportArtifactSpec[] = []
-  for (const format of formats) {
-    specs.push(await buildReportArtifact(format, reportTitle, reportTitle, reportBody))
-  }
-  const artifacts = await writeGeneratedArtifacts(reportTitle, specs)
-
-  const names = formats.map(formatDisplayName)
-  const joined = names.length === 1
-    ? names[0]
-    : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
-  const assistantText = `Here you go — ${joined} of that, ready to open.`
-
-  const resolvedTemporalContext: TemporalContext = params.previousContext ?? {
-    date: new Date(),
-    timeWindow: null,
-    weeklyBrief: null,
-    entity: null,
-  }
-  const conversationState = buildConversationState(
-    'generated_report',
-    'freeform',
-    resolvedTemporalContext,
-    inferFollowUpAffordances('generated_report'),
-    {
-      dateRange: params.restoredState?.dateRange ?? null,
-      lastIntent: params.restoredState?.lastIntent ?? null,
-      topic: params.restoredState?.topic ?? null,
-      responseMode: params.restoredState?.responseMode ?? null,
-      evidenceKey: params.restoredState?.evidenceKey ?? null,
-    },
-  )
-  return {
-    assistantText,
-    answerKind: 'generated_report',
-    sourceKind: 'freeform',
-    resolvedTemporalContext,
-    conversationState,
-    suggestedFollowUps: [],
-    artifacts,
-  }
-}
 
 // FB7: transforms rewrite the SPECIFIC prior answer (with its grounded numbers)
 // into the requested form via a real model call — no re-analysis, no generic day
 // bundle. The instructions + labels live in shared/answerTransforms so the
 // renderer (menu + retry) and this generation path can never drift.
-function latestAssistantAnswer(history: AIThreadMessage[]): string | null {
-  for (let index = history.length - 1; index >= 0; index -= 1) {
-    const message = history[index]
-    if (message.role === 'assistant' && (message.content ?? '').trim() && message.answerKind !== 'error') {
-      return message.content
-    }
-  }
-  return null
-}
 
-async function runAnswerTransform(params: {
-  kind: AIAnswerTransformKind
-  sourceAnswer: string
-  stream: ReturnType<typeof createChatStreamAccumulator>
-  restoredState: AIConversationState | null
-  previousContext: TemporalContext | null
-}): Promise<AnswerEnvelope> {
-  const { kind, sourceAnswer, restoredState, previousContext } = params
-  const systemPrompt = [
-    VOICE_SYSTEM_PROMPT,
-    transformInstruction(kind),
-    USER_VISIBLE_ACTIVITY_PROSE_RULE,
-    'Do not use emoji in any part of your response.',
-  ].join('\n')
-  const userMessage = `Reformat the answer below. Use only what it contains.\n\nANSWER:\n${sourceAnswer.trim()}`
 
-  const trace = getCurrentTrace()
-  if (trace) trace.addEvent({ kind: 'prose_pass', input: `[transform:${kind}]\n${userMessage.slice(0, 2000)}`, output: '(pending)' })
 
-  const { text: rawText } = await withTimeout(
-    executeTextAIJob(
-      { jobType: 'chat_answer', screen: 'ai_chat', triggerSource: 'user', systemPrompt, userMessage, prior: [] },
-      sendWithProvider,
-      { onDelta: (delta) => params.stream.push(delta) },
-    ),
-    60_000,
-    'Transform timed out',
-  )
-  const text = rawText.trim()
-  if (trace) trace.addEvent({ kind: 'prose_pass', input: '[transform_raw_output]', output: text })
-  if (!text) throw new Error('The AI returned an empty response. Please try again.')
-  await params.stream.streamText(text)
-
-  const resolvedTemporalContext = previousContext ?? null
-
-  if (kind === 'report') {
-    const titleMatch = /^#\s+(.+)$/m.exec(text)
-    const reportTitle = (titleMatch ? titleMatch[1] : 'Daylens report').trim()
-    // Strip the leading H1 from the body — renderReportPdf renders the title.
-    const reportBody = text.replace(/^#\s+.+$/m, '').trim()
-    const artifacts = await writeGeneratedArtifacts(reportTitle, [{
-      kind: 'report',
-      title: 'shareable-report',
-      format: 'pdf',
-      extension: 'pdf',
-      subtitle: reportTitle,
-      contents: await renderReportPdf(reportTitle, '', reportBody),
-    }])
-    const conversationState = buildConversationState(
-      'generated_report',
-      'freeform',
-      resolvedTemporalContext,
-      inferFollowUpAffordances('generated_report'),
-      {
-        dateRange: restoredState?.dateRange ?? null,
-        lastIntent: restoredState?.lastIntent ?? null,
-        topic: restoredState?.topic ?? null,
-        responseMode: restoredState?.responseMode ?? null,
-        evidenceKey: restoredState?.evidenceKey ?? null,
-      },
-    )
-    return { assistantText: text, answerKind: 'generated_report', sourceKind: 'freeform', resolvedTemporalContext, conversationState, suggestedFollowUps: [], artifacts }
-  }
-
-  const answerKind: AIAnswerKind = 'freeform_chat'
-  const suggestedFollowUps = await generateSuggestedFollowUps(transformLabel(kind), text, answerKind, restoredState)
-  return { assistantText: text, answerKind, sourceKind: 'freeform', resolvedTemporalContext, conversationState: restoredState, suggestedFollowUps }
-}
-
-function weeklyBriefPrompts(
-  userMessage: string,
-  briefContext: WeeklyBriefContext,
-  pack: WeeklyBriefEvidencePack,
-): { systemPrompt: string; userPrompt: string } {
-  const modeInstruction = briefContext.responseMode === 'literal'
-    ? 'Lead with the named items themselves. A compact numbered list is allowed here if it makes the answer clearer.'
-    : briefContext.responseMode === 'deepen'
-      ? 'Assume this is a follow-up. Keep the same week and topic, but deepen the synthesis and relationships between the themes.'
-      : briefContext.responseMode === 'reading'
-        ? 'Lead with the clearest named pages, videos, docs, and artifacts. Interpretation is secondary.'
-        : 'Lead with the story of the week, then support it with named evidence.'
-
-  const systemPrompt = [
-    VOICE_SYSTEM_PROMPT,
-    'You are Daylens.',
-    userProfileDirective(getSettings()),
-    'Do not use emoji in any part of your response.',
-    USER_VISIBLE_ACTIVITY_PROSE_RULE,
-    'You turn a deterministic weekly browsing evidence pack into a natural editorial briefing.',
-    'The evidence selection is already done for you. Your job is writing, not retrieval.',
-    'Use only the facts in the scaffold below. Do not invent pages, repos, docs, files, videos, or claims of certainty.',
-    'Open with the main idea of the week.',
-    'Group the answer into 2-4 short paragraphs or, for literal reading requests, a compact list plus one short caveat.',
-    'Mention exact titles when available.',
-    'When the scaffold includes dates on evidence or supporting blocks, include concrete calendar dates such as "May 27" instead of only saying Monday, Tuesday, or Wednesday.',
-    'Distinguish named evidence from ambient or generic browser usage.',
-    'Use language like "looks like" or "suggests" when interpreting patterns.',
-    'Never fall back to dashboard language like top apps, top sites, or distraction time unless the user explicitly asked for stats.',
-    'Never say you only have domains if the scaffold includes named pages or artifacts.',
-    modeInstruction,
-  ].filter(Boolean).join(' ')
-
-  const userPrompt = [
-    `User question: ${userMessage}`,
-    '',
-    'Structured weekly brief scaffold (JSON):',
-    buildWeeklyBriefScaffold(briefContext, pack),
-    '',
-    'Write the final answer now.',
-  ].join('\n')
-
-  return { systemPrompt, userPrompt }
-}
-
-function answerKindForWeeklyContext(context: WeeklyBriefContext): AIAnswerKind {
-  return context.responseMode === 'literal' ? 'weekly_literal_list' : 'weekly_brief'
-}
 
 function parseWorkBlockInsight(raw: string): WorkContextInsight | null {
   const candidate = escapeJsonBlock(raw)
@@ -3969,98 +3101,7 @@ export async function generateDayRegroupPlan(
   }
 }
 
-const APP_VOCABULARY_HINT =
-  'App vocabulary (use this to interpret app names correctly): ' +
-  'Dia = AI-powered browser; Arc/Chrome/Safari/Firefox/Brave/Edge/Opera/Vivaldi = browsers; ' +
-  'Warp/Ghostty/iTerm2/Terminal/Alacritty/Kitty = terminals; ' +
-  'Cursor/VS Code/Xcode/Zed/Sublime = code editors; ' +
-  'Claude/ChatGPT/Codex/Perplexity/Copilot/Comet = AI tools; ' +
-  'Slack/Discord/Teams/Messages/WhatsApp/Telegram/Signal = team chat or messaging; ' +
-  'Notion/Obsidian/Bear/Craft/Word/Notes/Journal = notes and writing; ' +
-  'Figma/Sketch/Canva/Miro = design; ' +
-  'Linear/Jira/Asana/Todoist/TickTick/Trello = project and task management; ' +
-  'Spotify/Apple Music/VLC/Podcasts = media playback; ' +
-  'Zoom/Loom = video meetings; ' +
-  'Outlook/Spark/Apple Mail = email. ' +
-  'Key websites: x.com and twitter.com = X (social media); youtube.com = video platform; reddit.com = forum/discussion; instagram.com = social media; github.com = code hosting.'
 
-function ensureEvidenceLead(text: string): string {
-  return text
-    .trim()
-    .replace(/^\s*(?:[-*•]|\d+[.)])\s+/gm, '')
-    .replace(/\s*\n+\s*/g, ' ')
-    .replace(/\s{2,}/g, ' ')
-    .trim()
-}
-
-async function routerProsePass(
-  question: string,
-  structuredData: string,
-): Promise<string> {
-  const trace = getCurrentTrace()
-  const emit = (output: string, fallback?: 'timestamp_mismatch' | 'empty' | 'error' | 'timeout') => {
-    if (trace) trace.addEvent({ kind: 'prose_pass', input: structuredData, output, ...(fallback ? { fallback } : {}) })
-  }
-  const systemPrompt =
-    VOICE_SYSTEM_PROMPT + '\n\n' +
-    `## Job: rewrite structured data into prose\n` +
-    `The user asked: "${question}".\n` +
-    `Rewrite the structured data below as one to three natural sentences.\n\n` +
-    `## STRICT RULES — violations = wrong answer\n` +
-    `1. Add NOTHING that is not in the structured data. No invented album names, file names, project names, durations, percentages, time ranges, app names, or block labels. If the structured data does not contain "Google Photos" or "houses", you must NOT say either.\n` +
-    `2. Every number you state (minutes, hours, percent, "around 3pm") must appear in the structured data. Do not paraphrase, round, or interpret. "3h 16m" if the data says "3h 16m" — never "about 3 hours."\n` +
-    `3. App names are evidence, not the answer. If the data says "Photos app was foreground for 3 minutes", write "you spent 3 minutes in the Photos app" — never "you were browsing photos" and never "you were looking at an album called X." If a window title or block label appears, you may quote it verbatim.\n` +
-    `4. If the structured data has no answer to the user's question, say so plainly and offer the closest evidence — do not pad with generic productivity prose.\n` +
-    `5. ${USER_VISIBLE_ACTIVITY_PROSE_RULE}\n` +
-    `6. No bullets, no numbered lists, no tables. Plain prose only.\n` +
-    `7. Never claim editing, writing, attention, or intent — only that an app or window was open.\n` +
-    `8. Do not open with "From your app sessions..." or any boilerplate evidence prefix.\n` +
-    `9. Do not use emoji.\n\n` +
-    APP_VOCABULARY_HINT
-
-  try {
-    const { text } = await withTimeout(
-      executeTextAIJob(
-        {
-          jobType: 'chat_answer',
-          screen: 'ai_chat',
-          triggerSource: 'user',
-          systemPrompt,
-          userMessage: structuredData,
-        },
-        sendWithProvider,
-      ),
-      10_000,
-      'prose-pass timeout',
-    )
-    const trimmed = text.trim()
-    if (!trimmed) {
-      const out = structuredData.trim()
-      emit(out, 'empty')
-      return out
-    }
-    // Cheap post-check: every HH:MM in the rewrite must appear in the
-    // structured data. Catches the most common fabrication shape (the
-    // prose pass inventing time ranges that "feel" right).
-    const { verifyTimestamps } = await import('../ai/citations')
-    const check = verifyTimestamps(trimmed, [structuredData])
-    if (!check.ok) {
-      // Fall back to the structured data verbatim — better an ugly true
-      // answer than a smooth fabricated one.
-      const out = structuredData.trim()
-      emit(out, 'timestamp_mismatch')
-      return out
-    }
-    emit(trimmed)
-    return trimmed
-  } catch {
-    // Fall through to structured data — better to show full data than a truncated header
-  }
-
-  const out = structuredData.trim()
-  emit(out, 'error')
-  return out
-}
 
 // Translate raw provider SDK errors (e.g. a 429 JSON blob from Gemini) into a
 // short, branded, *accurately classified* message before it reaches the chat
@@ -4189,25 +3230,6 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
     ? getConversationMessages(db, conversationId)
     : getThreadMessages(db, threadId)
   const stream = createChatStreamAccumulator(payload.clientRequestId ?? null, options)
-  const restoredState = payload.contextOverride ?? restoreChatState(conversationId, threadId)
-  const restoredTemporalContext = deserializeTemporalContext(restoredState?.routingContext ?? null)
-  const followUpResolution = resolveFollowUp(userMessage, restoredState, history)
-  const effectiveUserMessage = followUpResolution.effectivePrompt
-  const contextKey = conversationContextKey(conversationId, threadId)
-  const previousContext = followUpResolution.shouldResetContext
-    ? null
-    : (restoredTemporalContext
-      ?? conversationTemporalContext.get(contextKey)
-      ?? null)
-
-  capture(ANALYTICS_EVENT.AI_FOLLOWUP_RESOLUTION, {
-    kind: followUpResolution.kind,
-    followup_class: followUpResolution.followUpClass,
-    reused_context: followUpResolution.shouldReuseContext,
-    reset_context: followUpResolution.shouldResetContext,
-    answer_kind: restoredState?.answerKind ?? null,
-    source_kind: restoredState?.sourceKind ?? null,
-  })
 
   if (process.env.NODE_ENV === 'development') {
     console.log(`[ai:chat] ← "${userMessage.slice(0, 120)}"`)
@@ -4215,30 +3237,7 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
 
   const prior = boundProviderHistory(sanitizeConversationHistory(history))
 
-  // A bare greeting or check-in ("hi", "how's it going") gets a real, warm
-  // reply from the model — never a canned line (ai.md §5). The fast-path regex
-  // only spares the planner round-trip; the answer itself is still generated.
-  if (looksLikeGreeting(effectiveUserMessage)) {
-    const greetingText = await converse({
-      message: effectiveUserMessage,
-      runner: sendWithProvider,
-      prior,
-      onDelta: (delta) => stream.push(delta),
-    })
-    if (!greetingText.trim()) {
-      throw new Error('The AI returned an empty response. Please try again.')
-    }
-    return persistChatTurn(db, conversationId, userMessage, {
-      assistantText: greetingText,
-      answerKind: 'freeform_chat',
-      sourceKind: 'freeform',
-      resolvedTemporalContext: null,
-      conversationState: null,
-      suggestedFollowUps: [],
-    }, threadId)
-  }
-
-  const focusIntent = maybeHandleFocusIntent(effectiveUserMessage)
+  const focusIntent = maybeHandleFocusIntent(userMessage)
   if (focusIntent) {
     await stream.streamText(focusIntent.assistantText)
     return persistChatTurn(db, conversationId, userMessage, focusIntent, threadId)
@@ -4248,7 +3247,7 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
   // early return persisted the preview and stopped before answering the user.
   // Build the preview now, then carry it through the normal answer path so the
   // response always completes whether the user confirms, cancels, or ignores it.
-  const memoryEnvelope = await maybeHandleMemoryInstruction(effectiveUserMessage, sendWithProvider, prior)
+  const memoryEnvelope = await maybeHandleMemoryInstruction(userMessage, sendWithProvider, prior)
   const withMemoryProposal = (envelope: AnswerEnvelope): AnswerEnvelope => {
     const proposals = memoryEnvelope?.actionWidgets ?? []
     return attachActionWidgets(envelope, proposals)
@@ -4259,7 +3258,7 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
 
   // "rename my afternoon block to networking" — preview the rename in a block
   // card; it commits only on confirm (ai-actions.md §5).
-  const renameEnvelope = maybeHandleRenameInstruction(effectiveUserMessage, null)
+  const renameEnvelope = maybeHandleRenameInstruction(userMessage, null)
   if (renameEnvelope) {
     await stream.streamText(renameEnvelope.assistantText)
     return persistTurn(renameEnvelope)
@@ -4267,189 +3266,28 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
 
   // "merge my last two blocks" — preview the merge in a card; commits only on
   // confirm (ai-actions.md §5). Checked after rename so "rename" wins its verb.
-  const mergeEnvelope = maybeHandleMergeInstruction(effectiveUserMessage, null)
+  const mergeEnvelope = maybeHandleMergeInstruction(userMessage, null)
   if (mergeEnvelope) {
     await stream.streamText(mergeEnvelope.assistantText)
     return persistTurn(mergeEnvelope)
   }
 
-  // "in word please?" / "pdf version" / "as markdown" — re-export the answer we
-  // just gave into the file the user wants, instead of refusing.
-  const reExportEnvelope = await maybeReExportInFormat({
-    question: effectiveUserMessage,
-    history,
-    previousContext,
-    restoredState,
-  })
-  if (reExportEnvelope) {
-    await stream.streamText(reExportEnvelope.assistantText)
-    return persistTurn(reExportEnvelope)
-  }
-
-  // FB7: an explicit "Turn into…" transform rewrites the SPECIFIC prior answer.
-  // It bypasses the router + generic report bundle so the output is a faithful
-  // transform of that answer's real content, not a fresh generic day shell.
-  if (payload.transform) {
-    const sourceAnswer = latestAssistantAnswer(history)
-    if (sourceAnswer) {
-      const transformEnvelope = await runAnswerTransform({
-        kind: payload.transform,
-        sourceAnswer,
-        stream,
-        restoredState,
-        previousContext,
-      })
-      return persistTurn(transformEnvelope)
-    }
-    // No prior answer to transform — fall through to normal handling.
-  }
-
-  const directReportEnvelope = await maybeGenerateRequestedOutput({
-    question: effectiveUserMessage,
-    restoredState,
-    previousContext,
-    routedContext: previousContext,
-    routedAnswer: null,
-    prior,
-  })
-  if (directReportEnvelope) {
-    await stream.streamText(directReportEnvelope.assistantText)
-    return persistTurn(directReportEnvelope)
-  }
-
-  const routed = shouldUseRouter(effectiveUserMessage)
-    ? await routeInsightsQuestion(effectiveUserMessage, new Date(), previousContext, db)
-    : null
-  const reportEnvelope = await maybeGenerateRequestedOutput({
-    question: effectiveUserMessage,
-    restoredState,
-    previousContext,
-    routedContext: routed?.resolvedContext ?? previousContext,
-    routedAnswer: routed?.kind === 'answer' ? routed.answer : null,
-    prior,
-  })
-  if (reportEnvelope) {
-    await stream.streamText(reportEnvelope.assistantText)
-    return persistTurn(reportEnvelope)
-  }
-
-  if (routed) {
-    if (routed.kind === 'weeklyBrief') {
-      const settings = getSettings()
-      // R2: single source of truth — the chat surface (and the model string we
-      // show the user) must use the same provider the chat UI shows, which is
-      // aiChatProvider when set, else aiProvider.
-      const chatProvider = settings.aiChatProvider ?? settings.aiProvider ?? 'anthropic'
-      const chatModel = modelForProvider(chatProvider, 'quality', settings)
-      let pack = routed.briefContext.evidenceKey ? weeklyBriefCache.get(routed.briefContext.evidenceKey) ?? null : null
-      if (!pack) {
-        pack = buildWeeklyBriefEvidencePack(db, routed.briefContext)
-        weeklyBriefCache.set(pack.evidenceKey, pack)
-      }
-      const resolvedWeeklyContext: WeeklyBriefContext = {
-        ...routed.briefContext,
-        evidenceKey: pack.evidenceKey,
-      }
-      const { systemPrompt, userPrompt } = weeklyBriefPrompts(effectiveUserMessage, resolvedWeeklyContext, pack)
-      if (process.env.NODE_ENV === 'development') {
-        console.log(`[ai:chat] weekly brief → provider=${chatProvider} model=${chatModel} mode=${resolvedWeeklyContext.responseMode} key=${pack.evidenceKey}`)
-      }
-      const { text } = await executeTextAIJob(
-        {
-          jobType: 'weekly_brief',
-          screen: 'ai_chat',
-          triggerSource: 'user',
-          systemPrompt,
-          userMessage: userPrompt,
-          prior,
-        },
-        sendWithProvider,
-        { onDelta: (delta) => stream.push(delta) },
-      )
-      const assistantText = ensureEvidenceLead(text)
-      await stream.streamText(assistantText)
-      if (!assistantText.trim()) {
-        throw new Error('The AI returned an empty response. Please try again.')
-      }
-      const resolvedTemporalContext: TemporalContext = {
-        ...routed.resolvedContext,
-        weeklyBrief: resolvedWeeklyContext,
-      }
-      const answerKind = answerKindForWeeklyContext(resolvedWeeklyContext)
-      const conversationState = buildConversationState(
-        answerKind,
-        'weekly_brief',
-        resolvedTemporalContext,
-        inferFollowUpAffordances(answerKind),
-      )
-      const suggestedFollowUps = await generateSuggestedFollowUps(userMessage, assistantText, answerKind, conversationState)
-      return persistTurn({
-        assistantText,
-        answerKind,
-        sourceKind: 'weekly_brief',
-        resolvedTemporalContext,
-        conversationState,
-        suggestedFollowUps,
-      })
-    }
-
-    if (process.env.NODE_ENV === 'development') {
-      console.log(`[ai:chat] router hit → "${routed.answer.slice(0, 120)}"`)
-    }
-    const traceForRouter = getCurrentTrace()
-    if (traceForRouter) {
-      traceForRouter.addEvent({
-        kind: 'router_decision',
-        routedKind: routed.kind,
-        structuredAnswer: routed.answer,
-        hasTimeWindow: Boolean(routed.resolvedContext?.timeWindow),
-      })
-    }
-    const answerKind: AIAnswerKind = 'deterministic_stats'
-    const resolvedTemporalContext: TemporalContext = {
-      ...routed.resolvedContext,
-      weeklyBrief: null,
-    }
-    const conversationState = buildConversationState(
-      answerKind,
-      'deterministic',
-      resolvedTemporalContext,
-      inferFollowUpAffordances(answerKind),
-      {
-        dateRange: inferDateRangeFromQuestion(effectiveUserMessage, restoredState?.dateRange ?? null),
-        topic: followUpResolution.shouldReuseContext ? restoredState?.topic ?? null : null,
-        responseMode: null,
-        lastIntent: followUpResolution.followUpClass,
-        evidenceKey: null,
-      },
-    )
-    const proseAnswer = await routerProsePass(effectiveUserMessage, routed.answer)
-    await stream.streamText(proseAnswer)
-    const suggestedFollowUps = await generateSuggestedFollowUps(userMessage, proseAnswer, answerKind, conversationState)
-    return persistTurn({
-      assistantText: proseAnswer,
-      answerKind,
-      sourceKind: 'deterministic',
-      resolvedTemporalContext,
-      conversationState,
-      suggestedFollowUps,
-    })
-  }
-
-  if (process.env.NODE_ENV === 'development') {
-    console.log(`[ai:chat] router miss → falling back to LLM`)
-  }
+  // ── The agent turn (ADR 0003). Everything that is not a confirm-gated
+  //    mutation goes through ONE loop: the model reads the conversation,
+  //    calls read-only tools against the same store the Timeline reads,
+  //    optionally asks the user one clarifying question, and streams the
+  //    answer in the Daylens voice. The "Turn into…" dropdown becomes a plain
+  //    instruction — the loop's history is the transform's source. ──────────
+  const question = payload.transform
+    ? `${transformInstruction(payload.transform)} Apply it to your previous answer in this conversation.`
+    : userMessage
 
   const settings = getSettings()
-  // R2: resolve the chat provider from the same setting the UI shows
-  // (aiChatProvider ?? aiProvider) so the answer, the executing provider, and
-  // the "what model are you" string can never disagree.
   // D4: a per-thread override (provider + model, set together from the catalog)
-  // wins for this thread — e.g. drop a flaky thread onto a higher-limit model
-  // without touching the global setting — but only when that provider has a key.
+  // wins for this thread — but only when that provider has a key.
   const threadSettings = getThreadSettings(threadId)
-  let chatProvider = settings.aiChatProvider ?? settings.aiProvider ?? 'anthropic'
-  let chatModel = modelForProvider(chatProvider, 'quality', settings)
+  let providerOverride: AIProviderMode | null = null
+  let modelOverride: string | null = null
   if (threadSettings.provider && threadSettings.model) {
     const overrideHasKey = threadSettings.provider === 'claude-cli'
       || threadSettings.provider === 'chatgpt-cli'
@@ -4457,139 +3295,112 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
       || threadSettings.provider === 'codex-cli'
       || Boolean(await getApiKey(threadSettings.provider))
     if (overrideHasKey) {
-      chatProvider = threadSettings.provider
-      chatModel = threadSettings.model
+      providerOverride = threadSettings.provider
+      modelOverride = threadSettings.model
     }
   }
-  // D4: per-thread additional instructions, appended to the phrase prompt below.
-  const threadInstructionBlock = threadSettings.instructions
-    ? `\n\nThe user set these additional instructions for this chat. Follow them unless they conflict with grounding or honesty:\n${threadSettings.instructions}`
-    : ''
+  const configs = await resolveProviderConfigsForJob('chat_answer', settings, providerOverride)
+  let agentConfig = configs[0]
+  if (modelOverride && providerOverride && agentConfig.provider === providerOverride) {
+    agentConfig = { ...agentConfig, model: modelOverride }
+  }
 
-  // Memory as context for the conversational answer (memory.md §4): general
-  // memory always, plus the scoped memory of any client the question names
-  // (DEV-108). Context only — it colors how Daylens reads the real evidence, the
-  // hours still come from tracked activity. This is what makes editing memory
-  // visibly change the next answer (invariant 6).
-  const memoryContextBlock = (() => {
-    try {
-      const block = chatMemoryPromptBlock(db, effectiveUserMessage)
-      return block ? `\n\n${block}` : ''
-    } catch (error) {
-      console.warn('[ai:chat] memory context failed:', error)
-      return ''
-    }
-  })()
-  const pendingMemoryInstruction = memoryEnvelope
-    ? '\n\nA memory preview is shown separately for this turn. Respond naturally to the user, but do not claim the memory has already been saved.'
-    : ''
-  const extraSystem = `${threadInstructionBlock}${memoryContextBlock}${pendingMemoryInstruction}` || undefined
-
-  // ── Router miss → plan → resolve → phrase (ADR 0002). The model may select
-  //    and parameterize resolvers (the planner) and phrase their output, but it
-  //    never executes a resolver, never loops on tools, and never decides
-  //    whether data exists. There is no agentic tool-loop. ──────────────────
-  let assistantText: string
-
-  // The identity question ("what model is this?") stays deterministic so the
-  // model/provider string the user sees can never drift from what's running
-  // (invariant 12) — a model asked which model it is reliably confabulates.
-  // No fake AI (W1-C): because no model produced this line, the turn is
-  // labelled deterministic (sourceKind/answerKind), the same class as the
-  // router's fact answers — never disguised as a freeform model reply.
-  if (/\b(what|which)\b[\s\S]{0,40}\b(model|ai|llm|engine)\b/i.test(effectiveUserMessage)
-      && /\b(you|this|chat|powering|running|using|are)\b/i.test(effectiveUserMessage)) {
-    assistantText = `You're talking to Daylens, currently routed through ${providerLabel(chatProvider)} (${chatModel}).`
-    await stream.streamText(assistantText)
-    const identityAnswerKind: AIAnswerKind = 'deterministic_stats'
+  // CLI providers can't make structured tool calls. Say so in one line and
+  // point to Settings — never silently swap providers (invariant 12).
+  if (!providerSupportsAgentTools(agentConfig.provider, agentConfig.transport)) {
+    const cliNotice = `Chat answers now come from a live agent over your real data, which needs an API provider — ${providerLabel(agentConfig.provider)} runs through a CLI and can't call tools. Pick an API provider in Settings → AI (or a per-chat model from the catalog) and ask me again.`
+    await stream.streamText(cliNotice)
     return persistTurn({
-      assistantText,
-      answerKind: identityAnswerKind,
+      assistantText: cliNotice,
+      answerKind: 'deterministic_stats',
       sourceKind: 'deterministic',
-      resolvedTemporalContext: previousContext,
-      conversationState: buildConversationState(
-        identityAnswerKind,
-        'deterministic',
-        previousContext ?? { date: new Date(), timeWindow: null, weeklyBrief: null, entity: null },
-        inferFollowUpAffordances(identityAnswerKind),
-      ),
+      conversationState: null,
       suggestedFollowUps: [],
     })
   }
 
-  {
-    const now = new Date()
-    const firstSessionRow = db
-      .prepare('SELECT MIN(start_time) as t FROM app_sessions')
-      .get() as { t: number | null } | undefined
-    const trackingStart = firstSessionRow?.t
-      ? new Date(firstSessionRow.t).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
-      : null
-
-    const plan = await planQuestion(effectiveUserMessage, sendWithProvider, { now, trackingStart, prior })
-    if (process.env.NODE_ENV === 'development') {
-      console.log(`[ai:chat] plan→resolve→phrase → provider=${chatProvider} model=${chatModel} plan=${plan.kind}`)
+  // D4 per-thread instructions + memory context (memory.md §4) ride the system
+  // prompt. Context only — the hours still come from tool results.
+  const threadInstructionBlock = threadSettings.instructions
+    ? `The user set these additional instructions for this chat. Follow them unless they conflict with grounding or honesty:\n${threadSettings.instructions}`
+    : null
+  const memoryContextBlock = (() => {
+    try {
+      return chatMemoryPromptBlock(db, userMessage) || null
+    } catch (error) {
+      console.warn('[ai:chat] memory context failed:', error)
+      return null
     }
+  })()
+  const pendingMemoryNote = memoryEnvelope
+    ? 'A memory preview is shown separately for this turn. Respond naturally, but do not claim the memory has already been saved.'
+    : null
+  const extraSystem = [threadInstructionBlock, memoryContextBlock, pendingMemoryNote]
+    .filter(Boolean).join('\n\n') || null
 
-    if (plan.kind === 'fallback') {
-      // No resolver mapped — an aside, a feeling, general chat. Answer it for
-      // real, in character, instead of streaming a capability menu (ai.md §5).
-      assistantText = await converse({
-        message: effectiveUserMessage,
-        runner: sendWithProvider,
-        prior,
-        extraSystem,
-        onDelta: (delta) => stream.push(delta),
-      })
-    } else {
-      const facts = runResolverQueries(plan.queries, db)
-      assistantText = (await phraseAnswer({
-        question: effectiveUserMessage,
-        facts,
-        runner: sendWithProvider,
-        prior,
-        extraSystem,
-        onDelta: (delta) => stream.push(delta),
-      })).trim()
-    }
+  const firstSessionRow = db
+    .prepare('SELECT MIN(start_time) as t FROM app_sessions')
+    .get() as { t: number | null } | undefined
+  const trackingStart = firstSessionRow?.t
+    ? new Date(firstSessionRow.t).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+    : null
+
+  if (process.env.NODE_ENV === 'development') {
+    console.log(`[ai:chat] agent turn → provider=${agentConfig.provider} model=${agentConfig.model}`)
   }
+
+  const requestId = payload.clientRequestId ?? null
+  const startedAt = Date.now()
+  let agentResult: Awaited<ReturnType<typeof runChatAgentTurn>>
+  try {
+    agentResult = await runChatAgentTurn(question, prior, {
+      db,
+      config: agentConfig,
+      onStreamEvent: requestId && options.onStreamEvent
+        ? (event) => options.onStreamEvent?.({ requestId, delta: event.delta, snapshot: event.snapshot, status: event.status })
+        : undefined,
+      askUser: options.onAgentQuestion
+        ?? (async () => '(No answer is available right now — pick the most defensible reading, answer it, and say in one clause what you assumed.)'),
+      artifactDir: agentArtifactDir(),
+      mcpServers: settings.mcpServers ?? [],
+      extraSystem,
+      signal: getAmbientAbortSignal() ?? undefined,
+      trackingStart,
+    })
+  } catch (error) {
+    if (!isAbortError(error)) {
+      recordChatAgentUsage({
+        config: agentConfig,
+        usage: null,
+        startedAt,
+        success: false,
+        failureReason: error instanceof Error ? error.message : String(error),
+      })
+    }
+    throw error
+  }
+  recordChatAgentUsage({ config: agentConfig, usage: agentResult.usage, startedAt, success: true })
 
   // Don't save an empty assistant response — it would corrupt future prior
   // history and cause the AI to receive empty content blocks.
-  if (!assistantText.trim()) {
+  if (!agentResult.text.trim()) {
     throw new Error('The AI returned an empty response. Please try again.')
   }
 
   const answerKind: AIAnswerKind = 'freeform_chat'
-  const resolvedTemporalContext: TemporalContext = followUpResolution.shouldReuseContext && previousContext
-    ? previousContext
-    : {
-      date: new Date(),
-      timeWindow: null,
-      weeklyBrief: null,
-      entity: null,
-    }
-  const conversationState = buildConversationState(
-    answerKind,
-    'freeform',
-    resolvedTemporalContext,
-    inferFollowUpAffordances(answerKind),
-    {
-      dateRange: inferDateRangeFromQuestion(effectiveUserMessage, followUpResolution.shouldReuseContext ? restoredState?.dateRange ?? null : null),
-      topic: followUpResolution.shouldReuseContext ? restoredState?.topic ?? null : null,
-      responseMode: followUpResolution.shouldReuseContext ? restoredState?.responseMode ?? null : null,
-      lastIntent: followUpResolution.followUpClass,
-      evidenceKey: followUpResolution.shouldReuseContext ? restoredState?.evidenceKey ?? null : null,
-    },
-  )
-  const suggestedFollowUps = await generateSuggestedFollowUps(userMessage, assistantText, answerKind, conversationState)
+  const suggestedFollowUps = await generateSuggestedFollowUps(userMessage, agentResult.text, answerKind, null)
   return persistTurn({
-    assistantText,
+    assistantText: agentResult.text,
     answerKind,
     sourceKind: 'freeform',
-    resolvedTemporalContext,
-    conversationState,
+    conversationState: null,
     suggestedFollowUps,
+    artifacts: agentResult.artifacts,
+    agent: {
+      toolTrace: agentResult.toolTrace,
+      stepCount: agentResult.stepCount,
+      groundingRetried: agentResult.groundingRetried,
+    },
   })
 }
 

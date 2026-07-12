@@ -2,8 +2,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
 import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { ensureSearchSchema } from '../src/main/db/migrations.ts'
 import { runAttributionForRange } from '../src/main/services/attribution.ts'
-import { routeInsightsQuestion } from '../src/main/lib/insightsQueryRouter.ts'
+import { executeTool } from '../src/main/services/aiTools.ts'
+import type { GetAttributionContextResult } from '../src/main/services/aiTools.ts'
 
 function localMs(year: number, month: number, day: number, hour: number, minute = 0): number {
   return new Date(year, month - 1, day, hour, minute, 0, 0).getTime()
@@ -17,6 +19,7 @@ function localDayBounds(year: number, month: number, day: number): [number, numb
 test('active browser page titles feed evidence-backed time answers', async () => {
   const db = new Database(':memory:')
   db.exec(SCHEMA_SQL)
+  ensureSearchSchema(db)
 
   const startTime = localMs(2026, 5, 1, 10, 0)
   const endTime = localMs(2026, 5, 1, 10, 45)
@@ -86,16 +89,18 @@ test('active browser page titles feed evidence-backed time answers', async () =>
   `).all() as { evidence_value: string }[]
   assert.ok(evidence.some((row) => row.evidence_value.includes('ASYV renewal budget')))
 
-  const routed = await routeInsightsQuestion(
-    'How many hours did I spend on ASYV this week?',
-    new Date(2026, 4, 3, 12, 0),
-    null,
-    db,
+  // "ASYV" has no `clients` row, so the attribution tool falls back to an
+  // inferred breakdown from activity mentioning it — never a dead-end — and
+  // the evidence it found (the ASYV renewal budget doc) must be in that
+  // breakdown, tagged as inferred rather than structured attribution.
+  const result = executeTool('getAttributionContext', { entityName: 'ASYV' }, db) as GetAttributionContextResult
+  assert.equal(result.entityType, 'unknown', 'no clients row exists for ASYV yet')
+  assert.ok(result.inferredActivity, 'expected an inferred breakdown instead of a dead-end')
+  assert.ok(
+    result.inferredActivity!.some((entry) => /ASYV renewal budget/.test(entry.label)),
+    `expected the ASYV renewal budget evidence in inferredActivity, got: ${JSON.stringify(result.inferredActivity)}`,
   )
-
-  assert.ok(routed && routed.kind === 'answer')
-  assert.match(routed.answer, /ASYV in this week \(evidence-backed\): 45m matched/)
-  assert.match(routed.answer, /Structured client\/project attribution was missing/)
+  assert.match(result.setupHint ?? '', /isn't set up as a client/)
   db.close()
 })
 

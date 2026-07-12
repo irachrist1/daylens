@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { getStreamingSnapshot, subscribeStreaming } from './streamingStore'
+import { getStreamingSnapshot, getStreamingStatus, subscribeStreaming } from './streamingStore'
 
 interface StreamingMessageProps {
   messageId: string
@@ -44,6 +44,13 @@ export function StreamingMessage({ messageId, fallback, renderContent, onSnapsho
     () => getStreamingSnapshot(messageId),
     () => '',
   )
+  // Tool-status line while the agent works ("Searching for…"), cleared as soon
+  // as answer text arrives (ADR 0003).
+  const status = useSyncExternalStore(
+    (listener) => subscribeStreaming(messageId, listener),
+    () => getStreamingStatus(messageId),
+    () => '',
+  )
 
   const [visibleSnapshot, setVisibleSnapshot] = useState(snapshot)
   const latestSnapshotRef = useRef(snapshot)
@@ -75,6 +82,15 @@ export function StreamingMessage({ messageId, fallback, renderContent, onSnapsho
     () => visibleSnapshot ? renderContent(visibleSnapshot) : fallback,
     [fallback, renderContent, visibleSnapshot],
   )
+
+  if (!visibleSnapshot && status) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, opacity: 0.7, fontSize: 13 }}>
+        <span style={{ width: 6, height: 6, borderRadius: 3, background: 'currentColor' }} />
+        <span>{status}…</span>
+      </div>
+    )
+  }
 
   return <>{renderedContent}</>
 }

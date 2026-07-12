@@ -1,98 +1,98 @@
-# Moment / watching answer-quality cases against the live Daylens DB.
-# Free: deterministic router only — no provider calls, no chat UI.
+# Chat bench cases — run against a live-DB copy through the REAL sendMessage
+# (same code path as the UI, real provider calls; ADR 0003 / ai.md §4.3).
 #
-# Ground truth: website_visits overlapping the asked clock time
-# (verified with sqlite before pinning mustContain).
+# Ground truth for the moment cases: website_visits overlapping the asked
+# clock time, verified with sqlite before pinning mustContain.
 #
-# UI linkage: chat sendMessage calls the same shouldUseRouter +
-# routeInsightsQuestion path (aiService.ts). A PASS here is the same
-# string the UI streams when the router hits.
+# turns run sequentially in ONE thread, so follow-up cases prove context
+# carrying. dataDependent cases assert only the hard guards (no begging, no
+# hedging, artifacts real) and print the answer for human judgment.
 
 cases:
+  # ── Moment questions (the exact video at that minute, never a dump) ──────
   - id: tuesday_3pm_youtube
-    question: >-
-      What was I watching on Tuesday, July 7 at 3:00pm? Name the exact video
-      title — not just YouTube or the browser.
-    referenceNow: "2026-07-12T15:30:00"
-    expectTitle: "Tuesday Watching"
+    turns:
+      - >-
+        What was I watching on Tuesday, July 7 at 3:00pm? Name the exact video
+        title — not just YouTube or the browser.
     mustContain:
       - Chinese Performance Cars
-      - watching
     mustNotContain:
       - Grades for Gentil
-      - "Pages:"
       - page titles didn't come through
-      - Top apps in that block
 
-  - id: sunday_1510_nyc_apartment
-    question: >-
-      What was I watching today at 3:10pm? Name the exact video title.
-    referenceNow: "2026-07-12T16:00:00"
-    expectTitle: "Today Watching"
-    mustContain:
-      - DREAM New York City apartment
-      - watching
+  # ── Follow-up keeps the hour and actually breaks it down ─────────────────
+  - id: tuesday_3pm_increments
+    turns:
+      - What was I watching on Tuesday, July 7 at 3:00pm? Name the exact video.
+      - Break that hour into 10-minute increments.
+    minDistinctTimes: 4
     mustNotContain:
-      - "Pages:"
       - page titles didn't come through
-      - Top apps in that block
 
   - id: sunday_1445_run_faster
-    question: >-
-      What was I watching on Sunday, July 12 at 2:45pm? Exact video title.
-    referenceNow: "2026-07-12T16:00:00"
-    expectTitle: "Sunday Watching"
+    turns:
+      - What was I watching on Sunday, July 12 at 2:45pm? Exact video title.
     mustContain:
       - Smartest Way To Run Faster
-      - watching
     mustNotContain:
-      - "Pages:"
       - DREAM New York City apartment
 
   - id: saturday_1000_build_this
-    question: >-
-      What was I watching on Saturday, July 11 at 10:00am? Name the video.
-    referenceNow: "2026-07-12T16:00:00"
-    expectTitle: "Saturday Watching"
+    turns:
+      - What was I watching on Saturday, July 11 at 10:00am? Name the video.
     mustContain:
       - If I was 25 with $0
-      - watching
     mustNotContain:
-      - "Pages:"
-      - page titles didn't come through
       - nothing was foregrounded
 
-  - id: saturday_1300_uganda
-    question: >-
-      What was I watching on July 11 at 1:00pm? Exact title please.
-    referenceNow: "2026-07-12T16:00:00"
-    expectTitle: "Watching"
-    mustContain:
-      - Geography Facts About Uganda
-      - watching
-    mustNotContain:
-      - "Pages:"
-      - Top apps in that block
-      - Weekend Long Read
-      - " today "
   - id: thursday_1300_meet
-    question: >-
-      What was I looking at on Thursday, July 9 at 1:00pm? Name the exact page.
-    referenceNow: "2026-07-12T16:00:00"
-    expectTitle: "Thursday Page"
+    turns:
+      - What was I looking at on Thursday, July 9 at 1:00pm? Name the exact page.
     mustContain:
       - Machine Learning Pipeline
-    mustNotContain:
-      - "Pages:"
-      - page titles didn't come through
 
   - id: friday_1650_hackathon
-    question: >-
-      What page was I on Friday, July 10 at 4:50pm? Exact title.
-    referenceNow: "2026-07-12T16:00:00"
-    expectTitle: "Friday Page"
+    turns:
+      - What page was I on Friday, July 10 at 4:50pm? Exact title.
     mustContain:
       - Frontiers PAIO Hackathon
+
+  # ── Fuzzy link recall ─────────────────────────────────────────────────────
+  - id: recall_uganda_link
+    turns:
+      - >-
+        That geography video about Uganda I watched on July 11 — find me the
+        link.
+    mustContain:
+      - Uganda
+      - http
+
+  # ── Excel export (a real file, not a wall of rows) ───────────────────────
+  - id: youtube_month_excel
+    turns:
+      - >-
+        Give me an Excel of all YouTube videos I watched this month: video
+        title, total time on it, and how many visits.
+    expectArtifactFormat: xlsx
+
+  # ── Podcasts (judgment on top of evidence, honest about limits) ──────────
+  - id: podcasts_month
+    dataDependent: true
+    turns:
+      - What podcasts did I listen to this month?
+    userAnswer: Include YouTube video podcasts too
+
+  # ── Shipped work (Daylens activity + git) ────────────────────────────────
+  - id: shipped_this_month
+    dataDependent: true
+    turns:
+      - What did I ship this month? Check my actual commits where you can.
+
+  # ── Aside stays warm, no tools, no capability menu ───────────────────────
+  - id: greeting
+    turns:
+      - hey, how's it going?
     mustNotContain:
-      - "Pages:"
-      - page titles didn't come through
+      - get_day_overview
+      - "I can help you with"

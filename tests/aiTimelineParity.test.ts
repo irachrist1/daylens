@@ -1,11 +1,11 @@
 // ai.md invariant 6: "Every number in the AI tab matches the Timeline — they
-// read the same blocks and can't disagree." aiResolvers.test.ts proves the
-// resolvers return real numbers; this file proves the harder thing — that a
-// number the AI would SAY (time on an app for a day, the day's total) is the
+// read the same blocks and can't disagree." This file proves the harder
+// thing — that a number the AI would SAY (time on an app for a day) is the
 // SAME number the Timeline shows for that day, computed by an independent path.
 //
-//   AI side:       getApp / getDay resolvers → getAppSummariesForRange
-//   Timeline side: buildTimelineBlocksFromSessions → block.topApps / active secs
+//   AI side:       executeTool('getDaySummary', ...) → _evidence.topApps
+//                   (getAppSummariesForRange)
+//   Timeline side: buildTimelineBlocksFromSessions → block.topApps
 //
 // Two different aggregations over the one store. If they ever drift, this fails.
 import test from 'node:test'
@@ -13,8 +13,8 @@ import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
 import { SCHEMA_SQL } from '../src/main/db/schema.ts'
 import { ensureSearchSchema } from '../src/main/db/migrations.ts'
-import { runResolverQuery } from '../src/main/ai/resolvers.ts'
-import type { GetAppUsageResult } from '../src/main/services/aiTools.ts'
+import { executeTool } from '../src/main/services/aiTools.ts'
+import type { DaySummaryResult } from '../src/main/services/aiTools.ts'
 import { buildTimelineBlocksFromSessions } from '../src/main/services/workBlocks.ts'
 import { getSessionsForRange } from '../src/main/db/queries.ts'
 import { localDayBounds } from '../src/main/lib/localDate.ts'
@@ -67,15 +67,16 @@ function timelineSecondsForApp(db: Database.Database, date: Date, appNameRe: Reg
     sum + block.topApps.filter((a) => appNameRe.test(a.appName)).reduce((s, a) => s + a.totalSeconds, 0), 0)
 }
 
-test('invariant 6: AI getApp(Cursor, day) equals the Timeline Cursor total for that day', (t) => {
+test('invariant 6: AI getDaySummary(day) Cursor total equals the Timeline Cursor total for that day', (t) => {
   const db = setupDb()
   t.after(() => db.close())
   const { date, cursorSeconds } = seedDay(db)
   const day = dateStr(date)
 
-  const fact = runResolverQuery({ resolver: 'getApp', app: 'Cursor', from: day, to: day }, db)
-  assert.equal(fact.isEmpty, false)
-  const aiSeconds = (fact.data as GetAppUsageResult).totalSeconds
+  const summary = executeTool('getDaySummary', { date: day }, db) as DaySummaryResult
+  const cursorApp = summary._evidence.topApps.find((app) => /cursor/i.test(app.appName))
+  assert.ok(cursorApp, 'expected Cursor in the AI day summary top apps')
+  const aiSeconds = cursorApp!.totalSeconds
 
   const timelineSeconds = timelineSecondsForApp(db, date, /cursor/i)
 
@@ -92,12 +93,24 @@ test('invariant 6: parity holds for a second app (Chrome) on the same day', (t) 
   const { date } = seedDay(db)
   const day = dateStr(date)
 
-  const fact = runResolverQuery({ resolver: 'getApp', app: 'Chrome', from: day, to: day }, db)
-  assert.equal(fact.isEmpty, false)
-  const aiSeconds = (fact.data as GetAppUsageResult).totalSeconds
+  const summary = executeTool('getDaySummary', { date: day }, db) as DaySummaryResult
+  const chromeApp = summary._evidence.topApps.find((app) => /chrome/i.test(app.appName))
+  assert.ok(chromeApp, 'expected Chrome in the AI day summary top apps')
+  const aiSeconds = chromeApp!.totalSeconds
 
   const timelineSeconds = timelineSecondsForApp(db, date, /chrome/i)
 
   assert.equal(aiSeconds, timelineSeconds, 'AI Chrome total must equal the Timeline Chrome total')
   assert.ok(aiSeconds > 0, 'Chrome was used, so the number is real')
+})
+
+test('invariant 6: getDaySummary totalTrackedSeconds equals the sum of its own block durations', (t) => {
+  const db = setupDb()
+  t.after(() => db.close())
+  const { date } = seedDay(db)
+  const day = dateStr(date)
+
+  const summary = executeTool('getDaySummary', { date: day }, db) as DaySummaryResult
+  const blockSum = summary.blocks.reduce((sum, block) => sum + block.durationSeconds, 0)
+  assert.equal(summary.totalTrackedSeconds, blockSum, 'the day total must always equal the sum of the blocks the Timeline renders')
 })

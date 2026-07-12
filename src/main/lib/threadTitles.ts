@@ -218,6 +218,23 @@ function intentTitleFromPrompt(message: string): string | null {
     if (tf) return `${tf} focus`
   }
 
+  // Podcasts / listening questions ("what podcasts did I listen to this month")
+  // must become a topic phrase, never the clipped question.
+  if (/\bpodcasts?\b/.test(normalized)) {
+    const tf = topicTimeAnchor(normalized)
+    return tf ? `Podcasts ${tf.toLowerCase()}` : 'Podcasts'
+  }
+  if (/\blisten(?:ed|ing)?\b/.test(normalized)) {
+    const tf = topicTimeAnchor(normalized)
+    return tf ? `${tf} listening` : 'Listening'
+  }
+
+  // "What did I ship / build / commit this month" → "Shipped this month".
+  if (/\bship(?:ped|ping)?\b/.test(normalized) || /\bcommit(?:s|ted)?\b/.test(normalized)) {
+    const tf = topicTimeAnchor(normalized)
+    return tf ? `Shipped ${tf.toLowerCase()}` : 'Shipped'
+  }
+
   if (/\bexport\b|\bdownload\b/.test(normalized)) {
     return prefix ? `${prefix} export` : 'Export'
   }

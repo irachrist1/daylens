@@ -1,10 +1,8 @@
-// Resolver bodies for the AI tab (ADR 0002). The `exec*` functions are the
-// deterministic data functions the app owns; they're wrapped by the typed
-// resolver set in `ai/resolvers.ts` (getDay/getRange/getApp/getBlockAtTime/
-// recall/getAttribution/listClients). The model never executes them — it only
-// selects/parameterizes (the planner) and phrases their output. The old
-// model-facing tool schemas + agentic tool-loop were deleted with DEV-90.
-// `executeTool` remains as a typed name→resolver dispatch for tests/the MCP layer.
+// Deterministic tool bodies the app owns. The chat agent (ADR 0003) wraps the
+// `exec*` functions as its Daylens tools via `agent/daylensTools.ts`, and the
+// MCP server exposes them to external clients. `executeTool` is the typed
+// name→body dispatch both go through — it applies the tracking-exclusion
+// filter and the secret sanitizer to every result.
 import type Database from 'better-sqlite3'
 import {
   searchSessions as dbSearchSessions,

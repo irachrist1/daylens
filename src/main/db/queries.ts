@@ -495,6 +495,7 @@ function mapAIThreadMessage(
     actions: metadata.actions ?? [],
     actionWidgets: metadata.actionWidgets ?? [],
     artifacts: metadata.artifacts ?? [],
+    agent: metadata.agent,
     rating,
     ratingUpdatedAt,
   }
@@ -1524,6 +1525,7 @@ export function appendConversationMessage(
     actions: metadata?.actions ?? [],
     actionWidgets: metadata?.actionWidgets ?? [],
     artifacts: metadata?.artifacts ?? [],
+    agent: metadata?.agent,
     rating: metadata?.rating ?? null,
     ratingUpdatedAt: metadata?.ratingUpdatedAt ?? null,
   }

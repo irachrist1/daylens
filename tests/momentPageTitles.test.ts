@@ -4,12 +4,10 @@ import Database from 'better-sqlite3'
 import { SCHEMA_SQL } from '../src/main/db/schema.ts'
 import { ensureSearchSchema } from '../src/main/db/migrations.ts'
 import {
-  formatMomentPageEvidence,
+  getMomentEvidence,
+  getVisitsOverlappingMoment,
   resolveMomentPageEvidence,
-  routeInsightsQuestion,
-  shouldUseRouter,
-  type TemporalContext,
-} from '../src/main/lib/insightsQueryRouter.ts'
+} from '../src/main/lib/momentEvidence.ts'
 
 function setupDb(): Database.Database {
   const db = new Database(':memory:')
@@ -163,8 +161,8 @@ function seedYoutubeAfternoon(db: Database.Database, day: Date): void {
   )
 }
 
-test('formatMomentPageEvidence prefers real video titles over bare YouTube chrome', () => {
-  const line = formatMomentPageEvidence([
+test('resolveMomentPageEvidence prefers real video titles over bare YouTube chrome', () => {
+  const resolved = resolveMomentPageEvidence([
     { pageTitle: 'YouTube', displayTitle: 'YouTube', host: 'youtube.com', domain: 'youtube.com', totalSeconds: 30 },
     {
       pageTitle: 'I Found Out Why Chinese Performance Cars Are Taking Over - YouTube',
@@ -174,16 +172,17 @@ test('formatMomentPageEvidence prefers real video titles over bare YouTube chrom
       totalSeconds: 1200,
     },
   ])
-  assert.ok(line)
-  assert.match(line!, /Chinese Performance Cars/)
-  assert.doesNotMatch(line!, /^Pages: "YouTube"/)
+  assert.ok(resolved)
+  assert.match(resolved!.title, /Chinese Performance Cars/)
+  assert.notEqual(resolved!.title, 'YouTube')
 })
 
-test('formatMomentPageEvidence says no title when only site chrome exists', () => {
-  const line = formatMomentPageEvidence([
+test('resolveMomentPageEvidence says no title when only site chrome exists', () => {
+  const resolved = resolveMomentPageEvidence([
     { pageTitle: '(26) YouTube', displayTitle: '(26) YouTube', host: 'youtube.com', domain: 'youtube.com' },
   ])
-  assert.equal(line, 'Pages: youtube.com (no specific page title captured).')
+  assert.ok(resolved)
+  assert.equal(resolved!.title, 'youtube.com (no specific page title captured)')
 })
 
 test('resolveMomentPageEvidence prefers the visit covering the clock time over longer block pages', () => {
@@ -222,59 +221,62 @@ test('resolveMomentPageEvidence prefers the visit covering the clock time over l
   assert.doesNotMatch(resolved!.title, /Grades|Smart Home/)
 })
 
-test('moment answer names the video active at 3pm, not every page in the block', async () => {
+test('getVisitsOverlappingMoment returns the visit actually covering the asked minute', () => {
+  const db = setupDb()
+  const day = new Date(2026, 6, 7, 12, 0, 0, 0)
+  seedYoutubeAfternoon(db, day)
+  const momentMs = localMs(day, 15, 0)
+  const overlapping = getVisitsOverlappingMoment(db, momentMs)
+  assert.ok(overlapping.length > 0)
+  assert.equal(overlapping[0].pageTitle, 'I Found Out Why Chinese Performance Cars Are Taking Over - YouTube')
+  db.close()
+})
+
+test('getMomentEvidence names the video active at 3pm, not every page in the block', () => {
   const db = setupDb()
   // Past day so persisted blocks load instead of live provisional rebuild.
   const day = new Date(2026, 6, 7, 12, 0, 0, 0)
   seedYoutubeAfternoon(db, day)
-  const routed = await routeInsightsQuestion(
-    'What was I watching on Tuesday, July 7 at 3:00pm? Name the exact video title — not just YouTube or the browser.',
-    new Date(2026, 6, 12, 14, 30),
-    null,
-    db,
+  const evidence = getMomentEvidence(db, dateStr(day), '15:00')
+
+  assert.equal(evidence.found, true)
+  assert.ok(evidence.activePage, 'expected the single active page at 3pm')
+  assert.match(evidence.activePage!.title, /Chinese Performance Cars/)
+  assert.equal(evidence.activePage!.verb, 'watching')
+  // Never the whole block's pages — the other pages must not become the answer.
+  assert.doesNotMatch(evidence.activePage!.title, /Grades for Gentil/)
+  assert.doesNotMatch(evidence.activePage!.title, /Smart Home/)
+
+  assert.ok(evidence.coveringBlock, 'expected the covering timeline block')
+  assert.ok(
+    evidence.coveringBlock!.topApps.some((app) => app.appName === 'Dia'),
+    `expected Dia in the covering block's top apps, got: ${evidence.coveringBlock!.topApps.map((a) => a.appName).join(', ')}`,
   )
-  assert.ok(routed)
-  assert.equal(routed!.kind, 'answer')
-  if (routed!.kind !== 'answer') throw new Error('unreachable')
-  assert.match(routed.answer, /Chinese Performance Cars/)
-  assert.match(routed.answer, /watching/i)
-  assert.match(routed.answer, /Dia/)
-  assert.doesNotMatch(routed.answer, /Grades for Gentil/)
-  assert.doesNotMatch(routed.answer, /Smart Home/)
-  assert.doesNotMatch(routed.answer, /Pages:/)
-  assert.doesNotMatch(routed.answer, /Top apps in that block/)
   db.close()
 })
 
-test('Watching exactly what? reuses prior moment window and names the video', async () => {
-  assert.equal(shouldUseRouter('Watching exactly what?'), true)
-
+test('getMomentEvidence resolves an active page from visits even with no covering timeline block', () => {
   const db = setupDb()
-  const tuesday = new Date(2026, 6, 7, 12, 0, 0, 0)
-  seedYoutubeAfternoon(db, tuesday)
-  const previous: TemporalContext = {
-    date: new Date(2026, 6, 7),
-    timeWindow: {
-      start: new Date(2026, 6, 7, 14, 50),
-      end: new Date(2026, 6, 7, 15, 10),
-    },
-    weeklyBrief: null,
-    entity: null,
-  }
-  const routed = await routeInsightsQuestion(
-    'Watching exactly what?',
-    new Date(2026, 6, 12, 14, 30),
-    previous,
-    db,
+  const day = new Date(2026, 6, 8, 12, 0, 0, 0)
+  // No timeline_blocks row for this day — only a raw website visit.
+  db.prepare(`
+    INSERT INTO website_visits (
+      domain, page_title, url, visit_time, visit_time_us, duration_sec,
+      browser_bundle_id, source
+    ) VALUES (?, ?, ?, ?, ?, ?, 'company.thebrowser.dia', 'history')
+  `).run(
+    'youtube.com',
+    'I Found Out Why Chinese Performance Cars Are Taking Over - YouTube',
+    'https://www.youtube.com/watch?v=DJ6yw3js7lI',
+    localMs(day, 15, 0),
+    localMs(day, 15, 0) * 1000,
+    120,
   )
-  assert.ok(routed)
-  assert.equal(routed!.kind, 'answer')
-  if (routed!.kind !== 'answer') throw new Error('unreachable')
-  assert.match(routed.answer, /Chinese Performance Cars/)
-  assert.doesNotMatch(routed.answer, /Grades for Gentil/)
-  assert.equal(routed.resolvedContext.date.getFullYear(), 2026)
-  assert.equal(routed.resolvedContext.date.getMonth(), 6)
-  assert.equal(routed.resolvedContext.date.getDate(), 7)
-  assert.ok(routed.resolvedContext.timeWindow)
+  const evidence = getMomentEvidence(db, dateStr(day), '15:01')
+
+  assert.equal(evidence.found, true)
+  assert.ok(evidence.activePage, 'expected the visit to resolve to an active page')
+  assert.match(evidence.activePage!.title, /Chinese Performance Cars/)
+  assert.equal(evidence.coveringBlock, null, 'no timeline block was seeded, so there is no covering block')
   db.close()
 })

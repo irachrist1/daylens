@@ -12,6 +12,7 @@ import type {
   AppSettings,
   BillingAccessSnapshot,
   FocusSession,
+  AIAgentQuestionEvent,
 } from '@shared/types'
 import { useProjectionResource } from '../../hooks/useProjectionResource'
 import { track } from '../../lib/analytics'
@@ -104,6 +105,8 @@ export function useAIChat() {
   const [messageActionState, setMessageActionState] = useState<Record<string, MessageActionStateEntry>>({})
   const [actionWidgetState, setActionWidgetState] = useState<Record<string, ActionWidgetStateEntry>>({})
   const [reducedMotion, setReducedMotion] = useState(false)
+  // The agent's pending clarifying question (ADR 0003), if any.
+  const [agentQuestion, setAgentQuestion] = useState<AIAgentQuestionEvent | null>(null)
 
   const loadingRef = useRef(false)
   loadingRef.current = loading
@@ -224,6 +227,23 @@ export function useAIChat() {
     ? activeThread.title
     : null
 
+  const answerAgentQuestion = useCallback(async (answer: string) => {
+    const pending = agentQuestion
+    if (!pending) return
+    setAgentQuestion(null)
+    try {
+      await ipc.ai.answerAgentQuestion({ questionId: pending.questionId, answer })
+    } catch {
+      // The turn may have finished or been cancelled; nothing to recover.
+    }
+  }, [agentQuestion])
+
+  const dismissAgentQuestion = useCallback(() => {
+    // Dismissing tells the agent to proceed with its best reading rather than
+    // leaving the turn paused until the timeout.
+    void answerAgentQuestion('(Dismissed — pick the most defensible reading, answer it, and say in one clause what you assumed.)')
+  }, [answerAgentQuestion])
+
   const analyticsContext = useCallback((extra: Record<string, unknown> = {}) => ({
     has_ai_provider: Boolean(hasApiKey),
     ...(activeModel ? { model: activeModel } : {}),
@@ -245,7 +265,15 @@ export function useAIChat() {
           patterns_hit: report.patternsHit,
         })
       }
-      setStreamingSnapshot(`assistant:${event.requestId}`, safeSnapshot)
+      setStreamingSnapshot(`assistant:${event.requestId}`, safeSnapshot, event.status)
+    })
+  }, [])
+
+  // The agent's clarifying question (ADR 0003): shown as a card; answering
+  // resumes the paused turn in main. Cleared when the turn ends either way.
+  useEffect(() => {
+    return ipc.ai.onAgentQuestion((event) => {
+      setAgentQuestion(event)
     })
   }, [])
 
@@ -507,6 +535,7 @@ export function useAIChat() {
       // R3: flip the pending row to the final answer FIRST. The visible
       // completion must not be gated on the thread-list refresh that follows —
       // that ordering was why answers only appeared after navigating away.
+      setAgentQuestion(null)
       setMessages((current) => completeTurn(current, assistantId, response.assistantMessage))
       track(ANALYTICS_EVENT.AI_QUERY_ANSWERED, analyticsContext({
         answer_kind: response.assistantMessage.answerKind ?? null,
@@ -547,6 +576,7 @@ export function useAIChat() {
         autoRetryCount,
         alternateProvidersRef.current,
       )
+      setAgentQuestion(null)
       setMessages((current) => failTurn(
         current,
         assistantId,
@@ -594,6 +624,7 @@ export function useAIChat() {
     inFlightTurnRef.current = null
     cancelledRequestsRef.current.add(inFlight.requestId)
     void ipc.ai.cancelMessage(inFlight.requestId).catch(() => { /* turn may already be settling */ })
+    setAgentQuestion(null)
     setMessages((current) => cancelTurn(current, inFlight.assistantId))
     clearStreamingSnapshot(inFlight.assistantId)
     // Free the composer immediately; the aborted promise settles in the
@@ -918,6 +949,7 @@ export function useAIChat() {
     messageActionState,
     actionWidgetState,
     reducedMotion,
+    agentQuestion,
     latestCompletedAssistantId,
     // resource status (for the load gate + ConnectAI refresh)
     initialLoading: providerResource.loading && !providerResource.data,
@@ -946,6 +978,8 @@ export function useAIChat() {
     switchProviderAndRetry,
     alternateProviders,
     transformAnswer,
+    answerAgentQuestion,
+    dismissAgentQuestion,
     providerAvailability,
     analyticsContext,
   }
