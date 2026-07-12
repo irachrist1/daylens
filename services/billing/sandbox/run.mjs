@@ -22,6 +22,25 @@ if (process.env.NODE_ENV === 'production') {
   process.exit(1)
 }
 
+// ── Store mode ──────────────────────────────────────────────────────────────
+// Default: the in-memory pg-shim (no Postgres). Set BILLING_SANDBOX_DATABASE_URL
+// to a THROWAWAY real Postgres database to run the same checks against genuine
+// row locking and READ COMMITTED — the real-Postgres verification the shim's
+// global transaction serialization cannot substitute for. Guarded so it can
+// never point at a production database: the database name must contain
+// "sandbox", "verify", or "test", and its billing tables are truncated at boot.
+const REAL_DB_URL = process.env.BILLING_SANDBOX_DATABASE_URL || null
+let realDbName = null
+if (REAL_DB_URL) {
+  realDbName = new URL(REAL_DB_URL).pathname.replace(/^\//, '')
+  if (!/sandbox|verify|test/i.test(realDbName)) {
+    console.error(
+      `Refusing BILLING_SANDBOX_DATABASE_URL: database "${realDbName}" must contain "sandbox", "verify", or "test" — never a production database.`,
+    )
+    process.exit(1)
+  }
+}
+
 const randHex = () => crypto.randomBytes(6).toString('hex')
 const randSecret = () => crypto.randomBytes(48).toString('base64')
 
@@ -122,7 +141,7 @@ const BASE = `http://127.0.0.1:${PORT}`
 process.env.NODE_ENV = 'development'
 process.env.PORT = String(PORT)
 process.env.PUBLIC_BASE_URL = BASE
-process.env.DATABASE_URL = 'postgres://sandbox/in-memory'
+process.env.DATABASE_URL = REAL_DB_URL ?? 'postgres://sandbox/in-memory'
 process.env.SESSION_SECRET = randSecret()
 process.env.INSTALLATION_HASH_SECRET = randSecret()
 process.env.LITELLM_KEY_ENCRYPTION_SECRET = randSecret()
@@ -145,9 +164,64 @@ process.env.INTERCOM_IDENTITY_VERIFICATION_SECRET = randSecret()
 const LOCAL_PASS_RWF = Number(process.env.FLUTTERWAVE_LOCAL_PASS_RWF)
 
 const fakeServer = await startFakeUpstream(UPSTREAM)
-register('./loader.mjs', import.meta.url) // map `pg` -> in-memory shim
+
+// `store` adapts the few checks that reach behind the HTTP API (19, 26, 27) to
+// whichever backend is running; everything else goes through the API only.
+let store
+if (REAL_DB_URL) {
+  const { default: pg } = await import('pg')
+  const adminPool = new pg.Pool({
+    connectionString: REAL_DB_URL,
+    max: 2,
+    // A sandbox run must fail loudly, never sit on a lock forever.
+    options: '-c statement_timeout=30000 -c lock_timeout=15000',
+  })
+  // This is a throwaway database (name-guarded above): evict orphaned backends
+  // from earlier killed runs so their stale locks cannot block the reset below.
+  await adminPool.query(
+    'SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()',
+  )
+  const schemaSql = await readFile(new URL('../schema.sql', import.meta.url), 'utf8')
+  await adminPool.query(schemaSql)
+  await adminPool.query(
+    'TRUNCATE billing_usage, billing_payment_events, billing_polar_subscriptions, billing_payment_intents, billing_bootstrap_attempts, billing_accounts CASCADE',
+  )
+  store = {
+    label: `real Postgres (database "${realDbName}")`,
+    canInjectWriteFailure: false,
+    failNextWriteContaining() {},
+    async revokeAccountTokens(accountId) {
+      await adminPool.query('UPDATE billing_accounts SET tokens_revoked_at = now(), updated_at = now() WHERE id = $1', [accountId])
+    },
+    async polarSubscriptionId(accountId) {
+      const { rows } = await adminPool.query('SELECT polar_subscription_id FROM billing_accounts WHERE id = $1', [accountId])
+      return rows[0]?.polar_subscription_id ?? null
+    },
+    async close() {
+      await adminPool.end()
+    },
+  }
+} else {
+  register('./loader.mjs', import.meta.url) // map `pg` -> in-memory shim
+}
 await import('../src/server.mjs') // boots and listens on PORT
-const { sandboxControl, sandboxState } = await import('./pg-shim.mjs')
+if (!REAL_DB_URL) {
+  const { sandboxControl, sandboxState } = await import('./pg-shim.mjs')
+  store = {
+    label: 'in-memory pg-shim (no Postgres, no Docker)',
+    canInjectWriteFailure: true,
+    failNextWriteContaining(fragment) {
+      sandboxControl.failNextContaining = fragment
+    },
+    async revokeAccountTokens(accountId) {
+      sandboxState.accounts.get(accountId).tokens_revoked_at = new Date()
+    },
+    async polarSubscriptionId(accountId) {
+      return sandboxState.accounts.get(accountId)?.polar_subscription_id ?? null
+    },
+    async close() {},
+  }
+}
 
 // Wait for /health.
 for (let i = 0; i < 100; i++) {
@@ -220,7 +294,7 @@ async function managedCall(session, feature = 'chat') {
       // ignore non-JSON SSE lines
     }
   }
-  return { status: res.status, cost, content }
+  return { status: res.status, cost, content, raw: text }
 }
 
 function polarSignature(secret, id, ts, raw) {
@@ -295,7 +369,7 @@ function check(n, title, passed, detail) {
 console.log(`\nDaylens billing sandbox`)
 console.log(`  billing service : ${BASE}`)
 console.log(`  fake upstreams  : http://127.0.0.1:${UPSTREAM} (LiteLLM + Polar + Flutterwave)`)
-console.log(`  store           : in-memory pg-shim (no Postgres, no Docker)\n`)
+console.log(`  store           : ${store.label}\n`)
 
 try {
   // 1 — fresh install shows $5
@@ -437,7 +511,18 @@ try {
   const raceSessionB = (await api('/v1/ai/session', { method: 'POST', token: tokenRace, body: {} })).json
   const raceCalls = await Promise.all([managedCall(raceSessionA, 'race'), managedCall(raceSessionB, 'race')])
   const raceBill = await api('/v1/billing', { token: tokenRace })
-  check(16, 'Concurrent AI calls cannot both spend the same free-credit balance', raceCalls.filter((call) => call.status === 200).length === 1 && raceCalls.some((call) => call.status === 402) && raceBill.json.creditRemainingUsd === 0, `statuses=${raceCalls.map((call) => call.status).join(',')}, remaining=$${raceBill.json.creditRemainingUsd}`)
+  const raceLoser = raceCalls.find((call) => call.status !== 200)
+  const raceRetry = await managedCall(raceSessionA, 'race')
+  check(
+    16,
+    'Concurrent AI calls cannot both spend the same free-credit balance',
+    raceCalls.filter((call) => call.status === 200).length === 1
+      && raceLoser?.status === 409
+      && /"retryable":\s*true/.test(raceLoser?.raw || '')
+      && raceBill.json.creditRemainingUsd === 0
+      && raceRetry.status === 402,
+    `statuses=${raceCalls.map((call) => call.status).join(',')} (loser must be a retryable 409, not "paused"), remaining=$${raceBill.json.creditRemainingUsd}, retry-after-drain=${raceRetry.status}`,
+  )
 
   const tokenConcurrentPayment = await bootstrapInstall('flutterwave-race')
   await api('/v1/checkout/flutterwave', { method: 'POST', token: tokenConcurrentPayment, body: { email: 'sandbox-race@daylens.test' } })
@@ -455,15 +540,19 @@ try {
   const aliases = (text) => [...text.matchAll(/^\s*- model_name:\s*(\S+)/gm)].map((match) => match[1]).sort().join(',')
   check(18, 'Railway LiteLLM config exposes every reviewed model alias', aliases(rootConfig) === aliases(deployedConfig) && aliases(deployedConfig).includes('daylens-economy'), `root=${aliases(rootConfig)}, deployed=${aliases(deployedConfig)}`)
 
-  const tokenCrash = await bootstrapInstall('flutterwave-crash')
-  await api('/v1/checkout/flutterwave', { method: 'POST', token: tokenCrash, body: { email: 'sandbox-crash@daylens.test' } })
-  const crashAccount = accountIdFromToken(tokenCrash)
-  sandboxControl.failNextContaining = "UPDATE billing_accounts SET plan = 'local_pass'"
-  const crashedHook = await sendFlutterwaveWebhook('flw-crash-event', crashAccount)
-  const crashBill = await api('/v1/billing', { token: tokenCrash })
-  const retriedHook = await sendFlutterwaveWebhook('flw-crash-event', crashAccount)
-  const recoveredBill = await api('/v1/billing', { token: tokenCrash })
-  check(19, 'Flutterwave fulfillment rolls back fully and the same delivery recovers after a crash', crashedHook.status === 500 && crashBill.json.mode === 'free_credit' && retriedHook.status === 200 && recoveredBill.json.mode === 'local_pass', `crash=${crashedHook.status}/${crashBill.json.mode}, retry=${retriedHook.status}/${recoveredBill.json.mode}`)
+  if (store.canInjectWriteFailure) {
+    const tokenCrash = await bootstrapInstall('flutterwave-crash')
+    await api('/v1/checkout/flutterwave', { method: 'POST', token: tokenCrash, body: { email: 'sandbox-crash@daylens.test' } })
+    const crashAccount = accountIdFromToken(tokenCrash)
+    store.failNextWriteContaining("UPDATE billing_accounts SET plan = 'local_pass'")
+    const crashedHook = await sendFlutterwaveWebhook('flw-crash-event', crashAccount)
+    const crashBill = await api('/v1/billing', { token: tokenCrash })
+    const retriedHook = await sendFlutterwaveWebhook('flw-crash-event', crashAccount)
+    const recoveredBill = await api('/v1/billing', { token: tokenCrash })
+    check(19, 'Flutterwave fulfillment rolls back fully and the same delivery recovers after a crash', crashedHook.status === 500 && crashBill.json.mode === 'free_credit' && retriedHook.status === 200 && recoveredBill.json.mode === 'local_pass', `crash=${crashedHook.status}/${crashBill.json.mode}, retry=${retriedHook.status}/${recoveredBill.json.mode}`)
+  } else {
+    check(19, 'Flutterwave fulfillment rolls back fully and the same delivery recovers after a crash', null, 'Needs the shim\'s write-failure injection — covered by the default in-memory run. This real-Postgres run instead proves genuine row locking in checks 16, 17, 21, and 25.')
+  }
 
   const tokenHeaderId = await bootstrapInstall('polar-header-id')
   const headerIdAccount = accountIdFromToken(tokenHeaderId)
@@ -515,8 +604,7 @@ try {
   check(25, 'Concurrent installation-token rotations issue exactly one current token', simultaneousRotations.filter((result) => result.status === 200).length === 1 && simultaneousRotations.some((result) => [401, 409].includes(result.status)), `statuses=${simultaneousRotations.map((result) => result.status).join(',')}`)
 
   const revokedFixture = await bootstrapFixture('server-revoked')
-  const revokedAccount = sandboxState.accounts.get(accountIdFromToken(revokedFixture.token))
-  revokedAccount.tokens_revoked_at = new Date()
+  await store.revokeAccountTokens(accountIdFromToken(revokedFixture.token))
   const revokedBearer = await api('/v1/billing', { token: revokedFixture.token })
   const revokedBootstrap = await api('/v1/installations/bootstrap', { method: 'POST', body: { installationId: revokedFixture.installationId } })
   check(26, 'Server-revoked installations cannot mint fresh bearer tokens', revokedBearer.status === 401 && revokedBootstrap.status === 403, `bearer=${revokedBearer.status}, bootstrap=${revokedBootstrap.status}`)
@@ -533,8 +621,27 @@ try {
   const newSubscriptionBill = await api('/v1/billing', { token: scopedToken })
   await sendPolarWebhook(`polar-a-after-b-${randHex()}`, 'subscription.active', scopedAccount, { subscriptionId: subA, occurredAt: new Date(Date.now() + 2000) })
   const oldSubscriptionAfterNewBill = await api('/v1/billing', { token: scopedToken })
-  const currentSubscriptionId = sandboxState.accounts.get(scopedAccount)?.polar_subscription_id
+  const currentSubscriptionId = await store.polarSubscriptionId(scopedAccount)
   check(27, 'Polar terminal ordering is scoped to one subscription ID', sameSubscriptionBill.json.mode !== 'subscription' && newSubscriptionBill.json.mode === 'subscription' && oldSubscriptionAfterNewBill.json.mode === 'subscription' && currentSubscriptionId === subB, `same=${sameSubscriptionBill.json.mode}, new=${newSubscriptionBill.json.mode}, after-old=${oldSubscriptionAfterNewBill.json.mode}, current=${currentSubscriptionId}`)
+
+  // The left side of X-Forwarded-For is attacker-writable; the trusted proxy
+  // appends the real client on the right. Rotating fake left entries with one
+  // constant rightmost "real" IP must still trip the 20/hour bootstrap limit.
+  const spoofStatuses = []
+  for (let i = 0; i < 21; i++) {
+    const spoofed = await api('/v1/installations/bootstrap', {
+      method: 'POST',
+      body: { installationId: `sandbox-install-xff-${i}-${randHex()}${randHex()}` },
+      headers: { 'x-forwarded-for': `10.66.${i}.${i}, 203.0.113.7` },
+    })
+    spoofStatuses.push(spoofed.status)
+  }
+  check(
+    28,
+    'Spoofed X-Forwarded-For entries cannot evade the bootstrap rate limit',
+    spoofStatuses.filter((status) => status === 200).length <= 20 && spoofStatuses[20] === 429,
+    `bootstraps=${spoofStatuses.filter((s) => s === 200).length} allowed, 21st=${spoofStatuses[20]}`,
+  )
 } catch (error) {
   console.error('\nSandbox run threw:', error)
   results.push({ n: -1, title: 'harness', passed: false, detail: String(error) })
@@ -547,4 +654,5 @@ const skipped = results.filter((r) => r.passed === null)
 console.log(`\n  ${passed.length} passed, ${failed.length} failed, ${skipped.length} skipped\n`)
 
 fakeServer.close()
+await store.close()
 process.exit(failed.length === 0 ? 0 : 1)

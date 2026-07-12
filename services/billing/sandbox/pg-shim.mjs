@@ -193,8 +193,12 @@ function run(text, params = []) {
     const row = db.accounts.get(p[2])
     if (!row || Number(row.free_credit_remaining_micros) < Number(p[0])) return { rows: [] }
     row.free_credit_remaining_micros -= Number(p[0])
-    row.spend_reserved_micros = 0
-    row.spend_reserved_until = null
+    // Mirror the production CASE: only the reservation this call made ($2) is
+    // cleared; a newer call's replacement reservation is left alone.
+    if (Number(row.spend_reserved_micros) === Number(p[1])) {
+      row.spend_reserved_micros = 0
+      row.spend_reserved_until = null
+    }
     row.updated_at = now()
     return { rows: [{ id: row.id }] }
   }
@@ -258,6 +262,11 @@ function run(text, params = []) {
   }
   if (q.startsWith('INSERT INTO billing_bootstrap_attempts')) {
     db.bootstrapAttempts.push({ ip_hash: p[0], attempted_at: now() })
+    return { rows: [] }
+  }
+  if (q.startsWith('DELETE FROM billing_bootstrap_attempts')) {
+    const cutoff = Date.now() - 86_400_000
+    db.bootstrapAttempts = db.bootstrapAttempts.filter((a) => a.attempted_at.getTime() >= cutoff)
     return { rows: [] }
   }
 

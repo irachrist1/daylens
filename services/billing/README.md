@@ -315,6 +315,28 @@ when `NODE_ENV=production`, and the shim is only ever loaded by the sandbox (nev
 `npm start`). The fakes are not a substitute for the sandbox/test-mode checks against real
 Polar/Flutterwave/LiteLLM before going live.
 
+### Real-Postgres mode
+
+The same harness runs against a real Postgres database — this is the "real Postgres"
+pre-deploy check, and it has already caught a bug the shim structurally cannot (a bound
+SQL parameter the query text never referenced, which real Postgres rejects as `42P18`):
+
+```bash
+BILLING_SANDBOX_DATABASE_URL='postgresql://…/daylens_billing_sandbox_verify' npm run billing:sandbox
+```
+
+Rules the harness enforces:
+
+- The database name must contain `sandbox`, `verify`, or `test`. It refuses anything
+  else so it can never point at a production database.
+- The database is treated as throwaway: other backends are terminated at boot and all
+  billing tables are truncated.
+- Check 19 (crash-injection rollback) only runs on the shim; real-Postgres runs instead
+  prove genuine row locking under READ COMMITTED in checks 16, 17, 21, and 25.
+
+Create a scratch database on any Postgres 15+ server (`CREATE DATABASE
+daylens_billing_sandbox_verify;`), run the harness, then drop it.
+
 ## Production safety
 
 The server refuses to start in production when:

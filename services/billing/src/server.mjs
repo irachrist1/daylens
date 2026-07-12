@@ -271,12 +271,26 @@ async function billingSnapshot(account) {
   }
 }
 
+// The client fully controls the LEFT side of X-Forwarded-For; trusted proxies
+// append the address they actually saw on the RIGHT. With TRUSTED_PROXY_HOPS
+// proxies in front (Railway edge = 1, the default), the real client is the
+// hops-th entry from the right. Never read entry [0] — that lets an attacker
+// mint a fresh "IP" per request and defeat the bootstrap rate limit entirely.
+function clientIpForRateLimit(req) {
+  const hops = Math.max(1, Math.floor(Number(process.env.TRUSTED_PROXY_HOPS || 1)))
+  const forwarded = String(req.headers['x-forwarded-for'] || '')
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean)
+  if (forwarded.length >= hops) return forwarded[forwarded.length - hops]
+  return req.socket.remoteAddress || 'unknown'
+}
+
 async function bootstrap(req, res) {
   const parsed = await body(req, 64_000)
   const installationId = String(parsed.json.installationId || '')
   if (installationId.length < 20) return json(res, 400, { error: 'invalid_installation' })
-  const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress || 'unknown'
-  const ipHash = hash(ip, process.env.SESSION_SECRET)
+  const ipHash = hash(clientIpForRateLimit(req), process.env.SESSION_SECRET)
   const recent = await pool.query(
     `SELECT COUNT(*)::int AS count FROM billing_bootstrap_attempts
      WHERE ip_hash = $1 AND attempted_at > now() - interval '1 hour'`,
@@ -284,6 +298,7 @@ async function bootstrap(req, res) {
   )
   if (recent.rows[0].count >= 20) return json(res, 429, { error: 'Too many new-install attempts. Try again later.' })
   await pool.query('INSERT INTO billing_bootstrap_attempts (ip_hash) VALUES ($1)', [ipHash])
+  await pool.query(`DELETE FROM billing_bootstrap_attempts WHERE attempted_at < now() - interval '24 hours'`)
 
   const installationHash = hash(installationId)
   let result = await pool.query('SELECT * FROM billing_accounts WHERE installation_hash = $1', [installationHash])
@@ -637,7 +652,14 @@ async function flutterwaveWebhook(req, res) {
       await client.query('COMMIT')
       return json(res, 200, { ok: true })
     }
-    if (data.currency !== payment.currency || Number(data.amount) !== Number(payment.amount)) {
+    // `amount` is the figure we asked for; `charged_amount` is what Flutterwave
+    // actually collected. A partial capture must never grant the full pass.
+    const chargedAmount = data.charged_amount ?? data.amount
+    if (
+      data.currency !== payment.currency
+      || Number(data.amount) !== Number(payment.amount)
+      || Number(chargedAmount) < Number(payment.amount)
+    ) {
       throw new Error('flutterwave_payment_mismatch')
     }
     await client.query(
@@ -709,11 +731,22 @@ async function reserveManagedSpend(accountId) {
     const reserved = account.spend_reserved_until && new Date(account.spend_reserved_until).getTime() > Date.now()
       ? Number(account.spend_reserved_micros || 0)
       : 0
-    const available = mode === 'free_credit'
-      ? Number(account.free_credit_remaining_micros) - reserved
-      : fairUseMicros - await periodSpendMicros(account, client) - reserved
+    const balance = mode === 'free_credit'
+      ? Number(account.free_credit_remaining_micros)
+      : fairUseMicros - await periodSpendMicros(account, client)
+    const available = balance - reserved
     if (available <= 0) {
       await client.query('ROLLBACK')
+      // Blocked only by another in-flight call's reservation is NOT exhaustion:
+      // telling a user with balance left that AI "is paused" reads as broke.
+      // Surface it as a retryable conflict instead.
+      if (reserved > 0 && balance > 0) {
+        return {
+          status: 409,
+          retryable: true,
+          error: 'Another AI request is still settling for this account. Retry in a moment.',
+        }
+      }
       return {
         status: mode === 'free_credit' ? 402 : 429,
         error: mode === 'free_credit'
@@ -751,7 +784,12 @@ async function managedCompletion(req, res) {
   const feature = String(req.headers['x-daylens-feature'] || 'ai')
   await reconcileLiteLLMBudget(tokenAccount.id)
   const reservation = await reserveManagedSpend(tokenAccount.id)
-  if (reservation.status) return json(res, reservation.status, { error: reservation.error })
+  if (reservation.status) {
+    return json(res, reservation.status, {
+      error: reservation.error,
+      ...(reservation.retryable ? { retryable: true } : {}),
+    })
+  }
 
   let payload
   let costUsd
@@ -803,9 +841,16 @@ async function managedCompletion(req, res) {
         [account.id, mode, feature, managedProvider, payload.model || managedModel, usage.prompt_tokens || null, usage.completion_tokens || null, costMicros, payload.id || null],
       )
       if (mode === 'free_credit') {
+        // Deduct the metered cost unconditionally, but clear the reservation only
+        // if it is still this call's reservation ($2) — an expired reservation may
+        // have been replaced by a newer call's, and that one is not ours to clear.
+        // Every bound parameter must appear in the SQL: real Postgres rejects a
+        // query whose parameter it cannot type (42P18); the sandbox shim did not.
         const charged = await client.query(
           `UPDATE billing_accounts SET free_credit_remaining_micros = free_credit_remaining_micros - $1,
-           spend_reserved_micros = 0, spend_reserved_until = NULL, updated_at = now()
+           spend_reserved_micros = CASE WHEN spend_reserved_micros = $2 THEN 0 ELSE spend_reserved_micros END,
+           spend_reserved_until = CASE WHEN spend_reserved_micros = $2 THEN NULL ELSE spend_reserved_until END,
+           updated_at = now()
            WHERE id = $3 AND free_credit_remaining_micros >= $1 RETURNING id`,
           [costMicros, amountMicros, account.id],
         )
