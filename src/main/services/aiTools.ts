@@ -19,6 +19,7 @@ import {
 import {
   getCorrectedAppSummariesForRange as getAppSummariesForRange,
   getCorrectedSessionsForRange as getSessionsForRange,
+  getIgnoredBlockSpansForRange,
 } from './activityFacts'
 import { localDateString } from '../lib/localDate'
 import { computeFocusScoreV2 } from '../lib/focusScore'
@@ -549,6 +550,11 @@ function tokenizeForBroadenedSearch(query: string): string[] {
 export function execSearchSessions(params: SearchSessionsParams, db: Database.Database): SearchSessionsResult {
   const limit = params.limit ?? 25
   const searchOpts = { startDate: params.startDate, endDate: params.endDate, limit }
+  const ignoredFrom = params.startDate ? localDayBounds(params.startDate)[0] : 0
+  const ignoredTo = params.endDate ? localDayBounds(params.endDate)[1] : Date.now()
+  const ignoredSpans = getIgnoredBlockSpansForRange(db, ignoredFrom, ignoredTo)
+  const isVisibleHit = (hit: { startTime: number; endTime: number }): boolean =>
+    !ignoredSpans.some((span) => span.startMs < hit.endTime && span.endMs > hit.startTime)
 
   const mapSessionHit = (h: { id: number; appName: string; windowTitle: string | null; startTime: number; endTime: number; date: string; excerpt: string | null }): SessionSearchHit => ({
     id: h.id,
@@ -581,8 +587,8 @@ export function execSearchSessions(params: SearchSessionsParams, db: Database.Da
   const strictSessions = dbSearchSessions(db, params.query, searchOpts)
   const strictPages = dbSearchBrowser(db, params.query, searchOpts)
   const strictHits = [
-    ...strictSessions.map(mapSessionHit),
-    ...strictPages.map(mapBrowserHit),
+    ...strictSessions.map(mapSessionHit).filter(isVisibleHit),
+    ...strictPages.map(mapBrowserHit).filter(isVisibleHit),
   ].sort((a, b) => b.startTime - a.startTime).slice(0, limit)
 
   if (strictHits.length > 0) {
@@ -611,19 +617,21 @@ export function execSearchSessions(params: SearchSessionsParams, db: Database.Da
     if (byKey.size >= limit) break
     const remaining = limit - byKey.size
     const partialSessions = dbSearchSessions(db, token, { ...searchOpts, limit: remaining })
+      .map(mapSessionHit).filter(isVisibleHit)
     const partialPages = dbSearchBrowser(db, token, { ...searchOpts, limit: remaining })
+      .map(mapBrowserHit).filter(isVisibleHit)
     tokenMatches[token] = partialSessions.length + partialPages.length
     for (const hit of partialSessions) {
       const key = `session:${hit.id}`
       if (byKey.has(key)) continue
-      byKey.set(key, mapSessionHit(hit))
+      byKey.set(key, hit)
       if (byKey.size >= limit) break
     }
     if (byKey.size >= limit) break
     for (const hit of partialPages) {
       const key = `page:${hit.id}`
       if (byKey.has(key)) continue
-      byKey.set(key, mapBrowserHit(hit))
+      byKey.set(key, hit)
       if (byKey.size >= limit) break
     }
   }

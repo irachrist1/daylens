@@ -15,6 +15,7 @@ import type {
   GetAppUsageResult,
   SearchSessionsResult,
 } from '../src/main/services/aiTools.ts'
+import { execSearchSessions } from '../src/main/services/aiTools.ts'
 
 function setupDb(): Database.Database {
   const db = new Database(':memory:')
@@ -86,6 +87,43 @@ test('getApp on an unknown app reports empty without throwing', (t) => {
   seedCodingDay(db)
   const fact = runResolverQuery({ resolver: 'getApp', app: 'NonexistentApp42' }, db)
   assert.equal(fact.isEmpty, true, 'no tracked time for an app that was never used')
+})
+
+test('AI search cannot surface session or page content from an ignored Timeline span', (t) => {
+  const db = setupDb()
+  t.after(() => db.close())
+  const today = new Date()
+  const start = localMs(today, 9)
+  const end = localMs(today, 10)
+  db.prepare(`
+    INSERT INTO app_sessions (
+      bundle_id, app_name, start_time, end_time, duration_sec, category,
+      is_focused, window_title, raw_app_name, capture_source, capture_version
+    ) VALUES ('secret.app', 'SecretApp', ?, ?, 3600, 'development', 1,
+      'Project Nightfall confidential', 'SecretApp', 'test', 1)
+  `).run(start, end)
+  db.prepare(`
+    INSERT INTO website_visits (
+      domain, page_title, url, visit_time, visit_time_us, duration_sec,
+      browser_bundle_id, source
+    ) VALUES ('nightfall.example', 'Project Nightfall brief', 'https://nightfall.example/brief',
+      ?, ?, 3600, 'secret.app', 'active_browser_context')
+  `).run(start, start * 1000)
+  const now = Date.now()
+  db.prepare(`
+    INSERT INTO timeline_block_reviews (
+      id, block_id, date, evidence_key, review_state, original_block_json,
+      correction_json, created_at, updated_at
+    ) VALUES ('review_secret', 'secret', ?, 'secret', 'ignored', ?, '{}', ?, ?)
+  `).run(dateStr(today), JSON.stringify({ startTime: start, endTime: end }), now, now)
+
+  const result = execSearchSessions({
+    query: 'Nightfall',
+    startDate: dateStr(today),
+    endDate: dateStr(today),
+  }, db)
+  assert.deepEqual(result.hits, [])
+  assert.equal(result.matchKind, 'empty')
 })
 
 function seedYouTubeVisits(db: Database.Database, day: Date, durationSec: number): void {
