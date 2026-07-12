@@ -1330,3 +1330,35 @@ behavioral authorities:
 Load-bearing warning: the browser domain/page reconciliation and “No page recorded” remainder
 remain backend-owned and unchanged. Do not move that arithmetic into renderer components; the
 existing app-detail reconciliation tests are the minimum gate for edits in that area.
+
+## 2026-07-12 — Timeline correction audit: timestamps and raw read paths overruled the user's truth
+
+The adversarial W1-A review found seven ways an apparently corrected Timeline could still lie:
+
+1. **A positive `end_time` was treated as proof of continuous activity.** Live row 1399 claimed
+   Dia from 13:07:44–13:43:24 while `duration_sec` contained only 236 seconds. Because the next
+   session began at 13:43:24, the absence guard hid a real 31m44s hole. The guard now treats a
+   wall-clock/duration mismatch of at least 15 minutes as absence, using captured duration as the
+   evidence boundary.
+2. **Splitting the exact block a user corrected changed both its id and evidence key.** Correction
+   replay therefore found nothing. Absence repair now transfers the fused block's correction to
+   the rebuilt half with greatest time overlap (earlier wins a tie), instead of guessing that both
+   disconnected halves necessarily meant the same thing.
+3. **Past-day derived projections filtered ignored blocks but calculated header totals from raw
+   derived sessions.** `totalSeconds`, `focusSeconds`, and `appCount` now come from corrected
+   derived-session pieces.
+4. **Deleted spans used session-start membership.** A 09:00–10:00 session with a 09:15–09:45
+   deletion kept all 60 minutes; deleting 09:00–09:15 dropped all 60. Ignored spans are now merged
+   and subtracted as exact half-open intervals, producing the honest two surviving 15-minute pieces.
+5. **Block category corrections stopped at block appearances.** Apps and AI aggregates still used
+   the captured session category. The corrected read model now splits session credit at category
+   boundaries and attributes each piece to the user's block category.
+6. **AI FTS searched raw session titles and raw page titles.** An ignored block's sensitive content
+   could still be recalled. Strict and broadened search now remove both session and page hits that
+   overlap ignored spans.
+7. **Top-site and peak-hours answers bypassed corrected facts.** Site credit now subtracts ignored
+   intervals from the reconciled domain ledger, and peak hours bucket corrected session pieces.
+   AI, Insights, and IPC callers all route through `activityFacts.ts`.
+
+Regression coverage: `absenceGuard.test.ts`, `timelineAbsenceRepair.test.ts`,
+`correctedActivityFacts.test.ts`, `aiResolvers.test.ts`, and `peakHours.test.ts`.
