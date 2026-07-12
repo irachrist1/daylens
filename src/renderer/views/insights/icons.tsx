@@ -11,6 +11,16 @@ export function IconSend() {
   )
 }
 
+// Real cancel (W1-C): the composer's send button flips to this while a
+// generation is running.
+export function IconStop() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <rect x="3.5" y="3.5" width="9" height="9" rx="2" />
+    </svg>
+  )
+}
+
 export function IconCopy() {
   return (
     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

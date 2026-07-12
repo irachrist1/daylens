@@ -18,8 +18,18 @@ import { track } from '../../lib/analytics'
 import { ipc } from '../../lib/ipc'
 import { AI_PROVIDER_META, getSelectedModel } from '../../lib/aiProvider'
 import { sanitizeIpcError } from '../../lib/ipcError'
-import { sanitizeForRender, stripLegacyMemoryNudge } from '../../../shared/aiSanitize'
+import { sanitizeForRender } from '../../../shared/aiSanitize'
 import { clearStreamingSnapshot, setStreamingSnapshot } from './streamingStore'
+import {
+  beginTurn,
+  cancelTurn,
+  classifyTurnFailure,
+  completeTurn,
+  failTurn,
+  prependEarlierMessages,
+  removeTurn,
+  shouldAdoptThreadAfterTurn,
+} from './chatTurns'
 import {
   actionFeedbackKey,
   messageActionKey,
@@ -97,6 +107,12 @@ export function useAIChat() {
 
   const loadingRef = useRef(false)
   loadingRef.current = loading
+  // Real cancel (W1-C): the turn currently in flight, so Stop knows which
+  // request to abort — and which synthetic rows to flip to `cancelled`.
+  const inFlightTurnRef = useRef<{ requestId: string; assistantId: string; userId: string } | null>(null)
+  // Requests the user cancelled: when their promise later settles (resolve OR
+  // reject), the result is dropped so a cancelled turn never mutates the view.
+  const cancelledRequestsRef = useRef<Set<string>>(new Set())
   // U1: track the most recently requested thread so a slow getThread response
   // for a thread the user already navigated away from never clobbers the view.
   const latestRequestedThreadRef = useRef<number | null>(null)
@@ -290,7 +306,7 @@ export function useAIChat() {
         before: { createdAt: oldest.createdAt, id: oldest.id },
       })
       if (latestRequestedThreadRef.current !== threadId) return
-      setMessages((current) => [...threadMessagesFromHistory(detail.messages), ...current])
+      setMessages((current) => prependEarlierMessages(current, threadMessagesFromHistory(detail.messages)))
       setHasEarlierMessages(detail.hasEarlier)
     } catch (error) {
       console.error('[ai] failed to load earlier messages', error)
@@ -412,19 +428,15 @@ export function useAIChat() {
     }
   }, [])
 
-  const refreshThreadsAfterTurn = useCallback(async (requestThreadId: number | null, navigationVersion: number) => {
-    // sendMessage auto-creates a thread server-side when none is passed. Adopt
-    // the newest row so follow-up turns (and retries) stay linked to it.
+  // Keep the sidebar list current after a turn. Thread ADOPTION is separate:
+  // the server returns the authoritative threadId with the turn result, so a
+  // draft send adopts that exact thread — never "the newest row", which could
+  // be a background day-report thread and is how follow-ups used to land in
+  // (and duplicate) the wrong conversation.
+  const refreshThreadList = useCallback(async () => {
     try {
       const refreshed = await ipc.ai.listThreads({ includeArchived: true })
       setThreads(refreshed)
-      if (navigationVersionRef.current !== navigationVersion || requestThreadId != null) return
-      const createdThreadId = firstActiveThreadId(refreshed)
-      if (createdThreadId != null) {
-        setActiveThreadId(createdThreadId)
-        setIsNewChatDraft(false)
-        rememberedThreadId = createdThreadId
-      }
     } catch { /* best-effort */ }
   }, [])
 
@@ -462,11 +474,8 @@ export function useAIChat() {
     autoRetryTimeoutsRef.current = {}
 
     setLoading(true)
-    setMessages((current) => [
-      ...current,
-      { id: userId, role: 'user', content: prompt, createdAt, state: 'complete' },
-      { id: assistantId, role: 'assistant', content: '', createdAt, state: 'pending' },
-    ])
+    inFlightTurnRef.current = { requestId, assistantId, userId }
+    setMessages((current) => beginTurn(current, { userId, assistantId, prompt, createdAt }))
 
     // R3: race the turn against a hard timeout so a stuck request always
     // resolves the pending row to a retryable error — never an eternal spinner.
@@ -488,22 +497,42 @@ export function useAIChat() {
         timeoutPromise,
       ]) as AIChatTurnResult
 
+      // Real cancel (W1-C): the user stopped this turn; a late completion must
+      // never overwrite the cancelled row with a fake "completed" answer.
+      if (cancelledRequestsRef.current.has(requestId)) {
+        cancelledRequestsRef.current.delete(requestId)
+        return
+      }
+
       // R3: flip the pending row to the final answer FIRST. The visible
       // completion must not be gated on the thread-list refresh that follows —
       // that ordering was why answers only appeared after navigating away.
-      setMessages((current) => current.map((message) => (
-        message.id === assistantId
-          ? { ...response.assistantMessage, content: stripLegacyMemoryNudge(response.assistantMessage.content), state: 'complete' as const }
-          : message
-      )))
+      setMessages((current) => completeTurn(current, assistantId, response.assistantMessage))
       track(ANALYTICS_EVENT.AI_QUERY_ANSWERED, analyticsContext({
         answer_kind: response.assistantMessage.answerKind ?? null,
         query_kind: queryKind,
         trigger,
         provider_calls: response.providerCallCount ?? null,
       }))
-      void refreshThreadsAfterTurn(requestThreadId, navigationVersion)
+      // A draft send adopts the exact thread the server persisted into.
+      if (shouldAdoptThreadAfterTurn({
+        requestThreadId,
+        responseThreadId: response.threadId,
+        navigationVersionAtSend: navigationVersion,
+        navigationVersionNow: navigationVersionRef.current,
+      })) {
+        setActiveThreadId(response.threadId)
+        setIsNewChatDraft(false)
+        rememberedThreadId = response.threadId
+      }
+      void refreshThreadList()
     } catch (error) {
+      // A cancelled turn's rejection (the abort) is not an error — the row is
+      // already showing its cancelled state.
+      if (cancelledRequestsRef.current.has(requestId)) {
+        cancelledRequestsRef.current.delete(requestId)
+        return
+      }
       const sanitized = sanitizeIpcError(
         error,
         timedOut ? 'That took longer than expected. Tap retry to run it again.' : undefined,
@@ -513,38 +542,26 @@ export function useAIChat() {
       // is NOT auto-retried — retrying just fails again; instead the card offers
       // switch-provider (R2). This is the fix for the misdiagnosed Gemini
       // free-tier case found in R1 verification.
-      const isTransient = sanitized.code === 'transient_rate_limit'
-      const isHardWall = sanitized.code === 'quota_exhausted'
-        || sanitized.code === 'credit_exhausted'
-        || sanitized.code === 'auth'
-      const willAutoRetry = isTransient && autoRetryCount < 1
-      setMessages((current) => current.map((entry) => (
-        entry.id === assistantId
-          ? {
-            ...entry,
-            content: sanitized.message,
-            state: 'error' as const,
-            errorInfo: {
-              isRateLimit: isTransient,
-              retryAfterSeconds: sanitized.retryAfterSeconds,
-              autoRetryScheduled: willAutoRetry,
-              code: sanitized.code,
-              alternateProviders: isHardWall && alternateProvidersRef.current.length > 0
-                ? alternateProvidersRef.current
-                : undefined,
-            },
-          }
-          : entry
-      )))
-      // Keep the (server-created) thread linked so a retry continues it rather
-      // than spawning a duplicate.
-      void refreshThreadsAfterTurn(requestThreadId, navigationVersion)
-      if (willAutoRetry) {
+      const failure = classifyTurnFailure(
+        { code: sanitized.code, retryAfterSeconds: sanitized.retryAfterSeconds },
+        autoRetryCount,
+        alternateProvidersRef.current,
+      )
+      setMessages((current) => failTurn(
+        current,
+        assistantId,
+        { message: sanitized.message, code: sanitized.code, retryAfterSeconds: sanitized.retryAfterSeconds },
+        failure.errorInfo,
+      ))
+      // Keep the sidebar current — the server may have created the thread
+      // before the turn failed (retrying from the draft reuses it server-side).
+      void refreshThreadList()
+      if (failure.willAutoRetry) {
         const waitMs = Math.min(45, Math.max(8, sanitized.retryAfterSeconds ?? 20)) * 1000
         autoRetryTimeoutsRef.current[assistantId] = window.setTimeout(() => {
           delete autoRetryTimeoutsRef.current[assistantId]
           // Replace the errored turn in place rather than appending a duplicate.
-          setMessages((current) => current.filter((m) => m.id !== assistantId && m.id !== userId))
+          setMessages((current) => removeTurn(current, assistantId, userId))
           void handleSendRef.current(prompt, {
             contextOverride: options?.contextOverride ?? null,
             trigger: 'retry',
@@ -555,16 +572,34 @@ export function useAIChat() {
       }
     } finally {
       if (timeoutHandle !== undefined) window.clearTimeout(timeoutHandle)
+      if (inFlightTurnRef.current?.requestId === requestId) inFlightTurnRef.current = null
       setLoading(false)
       clearStreamingSnapshot(assistantId)
     }
-  }, [activeThreadId, hasApiKey, analyticsContext, activeModel, refreshThreadsAfterTurn])
+  }, [activeThreadId, hasApiKey, analyticsContext, activeModel, refreshThreadList])
 
   // Stable submit reference for the memoized composer: its only re-render
   // trigger should be `loading`, not a fresh callback identity each render.
   const handleSendRef = useRef(handleSend)
   handleSendRef.current = handleSend
   const submitMessage = useCallback((text: string) => { void handleSendRef.current(text) }, [])
+
+  // Real cancel (W1-C): Stop aborts the in-flight provider request in the main
+  // process (ai:cancel-message → AbortController → SDK abort) and flips the
+  // pending row to `cancelled` — never a fake completed answer, never an error
+  // card. The turn's late settle is suppressed via cancelledRequestsRef.
+  const cancelGeneration = useCallback(() => {
+    const inFlight = inFlightTurnRef.current
+    if (!inFlight) return
+    inFlightTurnRef.current = null
+    cancelledRequestsRef.current.add(inFlight.requestId)
+    void ipc.ai.cancelMessage(inFlight.requestId).catch(() => { /* turn may already be settling */ })
+    setMessages((current) => cancelTurn(current, inFlight.assistantId))
+    clearStreamingSnapshot(inFlight.assistantId)
+    // Free the composer immediately; the aborted promise settles in the
+    // background and is dropped.
+    setLoading(false)
+  }, [])
 
   const handleRetry = useCallback(async (index: number, message: ThreadMessage) => {
     if (message.id !== latestCompletedAssistantId) return
@@ -591,7 +626,7 @@ export function useAIChat() {
     if (!previousUser) return
     track(ANALYTICS_EVENT.AI_ANSWER_RETRIED, analyticsContext({ answer_kind: message.answerKind ?? null, trigger: 'retry' }))
     // Replace the errored turn in place rather than appending a duplicate.
-    setMessages((current) => current.filter((m) => m.id !== message.id && m.id !== previousUser.id))
+    setMessages((current) => removeTurn(current, message.id, previousUser.id))
     await handleSend(previousUser.content, { contextOverride: message.contextSnapshot ?? null, trigger: 'retry', transform: transformKindFromLabel(previousUser.content) })
   }, [messages, analyticsContext, handleSend])
 
@@ -620,7 +655,7 @@ export function useAIChat() {
       trigger: 'switch_provider',
       provider,
     }))
-    setMessages((current) => current.filter((m) => m.id !== message.id && m.id !== previousUser.id))
+    setMessages((current) => removeTurn(current, message.id, previousUser.id))
     await handleSend(previousUser.content, { contextOverride: message.contextSnapshot ?? null, trigger: 'retry', transform: transformKindFromLabel(previousUser.content) })
   }, [messages, refreshProvider, analyticsContext, handleSend])
 
@@ -890,6 +925,7 @@ export function useAIChat() {
     refreshProvider,
     // actions
     submitMessage,
+    cancelGeneration,
     handleSend,
     handleRetry,
     handleErrorRetry,

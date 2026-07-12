@@ -1,7 +1,7 @@
 import type { ForwardedRef } from 'react'
 import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { ipc } from '../../lib/ipc'
-import { IconSend } from './icons'
+import { IconSend, IconStop } from './icons'
 import { buildMentionChipElement, MentionRowIcon, type MentionItem, type MentionKind } from './mentions'
 
 export interface AIComposeHandle {
@@ -12,6 +12,9 @@ export interface AIComposeHandle {
 interface AIComposeProps {
   onSubmit: (text: string) => void
   loading: boolean
+  // Real cancel (W1-C): while loading, the send button becomes Stop and calls
+  // this — it aborts the in-flight provider request, not just the spinner.
+  onCancel?: () => void
   placeholder?: string
   variant?: 'docked' | 'starter'
 }
@@ -60,7 +63,7 @@ function serializeEditor(el: HTMLElement): string {
 }
 
 function AIComposeImpl(
-  { onSubmit, loading, placeholder, variant = 'docked' }: AIComposeProps,
+  { onSubmit, loading, onCancel, placeholder, variant = 'docked' }: AIComposeProps,
   ref: ForwardedRef<AIComposeHandle>,
 ) {
   const editorRef = useRef<HTMLDivElement>(null)
@@ -350,29 +353,55 @@ function AIComposeImpl(
             }}
           />
         </div>
-        <button
-          onClick={send}
-          disabled={loading || empty}
-          type="button"
-          aria-label="Send message"
-          style={{
-            width: 34,
-            height: 34,
-            padding: 0,
-            borderRadius: 999,
-            border: 'none',
-            cursor: loading || empty ? 'default' : 'pointer',
-            background: !empty && !loading ? 'var(--gradient-primary)' : 'var(--color-surface-high)',
-            color: !empty && !loading ? 'var(--color-primary-contrast)' : 'var(--color-text-tertiary)',
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            flexShrink: 0,
-            transition: 'background 160ms ease, color 160ms ease',
-          }}
-        >
-          <IconSend />
-        </button>
+        {loading && onCancel ? (
+          <button
+            onClick={onCancel}
+            type="button"
+            aria-label="Stop generating"
+            title="Stop generating"
+            style={{
+              width: 34,
+              height: 34,
+              padding: 0,
+              borderRadius: 999,
+              border: '1px solid var(--color-border-ghost)',
+              cursor: 'pointer',
+              background: 'var(--color-surface-high)',
+              color: 'var(--color-text-primary)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+              transition: 'background 160ms ease, color 160ms ease',
+            }}
+          >
+            <IconStop />
+          </button>
+        ) : (
+          <button
+            onClick={send}
+            disabled={loading || empty}
+            type="button"
+            aria-label="Send message"
+            style={{
+              width: 34,
+              height: 34,
+              padding: 0,
+              borderRadius: 999,
+              border: 'none',
+              cursor: loading || empty ? 'default' : 'pointer',
+              background: !empty && !loading ? 'var(--gradient-primary)' : 'var(--color-surface-high)',
+              color: !empty && !loading ? 'var(--color-primary-contrast)' : 'var(--color-text-tertiary)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+              transition: 'background 160ms ease, color 160ms ease',
+            }}
+          >
+            <IconSend />
+          </button>
+        )}
       </div>
     </div>
   )

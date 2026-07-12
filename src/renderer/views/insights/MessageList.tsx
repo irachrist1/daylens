@@ -211,6 +211,22 @@ function MessageListImpl({
                   renderContent={(text) => <><MarkdownMessage content={text} /><span className="ai-caret" /></>}
                   onSnapshotUpdate={scrollToBottom}
                 />
+              ) : message.state === 'cancelled' ? (
+                // Real cancel (W1-C): an honestly-stopped turn — no partial
+                // text presented as an answer, no error card. Retry re-runs
+                // the question in place.
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', fontStyle: 'italic' }}>
+                    Stopped — no answer was generated.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => onErrorRetry(message)}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 11px', borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-primary)', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
+                  >
+                    <IconRetry /> Retry
+                  </button>
+                </div>
               ) : message.state === 'error' ? (
                 <>
                   <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#f87171', marginBottom: 8 }}>

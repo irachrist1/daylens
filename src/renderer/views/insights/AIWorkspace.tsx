@@ -65,6 +65,7 @@ export default function AIWorkspace() {
     loadError,
     refreshProvider,
     submitMessage,
+    cancelGeneration,
     handleRetry,
     handleErrorRetry,
     handleCopy,
@@ -253,7 +254,7 @@ export default function AIWorkspace() {
 
   const copyChat = useCallback(async () => {
     const text = messages
-      .filter((m) => m.state !== 'pending')
+      .filter((m) => m.state !== 'pending' && m.state !== 'cancelled')
       .map((m) => `${m.role === 'user' ? 'You' : 'Daylens'}: ${m.content}`)
       .join('\n\n')
     if (!text.trim()) return
@@ -601,7 +602,7 @@ export default function AIWorkspace() {
                 </p>
               </div>
               <div style={{ width: '100%', maxWidth: 620, marginTop: 4, textAlign: 'left' }}>
-                <AICompose ref={composerRef} onSubmit={submitMessage} loading={loading} variant="starter" placeholder="Ask anything" />
+                <AICompose ref={composerRef} onSubmit={submitMessage} onCancel={cancelGeneration} loading={loading} variant="starter" placeholder="Ask anything" />
               </div>
               <div style={{ width: '100%', maxWidth: 620, textAlign: 'left' }}>
                 {starterPrompts.map((suggestion, index) => (
@@ -639,7 +640,7 @@ export default function AIWorkspace() {
       {hasApiKey && (hasMessages || threadLoading) && (
         <div style={{ flexShrink: 0, padding: '12px 24px 20px' }}>
           <div style={{ maxWidth: 760, margin: '0 auto' }}>
-            <AICompose ref={composerRef} onSubmit={submitMessage} loading={loading} />
+            <AICompose ref={composerRef} onSubmit={submitMessage} onCancel={cancelGeneration} loading={loading} />
           </div>
         </div>
       )}
