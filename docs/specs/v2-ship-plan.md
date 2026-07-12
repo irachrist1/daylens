@@ -86,6 +86,30 @@ them. `shipped` and `plan-vs-actual` slides stay explicitly future work.
 
 ## Wave 3 — go live (founder-gated; orchestrator prepares, founder executes)
 
+**Status 2026-07-12 (orchestrator):** The Railway stack is deployed and healthy —
+managed Postgres, private LiteLLM, and the public billing API at
+`https://daylens-billing-production-598e.up.railway.app` (`/health` ok). `schema.sql`
+is applied to the real database. The sandbox harness now also runs against real
+Postgres (`BILLING_SANDBOX_DATABASE_URL`, see `services/billing/README.md`); that run
+caught and fixed a settlement query real Postgres rejected (42P18) plus the
+X-Forwarded-For rate-limit bypass, and passed twice back to back (26/0). A blind
+pre-deploy review of the billing service found no forgery/replay/injection paths and
+judged the payment plumbing safe once credentials land. Windows and Linux runtime
+verification workflows are green on `main`; Remote Parity's install step is fixed.
+
+Still founder-only, in order: (1) Polar payout + Flutterwave Rwanda approvals (or
+choose one rail) and set `POLAR_*` / `FLUTTERWAVE_*` on the `daylens-billing` Railway
+service; (2) set `DAYLENS_PROVIDER_API_KEY` (+ `DAYLENS_ECONOMY_MODEL`) on
+`daylens-litellm` — managed calls cannot reach a provider without it; (3) point
+`billing.daylens.app` DNS at the Railway domain (or keep the Railway URL and make sure
+the `DAYLENS_BILLING_API_URL` GitHub secret matches what desktop builds should use);
+(4) verify one real Polar sandbox webhook end-to-end — the harness signs its own, so
+Polar's exact secret interpretation is unproven until one real delivery lands;
+(5) certificates, packaged installs, and the acceptance day on real machines;
+(6) decide the anti-farming posture for the anonymous $5 credit (XFF spoofing is
+fixed; installationId rotation behind one IP is still bounded only by 20/hour) and
+the passive-media tracking bound (docs/findings.md).
+
 **Billing (report task 4).** Founder: Polar payout approval + Flutterwave Rwanda live
 approval in writing — or explicitly choose the one rail that ships. Then deploy
 Postgres, LiteLLM, billing API per `services/billing/README.md`; `billing.daylens.app`
