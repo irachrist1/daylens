@@ -32,7 +32,7 @@ When invoking Codex from Claude, pin the model and effort instead of relying on 
 defaults, for example:
 
 ```bash
-codex exec --model gpt-5.6-sol -c model_reasoning_effort=xhigh -s read-only "<self-contained review prompt>"
+codex exec --model gpt-5.6-sol -c model_reasoning_effort=high -s read-only "<self-contained review prompt>"
 ```
 
 (`gpt-5.6-sol` needs Codex CLI ≥ 0.144; older CLIs reject it with "requires a newer
