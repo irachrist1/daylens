@@ -52,9 +52,12 @@ function newAccount(installationHash, cipher) {
     polar_event_occurred_at: null,
     polar_event_rank: 0,
     customer_email: null,
-    intercom_user_id: null,
     installation_token_version: 1,
     tokens_revoked_at: null,
+    spend_reserved_micros: 0,
+    spend_reserved_until: null,
+    litellm_budget_mode: 'free_credit',
+    litellm_budget_sync_required: false,
     litellm_key_cipher: cipher,
   }
 }
@@ -92,22 +95,41 @@ function run(text, params = []) {
   // ── billing_accounts ──────────────────────────────────────────────
   if (q.startsWith('SELECT * FROM billing_accounts WHERE id =')) {
     const row = db.accounts.get(p[0])
-    return { rows: row ? [row] : [] }
+    return { rows: row ? [structuredClone(row)] : [] }
   }
   if (q.startsWith('SELECT * FROM billing_accounts WHERE installation_hash =')) {
     const row = accountByHash(p[0])
-    return { rows: row ? [row] : [] }
+    return { rows: row ? [structuredClone(row)] : [] }
   }
   if (q.startsWith('INSERT INTO billing_accounts (installation_hash, litellm_key_cipher)')) {
     if (accountByHash(p[0])) return { rows: [] } // ON CONFLICT DO NOTHING
     const row = newAccount(p[0], 'pending')
     db.accounts.set(row.id, row)
-    return { rows: [row] }
+    return { rows: [structuredClone(row)] }
   }
   if (q.startsWith('UPDATE billing_accounts SET litellm_key_cipher = $1 WHERE id = $2')) {
     const row = db.accounts.get(p[1])
     if (row) {
       row.litellm_key_cipher = p[0]
+      row.updated_at = now()
+    }
+    return { rows: [] }
+  }
+  if (q.startsWith('UPDATE billing_accounts SET litellm_key_cipher = $1, litellm_budget_mode = $2')) {
+    const row = db.accounts.get(p[2])
+    if (row) {
+      row.litellm_key_cipher = p[0]
+      row.litellm_budget_mode = p[1]
+      row.litellm_budget_sync_required = false
+      row.updated_at = now()
+    }
+    return { rows: [] }
+  }
+  if (q.startsWith('UPDATE billing_accounts SET litellm_budget_mode = $1')) {
+    const row = db.accounts.get(p[1])
+    if (row) {
+      row.litellm_budget_mode = p[0]
+      row.litellm_budget_sync_required = false
       row.updated_at = now()
     }
     return { rows: [] }
@@ -124,6 +146,7 @@ function run(text, params = []) {
       row.polar_subscription_id = p[4] ?? row.polar_subscription_id
       row.polar_event_occurred_at = p[5]
       row.polar_event_rank = p[6]
+      row.litellm_budget_sync_required = true
       row.updated_at = now()
     }
     return { rows: [] }
@@ -134,6 +157,7 @@ function run(text, params = []) {
       row.subscription_status = 'canceled'
       row.polar_event_occurred_at = p[0]
       row.polar_event_rank = p[1]
+      row.litellm_budget_sync_required = true
       row.updated_at = now()
     }
     return { rows: [] }
@@ -145,6 +169,7 @@ function run(text, params = []) {
       row.renewal_at = now()
       row.polar_event_occurred_at = p[0]
       row.polar_event_rank = p[1]
+      row.litellm_budget_sync_required = true
       row.updated_at = now()
     }
     return { rows: [] }
@@ -158,18 +183,19 @@ function run(text, params = []) {
       row.local_pass_expires_at = addDays(new Date(base), 30)
       row.period_started_at = now()
       row.customer_email = p[0] ?? row.customer_email
+      row.litellm_budget_sync_required = true
       row.updated_at = now()
     }
     return { rows: [] }
   }
-  if (q.startsWith('UPDATE billing_accounts SET free_credit_remaining_micros')) {
-    // params: [costMicros, accountId]
-    const row = db.accounts.get(p[1])
-    if (row) {
-      row.free_credit_remaining_micros = Math.max(0, Number(row.free_credit_remaining_micros) - Number(p[0]))
-      row.updated_at = now()
-    }
-    return { rows: [] }
+  if (q.startsWith('UPDATE billing_accounts SET free_credit_remaining_micros = free_credit_remaining_micros - $1')) {
+    const row = db.accounts.get(p[2])
+    if (!row || Number(row.free_credit_remaining_micros) < Number(p[0])) return { rows: [] }
+    row.free_credit_remaining_micros -= Number(p[0])
+    row.spend_reserved_micros = 0
+    row.spend_reserved_until = null
+    row.updated_at = now()
+    return { rows: [{ id: row.id }] }
   }
   if (q.startsWith('UPDATE billing_accounts SET customer_email = $1, updated_at = now() WHERE id = $2')) {
     const row = db.accounts.get(p[1])
@@ -179,20 +205,30 @@ function run(text, params = []) {
     }
     return { rows: [] }
   }
-  if (q.startsWith('UPDATE billing_accounts SET intercom_user_id = COALESCE')) {
-    const row = db.accounts.get(p[0])
-    if (!row || (row.intercom_user_id != null && row.intercom_user_id !== p[1])) return { rows: [] }
-    row.intercom_user_id ??= p[1]
-    row.updated_at = now()
-    return { rows: [{ intercom_user_id: row.intercom_user_id }] }
-  }
   if (q.startsWith('UPDATE billing_accounts SET installation_token_version = installation_token_version + 1')) {
     const row = db.accounts.get(p[0])
-    if (!row) return { rows: [] }
+    if (!row || Number(row.installation_token_version) !== Number(p[1])) return { rows: [] }
     row.installation_token_version += 1
-    row.tokens_revoked_at = now()
     row.updated_at = now()
     return { rows: [{ installation_token_version: row.installation_token_version }] }
+  }
+  if (q.startsWith('UPDATE billing_accounts SET spend_reserved_micros = $1,')) {
+    const row = db.accounts.get(p[1])
+    if (row) {
+      row.spend_reserved_micros = Number(p[0])
+      row.spend_reserved_until = new Date(Date.now() + 120_000)
+      row.updated_at = now()
+    }
+    return { rows: [] }
+  }
+  if (q.startsWith('UPDATE billing_accounts SET spend_reserved_micros = 0,')) {
+    const row = db.accounts.get(p[1])
+    if (row && Number(row.spend_reserved_micros) === Number(p[0])) {
+      row.spend_reserved_micros = 0
+      row.spend_reserved_until = null
+      row.updated_at = now()
+    }
+    return { rows: [] }
   }
 
   // ── billing_bootstrap_attempts ────────────────────────────────────

@@ -1,7 +1,7 @@
 import { app, ipcMain } from 'electron'
 import { IPC, type IntercomIdentity } from '@shared/types'
 import { getAnalyticsDistinctId } from '../services/analytics'
-import { getBillingAccess, getIntercomUserHash } from '../services/billing'
+import { getBillingAccess, getIntercomIdentity } from '../services/billing'
 import { getDb } from '../services/database'
 import { getDaysTracked } from '../db/queries'
 import { getSettings } from '../services/settings'
@@ -29,13 +29,14 @@ export function registerIntercomHandlers(): void {
       ? (access.mode === 'subscription' && access.subscriptionStatus ? access.subscriptionStatus : access.mode)
       : 'unknown'
 
-    const userId = getAnalyticsDistinctId()
+    const verifiedIdentity = await getIntercomIdentity()
+    const userId = verifiedIdentity?.userId || getAnalyticsDistinctId()
     return {
       userId,
       // No connected-account email exists in the desktop app today (nothing is
       // stored anywhere in main or renderer) — send null until accounts exist.
       email: null,
-      userHash: await getIntercomUserHash(userId),
+      userHash: verifiedIdentity?.userHash || null,
       platform: process.platform,
       version: app.getVersion(),
       subscriptionStatus,

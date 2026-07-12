@@ -57,6 +57,13 @@ psql "$DATABASE_URL" -f services/billing/schema.sql
 
 The schema stores account state, usage metadata, payment events, and payment intents. It does not store prompts, resolved facts, answers, or raw activity.
 
+Managed calls reserve the account's currently available credit in a short row-locked
+transaction, commit that reservation, and only then call LiteLLM. Settlement records
+usage and releases the unused reservation atomically. Reservations expire after two
+minutes so a crashed server cannot freeze an account indefinitely. Entitlement webhooks
+commit Daylens state before synchronizing LiteLLM; a persisted sync flag makes that
+provider update retryable on the next managed call.
+
 Installation bearer tokens expire after 30 days and carry an account token version.
 The desktop can rotate a suspected token with `POST /v1/installations/rotate-token`
 using its current bearer token plus the local installation ID as proof. For an
@@ -278,7 +285,8 @@ no Polar/Flutterwave/LiteLLM accounts**. From the repo root:
 npm run billing:sandbox
 ```
 
-It boots `src/server.mjs` unmodified and scripts the 10 smoke checks above against it,
+It boots `src/server.mjs` unmodified and scripts the smoke checks above plus adversarial
+webhook, token-revocation, identity, overspend, and concurrency cases against it,
 printing `PASS`/`FAIL` per check and exiting non-zero on any failure.
 
 What it stands up (all in one Node process, all ephemeral):
@@ -287,8 +295,9 @@ What it stands up (all in one Node process, all ephemeral):
   server runs with no database. It implements only the queries the server issues; an
   unrecognised query throws loudly. Transactions snapshot, roll back, and serialize in
   the harness so crash recovery and concurrent-delivery regressions are exercised. The
-  harness also pins the production `FOR UPDATE` clauses explicitly because its global
-  transaction serialization is stronger than Postgres row locking. This is still not a
+  harness also pins the production `FOR UPDATE` clauses and reservation-before-provider
+  ordering explicitly because its global transaction serialization is stronger than
+  Postgres row locking. This is still not a
   substitute for the real-Postgres and provider test-mode checks before deployment.
 - **LiteLLM** - a fake upstream that returns a canned completion plus a fake
   `x-litellm-response-cost`, so metering and the `$5` credit draw-down are real.
