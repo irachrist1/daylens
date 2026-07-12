@@ -16,8 +16,8 @@ import type Database from 'better-sqlite3'
 import type { LiveSession, WorkContextBlock, WorkContextInsight, DayTimelinePayload } from '@shared/types'
 import { materializeTimelineDayProjection } from '../core/query/projections'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
-import { mergeTimelineEpisodes, shouldReanalyzeBlockWithAI } from './workBlocks'
-import { getBlockLabelOverride, writeAIBlockLabel } from '../db/queries'
+import { mergeTimelineEpisodes, shouldReanalyzeBlockWithAI, writeTimelineBlockReview } from './workBlocks'
+import { getBlockLabelOverride, setBlockLabelOverride, writeAIBlockLabel } from '../db/queries'
 import { generateWorkBlockInsight, generateDayRegroupPlan } from './ai'
 import { absenceSpannedBy, formatAbsenceRange, partitionAtRealAbsences } from '../lib/absenceGuard'
 
@@ -120,6 +120,15 @@ export async function analyzeTimelineDay(
     && block.sessions.length > 1
     && absenceSpannedBy(block.sessions) !== null)
   if (spanningAbsence.length > 0) {
+    const splitCorrections = spanningAbsence
+      .filter((block) => block.review.state === 'corrected')
+      .map((block) => ({
+        block,
+        label: block.review.correctedLabel,
+        intentRole: block.review.correctedIntentRole,
+        intentSubject: block.review.correctedIntentSubject,
+        category: block.review.correctedCategory,
+      }))
     for (const block of spanningAbsence) {
       const gap = absenceSpannedBy(block.sessions)
       console.warn(
@@ -128,6 +137,30 @@ export async function analyzeTimelineDay(
       )
     }
     payload = materializeTimelineDayProjection(db, dateStr, resolveLiveSession(dateStr), { forceRebuild: true })
+    // A fused block's evidence key necessarily changes when the absence guard
+    // splits its session set. Preserve the user's intent deterministically on
+    // the rebuilt half with the greatest time overlap (earlier half wins a
+    // tie). Copying it to every half would turn one correction into a claim
+    // that disconnected stretches were necessarily the same work.
+    for (const correction of splitCorrections) {
+      const target = payload.blocks
+        .filter((block) => !block.isLive && block.startTime < correction.block.endTime && block.endTime > correction.block.startTime)
+        .sort((left, right) => {
+          const leftOverlap = Math.min(left.endTime, correction.block.endTime) - Math.max(left.startTime, correction.block.startTime)
+          const rightOverlap = Math.min(right.endTime, correction.block.endTime) - Math.max(right.startTime, correction.block.startTime)
+          return rightOverlap - leftOverlap || left.startTime - right.startTime
+        })[0]
+      if (!target) continue
+      writeTimelineBlockReview(db, dateStr, target, {
+        state: 'corrected',
+        correctedLabel: correction.label,
+        correctedIntentRole: correction.intentRole,
+        correctedIntentSubject: correction.intentSubject,
+        correctedCategory: correction.category,
+      })
+      if (correction.label?.trim()) setBlockLabelOverride(db, target.id, correction.label, null)
+    }
+    if (splitCorrections.length > 0) payload = materialize()
     invalidateProjectionScope('timeline', 'absence-repair')
     invalidateProjectionScope('apps', 'absence-repair')
     invalidateProjectionScope('insights', 'absence-repair')

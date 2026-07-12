@@ -135,20 +135,12 @@ test('an AI regroup plan spanning the absence is partitioned: sides merge, the g
   db.close()
 })
 
-test('re-analyze REPAIRS a stored day whose block spans an absence, preserving the user rename', async () => {
+test('re-analyze REPAIRS a stored day and carries the fused block correction to the larger split half', async () => {
   const db = createDb()
   seedDayWithAbsence(db)
   const fresh = materializeTimelineDayProjection(db, TEST_DATE, null)
   const freshBlocks = fresh.blocks.filter((block) => !block.isLive)
   assert.equal(freshBlocks.length, 2)
-
-  // The user renamed the morning block — the correction that must survive.
-  const morning = freshBlocks[0]
-  writeTimelineBlockReview(db, TEST_DATE, morning as WorkContextBlock, {
-    state: 'corrected',
-    correctedLabel: 'Fixing the tracker',
-  })
-  setBlockLabelOverride(db, morning.id, 'Fixing the tracker', null)
 
   // Poison the day the way the pre-guard bug did: one stored block fused
   // across the absence, held together by a merge correction spanning the gap,
@@ -191,6 +183,15 @@ test('re-analyze REPAIRS a stored day whose block spans an absence, preserving t
   const poisonedBlocks = poisoned.blocks.filter((block) => !block.isLive)
   assert.equal(poisonedBlocks.length, 1)
   assert.ok(blockSpansGap(poisonedBlocks[0]), 'the poisoned block must span the absence')
+  // This is the missed review scenario: the correction belongs to the exact
+  // fused block being split, not a neighbouring pre-repair block whose
+  // evidence key happens to survive.
+  writeTimelineBlockReview(db, TEST_DATE, poisonedBlocks[0] as WorkContextBlock, {
+    state: 'corrected',
+    correctedLabel: 'Fixing the tracker',
+    correctedCategory: 'research',
+  })
+  setBlockLabelOverride(db, poisonedBlocks[0].id, 'Fixing the tracker', null)
 
   // The founder's one click: re-analyze. No AI needed to repair the shape.
   const result = await analyzeTimelineDay(db, TEST_DATE, {
@@ -206,11 +207,11 @@ test('re-analyze REPAIRS a stored day whose block spans an absence, preserving t
   const poisonRow = db.prepare(`SELECT COUNT(*) AS n FROM timeline_boundary_corrections WHERE id = 'bnd_poisoned'`)
     .get() as { n: number }
   assert.equal(poisonRow.n, 1)
-  // The user's rename re-attached to the rebuilt morning block (invariant 8).
-  assert.ok(
-    repaired.some((block) => block.label.current === 'Fixing the tracker'),
-    `the rename must survive the repair; labels: ${repaired.map((b) => b.label.current).join(' | ')}`,
-  )
+  const corrected = repaired.filter((block) => block.label.current === 'Fixing the tracker')
+  assert.equal(corrected.length, 1, 'the fused rename belongs to exactly the split half with the most overlap')
+  const largest = [...repaired].sort((a, b) => (b.endTime - b.startTime) - (a.endTime - a.startTime))[0]
+  assert.equal(corrected[0].id, largest.id)
+  assert.equal(corrected[0].dominantCategory, 'research', 'the fused category correction must survive too')
   db.close()
 })
 
