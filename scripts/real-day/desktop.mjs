@@ -370,7 +370,7 @@ async function main() {
   let cdp = null
   try {
     cdp = await connect(port)
-    await waitFor(cdp, `window.daylens && document.body`, 'Daylens preload and renderer')
+    await waitFor(cdp, `Boolean(window.daylens && document.body)`, 'Daylens preload and renderer')
     const timeline = await timelineObservation(cdp, date)
     const apps = await appsObservation(cdp, date)
     const searchQuery = String(timeline.labels[0] ?? apps.apps[0]?.name ?? '').split(/\s+/).find((part) => part.length >= 4) ?? apps.apps[0]?.name
