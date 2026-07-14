@@ -3,13 +3,14 @@ import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import http from 'node:http'
 import net from 'node:net'
+import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 import WebSocket from 'ws'
 
 function argument(name, fallback = null) {
   const index = process.argv.indexOf(`--${name}`)
-  return index >= 0 ? process.argv[index + 1] ?? fallback : fallback
+  return index >= 0 ? (process.argv[index + 1] ?? fallback) : fallback
 }
 
 function hasFlag(name) {
@@ -18,6 +19,11 @@ function hasFlag(name) {
 
 function fail(message) {
   throw new Error(`[real-day desktop] ${message}`)
+}
+
+function isWithin(parent, candidate) {
+  const relative = path.relative(path.resolve(parent), path.resolve(candidate))
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
 }
 
 function wait(ms) {
@@ -41,7 +47,9 @@ function getJson(url) {
   return new Promise((resolve, reject) => {
     const request = http.get(url, (response) => {
       let body = ''
-      response.on('data', (chunk) => { body += chunk })
+      response.on('data', (chunk) => {
+        body += chunk
+      })
       response.on('end', () => {
         try {
           resolve(JSON.parse(body))
@@ -68,7 +76,9 @@ async function pageTarget(port, timeoutMs = 30_000) {
     }
     await wait(250)
   }
-  throw new Error(`No Electron renderer CDP target after ${timeoutMs}ms: ${lastError ?? 'unknown error'}`)
+  throw new Error(
+    `No Electron renderer CDP target after ${timeoutMs}ms: ${lastError ?? 'unknown error'}`,
+  )
 }
 
 class Cdp {
@@ -103,7 +113,10 @@ class Cdp {
       userGesture: true,
     })
     if (response.exceptionDetails) {
-      throw new Error(response.exceptionDetails.exception?.description ?? JSON.stringify(response.exceptionDetails))
+      throw new Error(
+        response.exceptionDetails.exception?.description ??
+          JSON.stringify(response.exceptionDetails),
+      )
     }
     return response.result?.value
   }
@@ -184,7 +197,11 @@ async function timelineObservation(cdp, date) {
   assert.ok(result.domBlockCount > 0, `Timeline rendered no blocks for ${date}`)
 
   await cdp.evaluate(`document.querySelector('[data-timeline-block-id]')?.click(); true`)
-  await waitFor(cdp, `document.querySelector('[data-timeline-inspector="true"]') !== null`, 'block detail')
+  await waitFor(
+    cdp,
+    `document.querySelector('[data-timeline-inspector="true"]') !== null`,
+    'block detail',
+  )
   result.firstBlockDetail = await cdp.evaluate(`(() => {
     const dialog = document.querySelector('[data-timeline-inspector="true"]')
     return {
@@ -207,20 +224,36 @@ async function openEditor(cdp, blockIndex) {
     }))
     return true
   })()`)
-  await waitFor(cdp, `document.querySelector('[role="menu"]') !== null`, 'Timeline block context menu')
+  await waitFor(
+    cdp,
+    `document.querySelector('[role="menu"]') !== null`,
+    'Timeline block context menu',
+  )
   await cdp.evaluate(`(() => {
     const edit = [...document.querySelectorAll('[role="menuitem"]')].find((item) => item.textContent.trim() === 'Edit')
     edit?.click()
     return Boolean(edit)
   })()`)
-  await waitFor(cdp, `document.querySelector('[role="dialog"][aria-label="Edit block"]') !== null`, 'block editor')
+  await waitFor(
+    cdp,
+    `document.querySelector('[role="dialog"][aria-label="Edit block"]') !== null`,
+    'block editor',
+  )
 }
 
 async function appsObservation(cdp, date) {
-  await navigate(cdp, '#/apps', `document.querySelector('[aria-label="Previous period"]') !== null`, 'Apps day view')
+  await navigate(
+    cdp,
+    '#/apps',
+    `document.querySelector('[aria-label="Previous period"]') !== null`,
+    'Apps day view',
+  )
   const current = await cdp.evaluate(`new Date().toLocaleDateString('en-CA')`)
-  const daysBack = Math.round((Date.parse(`${current}T12:00:00`) - Date.parse(`${date}T12:00:00`)) / 86400000)
-  if (daysBack < 0 || daysBack > 90) fail(`Apps replay date ${date} is ${daysBack} days from ${current}`)
+  const daysBack = Math.round(
+    (Date.parse(`${current}T12:00:00`) - Date.parse(`${date}T12:00:00`)) / 86400000,
+  )
+  if (daysBack < 0 || daysBack > 90)
+    fail(`Apps replay date ${date} is ${daysBack} days from ${current}`)
   for (let index = 0; index < daysBack; index += 1) {
     await cdp.evaluate(`document.querySelector('[aria-label="Previous period"]')?.click(); true`)
     await wait(120)
@@ -241,14 +274,23 @@ async function appsObservation(cdp, date) {
     `Apps rows for ${date}`,
   )
   for (const app of result.apps.slice(0, 5)) {
-    assert.match(result.visibleText, new RegExp(app.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'))
+    assert.match(
+      result.visibleText,
+      new RegExp(app.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'),
+    )
   }
   return result
 }
 
 async function searchObservation(cdp, query) {
-  await cdp.evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', code: 'KeyK', metaKey: true, bubbles: true })); true`)
-  await waitFor(cdp, `document.querySelector('[aria-label="Search Daylens or run a command"]') !== null`, 'command palette')
+  await cdp.evaluate(
+    `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', code: 'KeyK', metaKey: true, bubbles: true })); true`,
+  )
+  await waitFor(
+    cdp,
+    `document.querySelector('[aria-label="Search Daylens or run a command"]') !== null`,
+    'command palette',
+  )
   await cdp.evaluate(`(() => {
     ${rendererHelpers}
     const input = document.querySelector('[aria-label="Search Daylens or run a command"]')
@@ -261,13 +303,20 @@ async function searchObservation(cdp, query) {
     return { query: ${JSON.stringify(query)}, text: palette?.innerText.slice(0, 8000) ?? '', optionCount: palette?.querySelectorAll('[role="option"]').length ?? 0 }
   })()`)
   assert.ok(result.text.length > 0, `Search returned no visible output for ${query}`)
-  await cdp.evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true })); true`)
+  await cdp.evaluate(
+    `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true })); true`,
+  )
   return result
 }
 
 async function correctionAndDeletion(cdp, date) {
   const correctionLabel = 'Real-day replay correction'
-  await navigate(cdp, `#/timeline?view=day&date=${date}`, `document.querySelectorAll('[data-timeline-block-id]').length >= 2`, 'two Timeline blocks for mutation checks')
+  await navigate(
+    cdp,
+    `#/timeline?view=day&date=${date}`,
+    `document.querySelectorAll('[data-timeline-block-id]').length >= 2`,
+    'two Timeline blocks for mutation checks',
+  )
   const before = await cdp.evaluate(`window.daylens.db.getTimelineDay(${JSON.stringify(date)})`)
   const correctedId = before.blocks[0].id
   const deletedId = before.blocks[1].id
@@ -280,9 +329,16 @@ async function correctionAndDeletion(cdp, date) {
     save?.click()
     return true
   })()`)
-  await waitFor(cdp, `document.querySelector('[role="dialog"][aria-label="Edit block"]') === null`, 'saved correction')
+  await waitFor(
+    cdp,
+    `document.querySelector('[role="dialog"][aria-label="Edit block"]') === null`,
+    'saved correction',
+  )
   const corrected = await cdp.evaluate(`window.daylens.db.getTimelineDay(${JSON.stringify(date)})`)
-  assert.equal(corrected.blocks.find((block) => block.id === correctedId)?.label.current, correctionLabel)
+  assert.equal(
+    corrected.blocks.find((block) => block.id === correctedId)?.label.current,
+    correctionLabel,
+  )
 
   await openEditor(cdp, 1)
   await cdp.evaluate(`(() => {
@@ -290,10 +346,20 @@ async function correctionAndDeletion(cdp, date) {
     button?.click()
     return true
   })()`)
-  await waitFor(cdp, `document.querySelector('[role="dialog"][aria-label="Edit block"]') === null`, 'deleted block')
+  await waitFor(
+    cdp,
+    `document.querySelector('[role="dialog"][aria-label="Edit block"]') === null`,
+    'deleted block',
+  )
   const deleted = await cdp.evaluate(`window.daylens.db.getTimelineDay(${JSON.stringify(date)})`)
-  assert.ok(!deleted.blocks.some((block) => block.id === deletedId), `Deleted block ${deletedId} resurfaced`)
-  assert.ok(deleted.blocks.some((block) => block.label.current === correctionLabel), 'Correction disappeared after deletion rebuild')
+  assert.ok(
+    !deleted.blocks.some((block) => block.id === deletedId),
+    `Deleted block ${deletedId} resurfaced`,
+  )
+  assert.ok(
+    deleted.blocks.some((block) => block.label.current === correctionLabel),
+    'Correction disappeared after deletion rebuild',
+  )
   return {
     correctionLabel,
     correctedId,
@@ -307,26 +373,89 @@ async function correctionAndDeletion(cdp, date) {
 
 async function aiObservation(cdp, date) {
   const question = `Give me a concise, source-grounded reconstruction of ${date}. State tracked time, major apps, meetings, and any uncertainty or cross-surface disagreement.`
-  await navigate(cdp, '#/ai', `document.querySelector('[aria-label="Ask Daylens about your work history"]') !== null`, 'AI composer')
+  await navigate(
+    cdp,
+    '#/ai',
+    `document.querySelector('[aria-label="Ask Daylens about your work history"]') !== null`,
+    'AI composer',
+  )
   await cdp.evaluate(`(() => {
     ${rendererHelpers}
     const editor = document.querySelector('[aria-label="Ask Daylens about your work history"]')
     setValue(editor, ${JSON.stringify(question)})
-    const send = document.querySelector('[aria-label="Send message"]')
-    send?.click()
     return true
   })()`)
   await waitFor(
     cdp,
-    `(() => !document.querySelector('[aria-label="Stop generating"]') && document.body.innerText.includes(${JSON.stringify(date)}))()`,
+    `document.querySelector('[aria-label="Send message"]')?.disabled === false`,
+    'AI send button to enable',
+  )
+  await cdp.evaluate(`document.querySelector('[aria-label="Send message"]')?.click(); true`)
+  await waitFor(
+    cdp,
+    `document.querySelector('[aria-label="Stop generating"]') !== null`,
+    'AI generation to start',
+    20_000,
+  )
+  await waitFor(
+    cdp,
+    `document.querySelector('[aria-label="Stop generating"]') === null`,
     'complete AI response',
     180_000,
   )
-  const result = await cdp.evaluate(`(() => {
+  const result = await cdp.evaluate(`(async () => {
     const main = document.querySelector('main')
-    return { question: ${JSON.stringify(question)}, visibleText: main?.innerText.slice(-20000) ?? '' }
+    const threads = await window.daylens.ai.listThreads({ includeArchived: true })
+    const latest = [...threads].sort((left, right) => right.lastMessageAt - left.lastMessageAt)[0] ?? null
+    const detail = latest ? await window.daylens.ai.getThread(latest.id) : null
+    return {
+      question: ${JSON.stringify(question)},
+      visibleText: main?.innerText.slice(-20000) ?? '',
+      persistedThread: detail ? {
+        id: detail.thread?.id ?? null,
+        title: detail.thread?.title ?? null,
+        messageCount: detail.thread?.messageCount ?? detail.messages.length,
+        messages: detail.messages.slice(-2).map((message) => ({
+          role: message.role,
+          content: message.content,
+          answerKind: message.answerKind ?? null,
+          toolTrace: message.agent?.toolTrace ?? [],
+          stepCount: message.agent?.stepCount ?? 0,
+          groundingRetried: message.agent?.groundingRetried ?? false,
+          actions: message.actions ?? [],
+          actionWidgets: message.actionWidgets ?? [],
+          artifacts: message.artifacts ?? [],
+        })),
+      } : null,
+    }
   })()`)
-  assert.match(result.visibleText, new RegExp(date.replaceAll('-', '.')))
+  const answer = result.visibleText
+    .slice(result.visibleText.lastIndexOf(question) + question.length)
+    .trim()
+  assert.ok(
+    answer.length >= 100,
+    `AI response was not rendered after the submitted question: ${answer}`,
+  )
+  result.answer = answer
+  assert.equal(
+    result.persistedThread?.messages.at(-2)?.role,
+    'user',
+    'submitted user message was not persisted',
+  )
+  assert.equal(
+    result.persistedThread?.messages.at(-2)?.content,
+    question,
+    'persisted user message changed',
+  )
+  assert.equal(
+    result.persistedThread?.messages.at(-1)?.role,
+    'assistant',
+    'assistant message was not persisted',
+  )
+  assert.ok(
+    result.persistedThread.messages.at(-1).toolTrace.length > 0,
+    'real-day assistant answer persisted without an evidence tool trace',
+  )
   return result
 }
 
@@ -334,22 +463,45 @@ async function main() {
   if (process.env.CI) fail('real-day desktop replay is local-only and refuses CI')
   const date = argument('date')
   const userData = argument('user-data')
-  const output = argument('output', userData ? path.join(path.dirname(userData), 'desktop-observation.json') : null)
+  const privateRoot = path.resolve(
+    argument(
+      'root',
+      process.env.DAYLENS_REAL_DAY_ROOT ?? path.join(os.homedir(), '.daylens-real-day'),
+    ),
+  )
+  const output = argument(
+    'output',
+    userData ? path.join(path.dirname(userData), 'desktop-observation.json') : null,
+  )
   if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) fail('pass --date YYYY-MM-DD')
-  if (!userData || !path.isAbsolute(userData)) fail('pass an absolute --user-data path containing an isolated database copy')
-  if (!fs.existsSync(path.join(userData, 'daylens.sqlite'))) fail(`${userData} has no daylens.sqlite`)
+  if (!userData || !path.isAbsolute(userData))
+    fail('pass an absolute --user-data path containing an isolated database copy')
+  if (!fs.existsSync(privateRoot)) fail(`private real-day root does not exist: ${privateRoot}`)
+  if (!fs.existsSync(userData)) fail(`isolated user-data directory does not exist: ${userData}`)
+  const canonicalRoot = fs.realpathSync(privateRoot)
+  const canonicalUserData = fs.realpathSync(userData)
+  if (!isWithin(canonicalRoot, canonicalUserData))
+    fail(`--user-data must be inside the private real-day root ${canonicalRoot}`)
+  if (!fs.existsSync(path.join(userData, 'daylens.sqlite')))
+    fail(`${userData} has no daylens.sqlite`)
   if (!output || !path.isAbsolute(output)) fail('pass an absolute --output path')
-  if (hasFlag('screenshots')) fail('screenshots are not part of this command; use a separately approved capture command')
+  const outputParent = fs.realpathSync(path.dirname(output))
+  if (!isWithin(canonicalRoot, outputParent))
+    fail(`--output must be inside the private real-day root ${canonicalRoot}`)
+  if (hasFlag('screenshots'))
+    fail('screenshots are not part of this command; use a separately approved capture command')
 
   const port = await availablePort()
-  const defaultElectron = process.platform === 'darwin'
-    ? path.join(process.cwd(), 'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron')
-    : path.join(process.cwd(), 'node_modules/.bin/electron')
+  const defaultElectron =
+    process.platform === 'darwin'
+      ? path.join(process.cwd(), 'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron')
+      : path.join(process.cwd(), 'node_modules/.bin/electron')
   const executable = argument('app', defaultElectron)
   if (!fs.existsSync(executable)) fail(`Desktop executable not found at ${executable}`)
-  const appArguments = executable === defaultElectron
-    ? [`--remote-debugging-port=${port}`, process.cwd()]
-    : [`--remote-debugging-port=${port}`]
+  const appArguments =
+    executable === defaultElectron
+      ? [`--remote-debugging-port=${port}`, process.cwd()]
+      : [`--remote-debugging-port=${port}`]
 
   fs.mkdirSync(path.dirname(output), { recursive: true, mode: 0o700 })
   const replayUserData = path.join(
@@ -358,7 +510,10 @@ async function main() {
     `run-${Date.now()}-${process.pid}`,
   )
   fs.mkdirSync(replayUserData, { recursive: true, mode: 0o700 })
-  fs.copyFileSync(path.join(userData, 'daylens.sqlite'), path.join(replayUserData, 'daylens.sqlite'))
+  fs.copyFileSync(
+    path.join(userData, 'daylens.sqlite'),
+    path.join(replayUserData, 'daylens.sqlite'),
+  )
   const sourceConfig = path.join(userData, 'config.json')
   if (fs.existsSync(sourceConfig)) {
     fs.copyFileSync(sourceConfig, path.join(replayUserData, 'config.json'))
@@ -375,7 +530,10 @@ async function main() {
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   let stderr = ''
-  child.stderr.on('data', (chunk) => { stderr += chunk.toString(); process.stderr.write(chunk) })
+  child.stderr.on('data', (chunk) => {
+    stderr += chunk.toString()
+    process.stderr.write(chunk)
+  })
   child.stdout.on('data', (chunk) => process.stdout.write(chunk))
 
   let cdp = null
@@ -384,7 +542,10 @@ async function main() {
     await waitFor(cdp, `Boolean(window.daylens && document.body)`, 'Daylens preload and renderer')
     const timeline = await timelineObservation(cdp, date)
     const apps = await appsObservation(cdp, date)
-    const searchQuery = String(timeline.labels[0] ?? apps.apps[0]?.name ?? '').split(/\s+/).find((part) => part.length >= 4) ?? apps.apps[0]?.name
+    const searchQuery =
+      String(timeline.labels[0] ?? apps.apps[0]?.name ?? '')
+        .split(/\s+/)
+        .find((part) => part.length >= 4) ?? apps.apps[0]?.name
     const search = await searchObservation(cdp, searchQuery)
     const mutations = hasFlag('mutations') ? await correctionAndDeletion(cdp, date) : null
     const ai = hasFlag('with-ai') ? await aiObservation(cdp, date) : null
@@ -392,19 +553,48 @@ async function main() {
       schemaVersion: 1,
       createdAt: new Date().toISOString(),
       date,
-      productionBoundaries: ['electron-main', 'migrations', 'repositories', 'ipc', 'preload', 'react-renderer'],
+      productionBoundaries: [
+        'electron-main',
+        'migrations',
+        'repositories',
+        'ipc',
+        'preload',
+        'react-renderer',
+      ],
       timeline,
       apps,
       search,
       mutations,
       ai,
     }
+    const acceptedPath = path.join(canonicalRoot, date, 'accepted.json')
+    if (ai && fs.existsSync(acceptedPath)) {
+      const accepted = JSON.parse(fs.readFileSync(acceptedPath, 'utf8'))
+      const expectations = accepted.review?.expectations?.ai ?? {}
+      const normalizedAnswer = ai.answer.toLowerCase()
+      for (const fact of expectations.requiredFacts ?? []) {
+        assert.ok(
+          normalizedAnswer.includes(String(fact).toLowerCase()),
+          `accepted AI fact missing from answer: ${fact}`,
+        )
+      }
+      for (const claim of expectations.prohibitedClaims ?? []) {
+        assert.ok(
+          !normalizedAnswer.includes(String(claim).toLowerCase()),
+          `prohibited AI claim appeared in answer: ${claim}`,
+        )
+      }
+    }
     fs.writeFileSync(output, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 })
-    console.log(`[real-day desktop] PASS ${date}: ${timeline.domBlockCount} Timeline blocks, ${apps.ipcCount} Apps rows, search UI exercised${mutations ? ', correction/deletion exercised' : ''}${ai ? ', AI UI exercised' : ''}`)
+    console.log(
+      `[real-day desktop] PASS ${date}: ${timeline.domBlockCount} Timeline blocks, ${apps.ipcCount} Apps rows, search UI exercised${mutations ? ', correction/deletion exercised' : ''}${ai ? ', AI UI exercised' : ''}`,
+    )
     console.log(`[real-day desktop] private result: ${output}`)
   } catch (error) {
     const suffix = stderr.trim() ? `\nElectron stderr:\n${stderr.slice(-8000)}` : ''
-    throw new Error(`${error instanceof Error ? error.stack ?? error.message : String(error)}${suffix}`)
+    throw new Error(
+      `${error instanceof Error ? (error.stack ?? error.message) : String(error)}${suffix}`,
+    )
   } finally {
     cdp?.close()
     child.kill('SIGTERM')

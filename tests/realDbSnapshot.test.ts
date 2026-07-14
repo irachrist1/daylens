@@ -19,7 +19,10 @@ test('real DB staging uses an online backup that includes committed WAL pages', 
     writer.prepare('INSERT INTO evidence (value) VALUES (?)').run('checkpointed')
     writer.pragma('wal_checkpoint(TRUNCATE)')
     writer.prepare('INSERT INTO evidence (value) VALUES (?)').run('committed-in-wal')
-    fs.writeFileSync(path.join(liveUserData, 'config.json'), JSON.stringify({ onboardingComplete: true }))
+    fs.writeFileSync(
+      path.join(liveUserData, 'config.json'),
+      JSON.stringify({ onboardingComplete: true }),
+    )
     assert.ok(fs.statSync(`${liveDbPath}-wal`).size > 0)
 
     process.env.DAYLENS_REAL_USER_DATA = liveUserData
@@ -36,10 +39,10 @@ test('real DB staging uses an online backup that includes committed WAL pages', 
       JSON.parse(fs.readFileSync(path.join(staged.tempUserData, 'config.json'), 'utf8')),
       { onboardingComplete: true, trackingPaused: true },
     )
-    assert.deepEqual(
-      writer.prepare('SELECT value FROM evidence ORDER BY id').pluck().all(),
-      ['checkpointed', 'committed-in-wal'],
-    )
+    assert.deepEqual(writer.prepare('SELECT value FROM evidence ORDER BY id').pluck().all(), [
+      'checkpointed',
+      'committed-in-wal',
+    ])
   } finally {
     if (staged) cleanupRealDbCopy(staged)
     writer.close()

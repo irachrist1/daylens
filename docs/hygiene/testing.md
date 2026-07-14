@@ -57,7 +57,7 @@ npm run verify:real-day:desktop -- \
 
 The desktop command launches the real Electron main/preload/renderer against that isolated clone in a fail-closed replay mode. It navigates Timeline, opens block detail, navigates Apps, and exercises command-palette search. Pass `--mutations` only for a disposable clone; it edits and permanently deletes test-copy data through the visible renderer and production IPC, then checks the result. Pass `--with-ai` only when one approved real provider call is intended. That flag enables model-provider network access while analytics, updates, billing, sync, connectors, Intercom, MCP, browser collection, and capture stay disabled. The command does not capture screenshots; screenshots require a separately approved run.
 
-After reviewing `wrapped.md`, edit the private `review.json` decision to `confirmed` or record corrections. Only a confirmed review can be accepted:
+After reviewing `wrapped.md`, record corrections in the private `review.json`. Put stable phrases the agent must state or must not claim under `expectations.ai.requiredFacts` and `expectations.ai.prohibitedClaims`; the desktop AI replay checks those semantic requirements without freezing exact model prose. Change the decision to `confirmed` only when the day is correct. Only a confirmed review can be accepted:
 
 ```bash
 npm run real-day:accept -- --date YYYY-MM-DD --confirmed

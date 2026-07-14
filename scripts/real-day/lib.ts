@@ -139,6 +139,12 @@ export interface AcceptedRealDay {
   review: {
     decision: 'confirmed'
     notes: string
+    expectations?: {
+      ai?: {
+        requiredFacts?: string[]
+        prohibitedClaims?: string[]
+      }
+    }
   }
 }
 
@@ -466,6 +472,7 @@ export function acceptReviewedCandidate(
     decision?: string
     notes?: string
     candidate?: RealDayObservation
+    expectations?: AcceptedRealDay['review']['expectations']
   }>(reviewPath)
   if (review.decision !== 'confirmed') {
     throw new Error('Acceptance requires review.json decision to be exactly "confirmed".')
@@ -479,7 +486,11 @@ export function acceptReviewedCandidate(
     date: review.candidate.date,
     acceptedAt: (options.now ?? new Date()).toISOString(),
     expected: review.candidate,
-    review: { decision: 'confirmed', notes: review.notes?.trim() ?? '' },
+    review: {
+      decision: 'confirmed',
+      notes: review.notes?.trim() ?? '',
+      expectations: review.expectations,
+    },
   }
   writePrivateJson(baselinePath, accepted)
   return accepted

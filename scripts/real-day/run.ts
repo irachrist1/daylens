@@ -523,6 +523,12 @@ async function evaluate(args: Args): Promise<RealDayObservation> {
     writePrivateJson(path.join(fixtureDir, 'review.json'), {
       decision: 'pending',
       notes: '',
+      expectations: {
+        ai: {
+          requiredFacts: [],
+          prohibitedClaims: [],
+        },
+      },
       candidate: observation,
     })
     fs.writeFileSync(path.join(fixtureDir, 'wrapped.md'), renderWrapped(observation), {
