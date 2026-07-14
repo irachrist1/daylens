@@ -2,81 +2,37 @@ import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { SCHEMA_SQL } from '../../src/main/db/schema.ts'
-import { getTimelineDayPayload, userVisibleLabelForBlock } from '../../src/main/services/workBlocks.ts'
+import { createProductionTestDatabase } from '../support/testDatabase.ts'
+import {
+  isNormalizedEvidenceDayFixture,
+  loadDayFixtures,
+  type ExpectedDayEpisode,
+  type NormalizedEvidenceDayFixture,
+} from '../support/dayFixture.ts'
+import {
+  getTimelineDayPayload,
+  userVisibleLabelForBlock,
+} from '../../src/main/services/workBlocks.ts'
 import { buildFallbackNarrative, computeFactsHash } from '../../src/main/lib/wrappedNarrative.ts'
-import { buildDayWrapFacts, categoryWord, type DayWrapFacts } from '../../src/renderer/lib/dayWrapScenes.ts'
+import {
+  buildDayWrapFacts,
+  categoryWord,
+  type DayWrapFacts,
+} from '../../src/renderer/lib/dayWrapScenes.ts'
 import { planDayWrapSlides, resolveSlideLine } from '../../src/renderer/lib/wrapDeck.ts'
 import { humanizeTitle } from '../../src/shared/humanize.ts'
 import { inferWorkIntent } from '../../src/shared/workIntent.ts'
 import { effectiveBlockKind, type WorkKind } from '../../src/shared/workKind.ts'
 import { blockActiveSeconds } from '../../src/shared/blockDuration.ts'
 import { isTrustedTimelineBlock } from '../../src/shared/timelineReview.ts'
-import type { AppCategory, DayTimelinePayload, WorkContextBlock, WorkIntentRole } from '../../src/shared/types.ts'
+import type {
+  AppCategory,
+  DayTimelinePayload,
+  WorkContextBlock,
+  WorkIntentRole,
+} from '../../src/shared/types.ts'
 
-type WrappedQuality = 'empty' | 'tooEarly' | 'partial' | 'full'
-
-interface FixtureSession {
-  start: string
-  end: string
-  bundleId: string
-  appName: string
-  category: AppCategory
-  title?: string | null
-}
-
-interface FixtureBrowserEvidence {
-  at: string
-  durationMinutes?: number
-  durationSeconds?: number
-  browserBundleId?: string | null
-  canonicalBrowserId?: string | null
-  domain: string
-  url: string
-  title?: string | null
-}
-
-interface FixtureActivityEvent {
-  at: string
-  type: string
-}
-
-interface ExpectedEpisode {
-  id: string
-  start: string
-  end: string
-  label: string
-  labelIncludes?: string[]
-  category?: AppCategory
-  kind?: WorkKind
-  intentRole?: WorkIntentRole
-  intentSubjectIncludes?: string[]
-}
-
-interface ExpectedWrap {
-  quality?: WrappedQuality
-  isLeisureDay?: boolean
-  /** A name the ranked work activities ("what you did" tracks) should include. */
-  workActivityIncludes?: string
-  /** A branded app/site the "where the time went" slices should include. */
-  appSiteIncludes?: string
-  /** A friendly leisure surface topLeisure should include ("YouTube"). */
-  topLeisureIncludes?: string
-  /** What the longest-stretch standout should be about. */
-  standoutIncludes?: string
-}
-
-interface TimelineFixture {
-  id: string
-  name: string
-  date: string
-  description?: string
-  sessions: FixtureSession[]
-  browserEvidence?: FixtureBrowserEvidence[]
-  activityEvents?: FixtureActivityEvent[]
-  expectedEpisodes: ExpectedEpisode[]
-  expectedWrap?: ExpectedWrap
-}
+type TimelineFixture = NormalizedEvidenceDayFixture
 
 interface ActualBlock {
   index: number
@@ -92,7 +48,7 @@ interface ActualBlock {
 }
 
 interface EpisodeResult {
-  expected: ExpectedEpisode
+  expected: ExpectedDayEpisode
   startTime: number
   endTime: number
   overlaps: Array<{ actual: ActualBlock; overlapMs: number }>
@@ -134,8 +90,8 @@ interface FixtureResult {
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURE_DIR = path.join(HERE, 'fixtures')
-const BASELINE_PATH = path.join(HERE, 'baseline.md')
-const BOUNDARY_TOLERANCE_MS = 5 * 60_000
+const BASELINE_PATH = path.join(process.cwd(), '.timeline-eval', 'baseline.md')
+const DEFAULT_BOUNDARY_TOLERANCE_MINUTES = 5
 
 function msForClock(dateStr: string, clock: string): number {
   const [hourRaw, minuteRaw] = clock.split(':')
@@ -169,7 +125,10 @@ function formatDuration(seconds: number): string {
 }
 
 function normalizeText(value: string | null | undefined): string {
-  return (value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+  return (value ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
 }
 
 function containsAny(value: string | null | undefined, expected: string[]): boolean {
@@ -185,9 +144,7 @@ function overlapMs(aStart: number, aEnd: number, bStart: number, bEnd: number): 
 }
 
 function createDb(): Database.Database {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
-  return db
+  return createProductionTestDatabase()
 }
 
 function seedFixture(db: Database.Database, fixture: TimelineFixture): void {
@@ -210,7 +167,7 @@ function seedFixture(db: Database.Database, fixture: TimelineFixture): void {
     ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, 'timeline_eval_fixture', NULL, 2)
   `)
 
-  for (const session of fixture.sessions) {
+  for (const session of fixture.input.sessions) {
     const startTime = msForClock(fixture.date, session.start)
     const endTime = msForClock(fixture.date, session.end)
     insertSession.run(
@@ -243,7 +200,7 @@ function seedFixture(db: Database.Database, fixture: TimelineFixture): void {
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'timeline_eval_fixture')
   `)
 
-  for (const [index, visit] of (fixture.browserEvidence ?? []).entries()) {
+  for (const [index, visit] of (fixture.input.browserEvidence ?? []).entries()) {
     const visitTime = msForClock(fixture.date, visit.at)
     const durationSeconds = visit.durationSeconds ?? Math.round((visit.durationMinutes ?? 1) * 60)
     insertVisit.run(
@@ -264,22 +221,13 @@ function seedFixture(db: Database.Database, fixture: TimelineFixture): void {
     INSERT INTO activity_state_events (event_ts, event_type, source, metadata_json)
     VALUES (?, ?, 'timeline_eval_fixture', '{}')
   `)
-  for (const event of fixture.activityEvents ?? []) {
+  for (const event of fixture.input.activityEvents ?? []) {
     insertEvent.run(msForClock(fixture.date, event.at), event.type)
   }
 }
 
 function loadFixtures(): TimelineFixture[] {
-  return fs.readdirSync(FIXTURE_DIR)
-    .filter((file) => file.endsWith('.json'))
-    .sort()
-    .map((file) => {
-      const fixture = JSON.parse(fs.readFileSync(path.join(FIXTURE_DIR, file), 'utf8')) as TimelineFixture
-      if (!fixture.id || !fixture.name || !fixture.date || fixture.expectedEpisodes.length === 0) {
-        throw new Error(`Invalid timeline eval fixture ${file}`)
-      }
-      return fixture
-    })
+  return loadDayFixtures(FIXTURE_DIR).filter(isNormalizedEvidenceDayFixture)
 }
 
 function actualBlocksFor(payload: DayTimelinePayload): ActualBlock[] {
@@ -301,20 +249,27 @@ function actualBlocksFor(payload: DayTimelinePayload): ActualBlock[] {
 }
 
 function evaluateEpisodes(fixture: TimelineFixture, actualBlocks: ActualBlock[]): EpisodeResult[] {
-  return fixture.expectedEpisodes.map((expected) => {
+  return fixture.expected.episodes.map((expected) => {
     const startTime = msForClock(fixture.date, expected.start)
     const endTime = msForClock(fixture.date, expected.end)
     const overlaps = actualBlocks
-      .map((actual) => ({ actual, overlapMs: overlapMs(startTime, endTime, actual.startTime, actual.endTime) }))
+      .map((actual) => ({
+        actual,
+        overlapMs: overlapMs(startTime, endTime, actual.startTime, actual.endTime),
+      }))
       .filter((entry) => entry.overlapMs > 0)
       .sort((left, right) => right.overlapMs - left.overlapMs)
     const primary = overlaps[0]?.actual ?? null
     const notes: string[] = []
+    const startToleranceMs =
+      (expected.startToleranceMinutes ?? DEFAULT_BOUNDARY_TOLERANCE_MINUTES) * 60_000
+    const endToleranceMs =
+      (expected.endToleranceMinutes ?? DEFAULT_BOUNDARY_TOLERANCE_MINUTES) * 60_000
 
     const boundaryOk = Boolean(
-      primary
-      && Math.abs(primary.startTime - startTime) <= BOUNDARY_TOLERANCE_MS
-      && Math.abs(primary.endTime - endTime) <= BOUNDARY_TOLERANCE_MS,
+      primary &&
+      Math.abs(primary.startTime - startTime) <= startToleranceMs &&
+      Math.abs(primary.endTime - endTime) <= endToleranceMs,
     )
     if (!primary) {
       notes.push('missing actual block')
@@ -330,7 +285,8 @@ function evaluateEpisodes(fixture: TimelineFixture, actualBlocks: ActualBlock[])
     const labelOk = primary ? containsAny(primary.label, labelTerms) : false
     if (primary && !labelOk) notes.push(`label "${primary.label}"`)
 
-    const categoryOk = !expected.category || (primary ? primary.block.dominantCategory === expected.category : false)
+    const categoryOk =
+      !expected.category || (primary ? primary.block.dominantCategory === expected.category : false)
     if (primary && expected.category && !categoryOk) {
       notes.push(`category ${primary.block.dominantCategory}`)
     }
@@ -344,7 +300,8 @@ function evaluateEpisodes(fixture: TimelineFixture, actualBlocks: ActualBlock[])
     if (primary && expected.intentRole && !roleOk) notes.push(`role ${primary.role}`)
 
     const subjectTerms = expected.intentSubjectIncludes ?? []
-    const subjectOk = subjectTerms.length === 0 || (primary ? containsAny(primary.subject, subjectTerms) : false)
+    const subjectOk =
+      subjectTerms.length === 0 || (primary ? containsAny(primary.subject, subjectTerms) : false)
     if (primary && subjectTerms.length > 0 && !subjectOk) {
       notes.push(`subject ${primary.subject ?? 'null'}`)
     }
@@ -366,10 +323,13 @@ function evaluateEpisodes(fixture: TimelineFixture, actualBlocks: ActualBlock[])
   })
 }
 
-function findUnderSplits(fixture: TimelineFixture, actualBlocks: ActualBlock[]): Array<{ actual: ActualBlock; expectedIds: string[] }> {
+function findUnderSplits(
+  fixture: TimelineFixture,
+  actualBlocks: ActualBlock[],
+): Array<{ actual: ActualBlock; expectedIds: string[] }> {
   return actualBlocks
     .map((actual) => {
-      const expectedIds = fixture.expectedEpisodes
+      const expectedIds = fixture.expected.episodes
         .filter((expected) => {
           const startTime = msForClock(fixture.date, expected.start)
           const endTime = msForClock(fixture.date, expected.end)
@@ -383,7 +343,7 @@ function findUnderSplits(fixture: TimelineFixture, actualBlocks: ActualBlock[]):
 
 function findExtras(fixture: TimelineFixture, actualBlocks: ActualBlock[]): ActualBlock[] {
   return actualBlocks.filter((actual) => {
-    return !fixture.expectedEpisodes.some((expected) => {
+    return !fixture.expected.episodes.some((expected) => {
       const startTime = msForClock(fixture.date, expected.start)
       const endTime = msForClock(fixture.date, expected.end)
       return overlapMs(actual.startTime, actual.endTime, startTime, endTime) > 0
@@ -398,11 +358,13 @@ function findExtras(fixture: TimelineFixture, actualBlocks: ActualBlock[]): Actu
 // wrap prose the checks below run against.
 function wrappedTexts(facts: DayWrapFacts): string[] {
   const narrative = buildFallbackNarrative(facts, computeFactsHash(facts))
-  const slideLines = facts.quality === 'empty' || facts.quality === 'tooEarly'
-    ? []
-    : planDayWrapSlides(facts).map((spec) => resolveSlideLine(spec, narrative.lines))
-  return [narrative.lead, ...slideLines, narrative.question, narrative.reflection]
-    .filter((line): line is string => Boolean(line))
+  const slideLines =
+    facts.quality === 'empty' || facts.quality === 'tooEarly'
+      ? []
+      : planDayWrapSlides(facts).map((spec) => resolveSlideLine(spec, narrative.lines))
+  return [narrative.lead, ...slideLines, narrative.question, narrative.reflection].filter(
+    (line): line is string => Boolean(line),
+  )
 }
 
 function trackedDomains(payload: DayTimelinePayload): Set<string> {
@@ -415,7 +377,11 @@ function trackedDomains(payload: DayTimelinePayload): Set<string> {
   return domains
 }
 
-function unsupportedWrapClaims(facts: DayWrapFacts, texts: string[], payload: DayTimelinePayload): string[] {
+function unsupportedWrapClaims(
+  facts: DayWrapFacts,
+  texts: string[],
+  payload: DayTimelinePayload,
+): string[] {
   const allowedDomains = trackedDomains(payload)
   const issues: string[] = []
 
@@ -425,7 +391,10 @@ function unsupportedWrapClaims(facts: DayWrapFacts, texts: string[], payload: Da
   const storySegments = facts.dayStory
   const allowedHours = [
     facts.activeSeconds,
-    facts.workSeconds, facts.leisureSeconds, facts.personalSeconds, facts.meetingsSeconds,
+    facts.workSeconds,
+    facts.leisureSeconds,
+    facts.personalSeconds,
+    facts.meetingsSeconds,
     facts.standout?.seconds ?? 0,
     ...facts.workActivities.map((a) => a.seconds),
     ...facts.appSites.map((s) => s.seconds),
@@ -437,7 +406,8 @@ function unsupportedWrapClaims(facts: DayWrapFacts, texts: string[], payload: Da
     .map((s) => s / 3600)
 
   for (const text of texts) {
-    const domainMatches = text.match(/\b([a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|org|io|dev|app|net|ai|co))\b/gi) ?? []
+    const domainMatches =
+      text.match(/\b([a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|org|io|dev|app|net|ai|co))\b/gi) ?? []
     for (const match of domainMatches) {
       const normalized = match.toLowerCase().replace(/^www\./, '')
       if (allowedDomains.has(normalized)) continue
@@ -458,7 +428,7 @@ function unsupportedWrapClaims(facts: DayWrapFacts, texts: string[], payload: Da
 }
 
 function evaluateWrap(fixture: TimelineFixture, facts: DayWrapFacts): string[] {
-  const expected = fixture.expectedWrap
+  const expected = fixture.expected.wrap
   if (!expected) return []
   const issues: string[] = []
 
@@ -469,7 +439,9 @@ function evaluateWrap(fixture: TimelineFixture, facts: DayWrapFacts): string[] {
     issues.push(`isLeisureDay ${facts.isLeisureDay}, expected ${expected.isLeisureDay}`)
   }
   if (expected.workActivityIncludes) {
-    const found = facts.workActivities.some((a) => containsAny(a.name, [expected.workActivityIncludes!]))
+    const found = facts.workActivities.some((a) =>
+      containsAny(a.name, [expected.workActivityIncludes!]),
+    )
     if (!found) {
       const got = facts.workActivities.map((a) => a.name).join(' | ') || 'none'
       issues.push(`workActivities missing "${expected.workActivityIncludes}" (got ${got})`)
@@ -485,11 +457,18 @@ function evaluateWrap(fixture: TimelineFixture, facts: DayWrapFacts): string[] {
   if (expected.topLeisureIncludes) {
     const found = facts.topLeisure.some((name) => containsAny(name, [expected.topLeisureIncludes!]))
     if (!found) {
-      issues.push(`topLeisure missing "${expected.topLeisureIncludes}" (got ${facts.topLeisure.join(' | ') || 'none'})`)
+      issues.push(
+        `topLeisure missing "${expected.topLeisureIncludes}" (got ${facts.topLeisure.join(' | ') || 'none'})`,
+      )
     }
   }
-  if (expected.standoutIncludes && !containsAny(facts.standout?.name, [expected.standoutIncludes])) {
-    issues.push(`standout ${facts.standout?.name ?? 'none'}, expected "${expected.standoutIncludes}"`)
+  if (
+    expected.standoutIncludes &&
+    !containsAny(facts.standout?.name, [expected.standoutIncludes])
+  ) {
+    issues.push(
+      `standout ${facts.standout?.name ?? 'none'}, expected "${expected.standoutIncludes}"`,
+    )
   }
 
   return issues
@@ -547,7 +526,9 @@ function checkWrapGrounding(facts: DayWrapFacts, payload: DayTimelinePayload): s
 
   // 2. The headline number reconciles with the split exactly.
   if (facts.activeSeconds !== facts.workSeconds + facts.leisureSeconds + facts.personalSeconds) {
-    issues.push(`activeSeconds ${facts.activeSeconds} != split total ${facts.workSeconds + facts.leisureSeconds + facts.personalSeconds}`)
+    issues.push(
+      `activeSeconds ${facts.activeSeconds} != split total ${facts.workSeconds + facts.leisureSeconds + facts.personalSeconds}`,
+    )
   }
 
   // 3. The "where the time went" slices sum to the headline (slices + Other).
@@ -570,7 +551,9 @@ function checkWrapGrounding(facts: DayWrapFacts, payload: DayTimelinePayload): s
       issues.push(`work activity "${activity.name}" traces to no trusted work block`)
     }
     if (activity.seconds > facts.workSeconds + 1) {
-      issues.push(`work activity "${activity.name}" claims ${activity.seconds}s > workSeconds ${facts.workSeconds}`)
+      issues.push(
+        `work activity "${activity.name}" claims ${activity.seconds}s > workSeconds ${facts.workSeconds}`,
+      )
     }
   }
 
@@ -578,9 +561,11 @@ function checkWrapGrounding(facts: DayWrapFacts, payload: DayTimelinePayload): s
   //    honest category word when the block is unnameable), no longer than all
   //    work combined.
   if (facts.standout) {
-    const traced = workBlocks.some((b) =>
-      containsAny(workBlockNames(b), [facts.standout!.name])
-      || normalizeText(categoryWord(b.dominantCategory)) === normalizeText(facts.standout!.name))
+    const traced = workBlocks.some(
+      (b) =>
+        containsAny(workBlockNames(b), [facts.standout!.name]) ||
+        normalizeText(categoryWord(b.dominantCategory)) === normalizeText(facts.standout!.name),
+    )
     if (!traced) {
       issues.push(`standout "${facts.standout.name}" traces to no trusted work block`)
     }
@@ -593,8 +578,8 @@ function checkWrapGrounding(facts: DayWrapFacts, payload: DayTimelinePayload): s
 }
 
 // The Target Design encoded as hard invariants. A green eval run is meaningless
-// unless it actually verifies the design held — Wave 1's gates passed while the
-// product regressed. These checks make a green run mean the design is met:
+// unless it actually verifies the design held — gates have passed before while
+// the product regressed. These checks make a green run mean the design is met:
 // kind correctness, no dev apps inside a leisure episode, and humanized titles.
 const NATIVE_WORK_CATEGORIES = new Set<AppCategory>(['development', 'aiTools', 'writing', 'design'])
 // Data/office files (and underscore-mangled names) must be humanized before they
@@ -614,20 +599,24 @@ function titleLooksRaw(value: string | null | undefined): string | null {
 }
 
 // The wrap must never contradict itself, scold, invent, or assign homework.
-// These guard the Wave 1 wrap defects directly so a green run means the cards
+// These guard known wrap defects directly so a green run means the cards
 // are honest.
 const WRAP_GUILT_PATTERNS = [
-  /\b100%\b/i,                                  // the "100% entertainment" contradiction
-  /needs?\b[^.]{0,24}\breview\b/i,              // the "needs review" homework closing
+  /\b100%\b/i, // the "100% entertainment" contradiction
+  /needs?\b[^.]{0,24}\breview\b/i, // the "needs review" homework closing
   /review in the timeline/i,
-  /\bdistraction(?:s)?\b/i,                     // guilt framing
+  /\bdistraction(?:s)?\b/i, // guilt framing
   /books you (?:didn'?t|did not)/i,
   /\blost to\b/i,
   /courses? (?:left )?unstarted/i,
   /extrapolat/i,
 ]
 
-function wrapDesignIssues(facts: DayWrapFacts, texts: string[], actualBlocks: ActualBlock[]): string[] {
+function wrapDesignIssues(
+  facts: DayWrapFacts,
+  texts: string[],
+  actualBlocks: ActualBlock[],
+): string[] {
   const issues: string[] = []
 
   for (const text of texts) {
@@ -662,13 +651,19 @@ function wrapDesignIssues(facts: DayWrapFacts, texts: string[], actualBlocks: Ac
   return issues
 }
 
-function designInvariantIssues(fixture: TimelineFixture, actualBlocks: ActualBlock[], episodes: EpisodeResult[]): string[] {
+function designInvariantIssues(
+  fixture: TimelineFixture,
+  actualBlocks: ActualBlock[],
+  episodes: EpisodeResult[],
+): string[] {
   const issues: string[] = []
 
   // 1. Kind correctness: every expected episode's kind must match.
   for (const episode of episodes) {
     if (episode.expected.kind && episode.primary && !episode.kindOk) {
-      issues.push(`kind: ${episode.expected.id} is ${episode.primary.kind}, expected ${episode.expected.kind}`)
+      issues.push(
+        `kind: ${episode.expected.id} is ${episode.primary.kind}, expected ${episode.expected.kind}`,
+      )
     }
   }
 
@@ -680,11 +675,15 @@ function designInvariantIssues(fixture: TimelineFixture, actualBlocks: ActualBlo
         .filter((app) => !app.isBrowser && NATIVE_WORK_CATEGORIES.has(app.category))
         .map((app) => app.appName)
       if (workApps.length > 0) {
-        issues.push(`leisure ${formatRange(actual.startTime, actual.endTime)} contains work apps: ${workApps.join(', ')}`)
+        issues.push(
+          `leisure ${formatRange(actual.startTime, actual.endTime)} contains work apps: ${workApps.join(', ')}`,
+        )
       }
       // A leisure label must be activity-shaped, never a raw page/video title.
       if (!/^(watching|on |listening|browsing)/i.test(actual.label)) {
-        issues.push(`leisure ${formatRange(actual.startTime, actual.endTime)} label "${actual.label}" is not activity-shaped`)
+        issues.push(
+          `leisure ${formatRange(actual.startTime, actual.endTime)} label "${actual.label}" is not activity-shaped`,
+        )
       }
     }
 
@@ -719,10 +718,14 @@ function evaluateFixture(fixture: TimelineFixture): FixtureResult {
     const boundaryIssues: string[] = []
     for (const actual of actualBlocks) {
       if (actual.startReasons.length === 0) {
-        boundaryIssues.push(`block ${formatRange(actual.startTime, actual.endTime)} has no start boundary reason`)
+        boundaryIssues.push(
+          `block ${formatRange(actual.startTime, actual.endTime)} has no start boundary reason`,
+        )
       }
       if (actual.endReasons.length === 0) {
-        boundaryIssues.push(`block ${formatRange(actual.startTime, actual.endTime)} has no end boundary reason`)
+        boundaryIssues.push(
+          `block ${formatRange(actual.startTime, actual.endTime)} has no end boundary reason`,
+        )
       }
     }
 
@@ -732,21 +735,25 @@ function evaluateFixture(fixture: TimelineFixture): FixtureResult {
     ]
 
     const segmentationTotal = episodes.length
-    const segmentationPassed = episodes.filter((episode) => (
-      episode.primary
-      && episode.overlaps.length === 1
-      && episode.boundaryOk
-      && !underSplits.some((entry) => entry.actual === episode.primary)
-    )).length
+    const segmentationPassed = episodes.filter(
+      (episode) =>
+        episode.primary &&
+        episode.overlaps.length === 1 &&
+        episode.boundaryOk &&
+        !underSplits.some((entry) => entry.actual === episode.primary),
+    ).length
     const labelsTotal = episodes.length
     const labelsPassed = episodes.filter((episode) => episode.labelOk).length
     const roles = episodes.filter((episode) => episode.expected.intentRole)
     const rolesPassed = roles.filter((episode) => episode.roleOk && episode.subjectOk).length
-    const wrapsTotal = fixture.expectedWrap ? 1 : 0
-    const wrapsPassed = wrapsTotal > 0
-      && wrapIssues.length === 0
-      && unsupported.length === 0
-      && wrapGrounding.length === 0 ? 1 : 0
+    const wrapsTotal = fixture.expected.wrap ? 1 : 0
+    const wrapsPassed =
+      wrapsTotal > 0 &&
+      wrapIssues.length === 0 &&
+      unsupported.length === 0 &&
+      wrapGrounding.length === 0
+        ? 1
+        : 0
 
     return {
       fixture,
@@ -783,7 +790,10 @@ function status(ok: boolean): string {
 }
 
 function formatActualBlock(actual: ActualBlock): string {
-  const apps = actual.block.topApps.map((app) => app.appName).slice(0, 3).join(', ')
+  const apps = actual.block.topApps
+    .map((app) => app.appName)
+    .slice(0, 3)
+    .join(', ')
   const subject = actual.subject ? ` on ${actual.subject}` : ''
   const boundary = ` ⟦${actual.startReasons.join('+') || '?'} → ${actual.endReasons.join('+') || '?'}⟧`
   return `${formatRange(actual.startTime, actual.endTime)} ${actual.label} (${actual.block.dominantCategory}, ${actual.role}${subject}, apps: ${apps})${boundary}`
@@ -795,23 +805,26 @@ function formatFixture(result: FixtureResult): string {
   lines.push(`## ${fixture.name} (${fixture.id})`)
   if (fixture.description) lines.push(fixture.description)
   lines.push('')
-  lines.push(`Score: segmentation ${scores.segmentationPassed}/${scores.segmentationTotal} | labels ${scores.labelsPassed}/${scores.labelsTotal} | intent ${scores.rolesPassed}/${scores.rolesTotal} | wraps ${scores.wrapsPassed}/${scores.wrapsTotal}`)
+  lines.push(
+    `Score: segmentation ${scores.segmentationPassed}/${scores.segmentationTotal} | labels ${scores.labelsPassed}/${scores.labelsTotal} | intent ${scores.rolesPassed}/${scores.rolesTotal} | wraps ${scores.wrapsPassed}/${scores.wrapsTotal}`,
+  )
   lines.push('')
-  lines.push('| Expected episode | Actual primary block | Result | Notes |')
+  lines.push('| Expected episode | Actual primary block | Strict result | Notes |')
   lines.push('| --- | --- | --- | --- |')
   for (const episode of result.episodes) {
-    const checksOk = Boolean(
-      episode.primary
-      && episode.overlaps.length === 1
-      && episode.boundaryOk
-      && episode.labelOk
-      && episode.categoryOk
-      && episode.roleOk
-      && episode.subjectOk,
+    const strictChecksOk = Boolean(
+      episode.primary &&
+      episode.overlaps.length === 1 &&
+      episode.boundaryOk &&
+      episode.labelOk &&
+      episode.roleOk &&
+      episode.subjectOk,
     )
     const expected = `${episode.expected.id} ${formatRange(episode.startTime, episode.endTime)} "${episode.expected.label}"`
     const actual = episode.primary ? formatActualBlock(episode.primary) : 'missing'
-    lines.push(`| ${expected} | ${actual} | ${status(checksOk)} | ${episode.notes.join('; ') || 'ok'} |`)
+    lines.push(
+      `| ${expected} | ${actual} | ${status(strictChecksOk)} | ${episode.notes.join('; ') || 'ok'} |`,
+    )
   }
 
   lines.push('')
@@ -819,39 +832,56 @@ function formatFixture(result: FixtureResult): string {
   for (const actual of result.actualBlocks) {
     const pages = actual.block.pageRefs.map((page) => page.displayTitle).slice(0, 2)
     const pageText = pages.length > 0 ? ` pages: ${pages.join(' | ')}` : ''
-    lines.push(`- ${formatActualBlock(actual)}; active ${formatDuration(blockActiveSeconds(actual.block))}${pageText}`)
+    lines.push(
+      `- ${formatActualBlock(actual)}; active ${formatDuration(blockActiveSeconds(actual.block))}${pageText}`,
+    )
   }
 
   const facts = result.facts
   lines.push('')
   lines.push(
-    `Wrap check: quality ${facts.quality}; active ${formatDuration(facts.activeSeconds)} `
-    + `(work ${formatDuration(facts.workSeconds)} / leisure ${formatDuration(facts.leisureSeconds)} / personal ${formatDuration(facts.personalSeconds)}); `
-    + `leisure day ${facts.isLeisureDay}; `
-    + `unsupported claims ${result.unsupportedWrapClaims.length === 0 ? 'none' : result.unsupportedWrapClaims.length}`,
+    `Wrap check: quality ${facts.quality}; active ${formatDuration(facts.activeSeconds)} ` +
+      `(work ${formatDuration(facts.workSeconds)} / leisure ${formatDuration(facts.leisureSeconds)} / personal ${formatDuration(facts.personalSeconds)}); ` +
+      `leisure day ${facts.isLeisureDay}; ` +
+      `unsupported claims ${result.unsupportedWrapClaims.length === 0 ? 'none' : result.unsupportedWrapClaims.length}`,
   )
   lines.push(
-    `Wrap facts: activities [${facts.workActivities.map((a) => `${a.name} ${formatDuration(a.seconds)}`).join(' | ') || 'none'}]; `
-    + `standout ${facts.standout ? `${facts.standout.name} ${formatDuration(facts.standout.seconds)}` : 'none'}; `
-    + `slices [${facts.appSites.slice(0, 4).map((s) => s.name).join(' | ') || 'none'}]; `
-    + `leisure [${facts.topLeisure.join(' | ') || 'none'}]`,
+    `Wrap facts: activities [${facts.workActivities.map((a) => `${a.name} ${formatDuration(a.seconds)}`).join(' | ') || 'none'}]; ` +
+      `standout ${facts.standout ? `${facts.standout.name} ${formatDuration(facts.standout.seconds)}` : 'none'}; ` +
+      `slices [${
+        facts.appSites
+          .slice(0, 4)
+          .map((s) => s.name)
+          .join(' | ') || 'none'
+      }]; ` +
+      `leisure [${facts.topLeisure.join(' | ') || 'none'}]`,
   )
 
   const issueLines: string[] = []
   for (const episode of result.overSplits) {
-    issueLines.push(`over-split ${episode.expected.id}: ${episode.overlaps.map((entry) => formatRange(entry.actual.startTime, entry.actual.endTime)).join(', ')}`)
+    issueLines.push(
+      `over-split ${episode.expected.id}: ${episode.overlaps.map((entry) => formatRange(entry.actual.startTime, entry.actual.endTime)).join(', ')}`,
+    )
   }
   for (const entry of result.underSplits) {
-    issueLines.push(`under-split ${formatRange(entry.actual.startTime, entry.actual.endTime)} spans ${entry.expectedIds.join(', ')}`)
+    issueLines.push(
+      `under-split ${formatRange(entry.actual.startTime, entry.actual.endTime)} spans ${entry.expectedIds.join(', ')}`,
+    )
   }
   for (const episode of result.episodes.filter((entry) => entry.primary && !entry.labelOk)) {
-    issueLines.push(`wrong label ${episode.expected.id}: got "${episode.primary!.label}", expected "${episode.expected.label}"`)
+    issueLines.push(
+      `wrong label ${episode.expected.id}: got "${episode.primary!.label}", expected "${episode.expected.label}"`,
+    )
   }
   for (const episode of result.episodes.filter((entry) => entry.primary && !entry.roleOk)) {
-    issueLines.push(`wrong intent role ${episode.expected.id}: got ${episode.primary!.role}, expected ${episode.expected.intentRole}`)
+    issueLines.push(
+      `wrong intent role ${episode.expected.id}: got ${episode.primary!.role}, expected ${episode.expected.intentRole}`,
+    )
   }
   for (const episode of result.episodes.filter((entry) => entry.primary && !entry.subjectOk)) {
-    issueLines.push(`wrong intent subject ${episode.expected.id}: got ${episode.primary!.subject ?? 'null'}`)
+    issueLines.push(
+      `wrong intent subject ${episode.expected.id}: got ${episode.primary!.subject ?? 'null'}`,
+    )
   }
   for (const issue of result.wrapIssues) {
     issueLines.push(`wrap fact mismatch: ${issue}`)
@@ -885,25 +915,28 @@ function formatFixture(result: FixtureResult): string {
 }
 
 function formatReport(results: FixtureResult[]): string {
-  const total = results.reduce((sum, result) => ({
-    segmentationPassed: sum.segmentationPassed + result.scores.segmentationPassed,
-    segmentationTotal: sum.segmentationTotal + result.scores.segmentationTotal,
-    labelsPassed: sum.labelsPassed + result.scores.labelsPassed,
-    labelsTotal: sum.labelsTotal + result.scores.labelsTotal,
-    rolesPassed: sum.rolesPassed + result.scores.rolesPassed,
-    rolesTotal: sum.rolesTotal + result.scores.rolesTotal,
-    wrapsPassed: sum.wrapsPassed + result.scores.wrapsPassed,
-    wrapsTotal: sum.wrapsTotal + result.scores.wrapsTotal,
-  }), {
-    segmentationPassed: 0,
-    segmentationTotal: 0,
-    labelsPassed: 0,
-    labelsTotal: 0,
-    rolesPassed: 0,
-    rolesTotal: 0,
-    wrapsPassed: 0,
-    wrapsTotal: 0,
-  })
+  const total = results.reduce(
+    (sum, result) => ({
+      segmentationPassed: sum.segmentationPassed + result.scores.segmentationPassed,
+      segmentationTotal: sum.segmentationTotal + result.scores.segmentationTotal,
+      labelsPassed: sum.labelsPassed + result.scores.labelsPassed,
+      labelsTotal: sum.labelsTotal + result.scores.labelsTotal,
+      rolesPassed: sum.rolesPassed + result.scores.rolesPassed,
+      rolesTotal: sum.rolesTotal + result.scores.rolesTotal,
+      wrapsPassed: sum.wrapsPassed + result.scores.wrapsPassed,
+      wrapsTotal: sum.wrapsTotal + result.scores.wrapsTotal,
+    }),
+    {
+      segmentationPassed: 0,
+      segmentationTotal: 0,
+      labelsPassed: 0,
+      labelsTotal: 0,
+      rolesPassed: 0,
+      rolesTotal: 0,
+      wrapsPassed: 0,
+      wrapsTotal: 0,
+    },
+  )
 
   const lines = [
     '# Daylens Timeline Evaluation',
@@ -923,11 +956,11 @@ function formatReport(results: FixtureResult[]): string {
 
 const writeBaseline = process.argv.includes('--write-baseline')
 const strict = process.argv.includes('--strict')
-const fixtureFilter = process.argv
-  .filter((arg) => !arg.startsWith('--'))
-  .slice(2)
-const fixtures = loadFixtures()
-  .filter((fixture) => fixtureFilter.length === 0 || fixtureFilter.some((value) => fixture.id.includes(value)))
+const fixtureFilter = process.argv.filter((arg) => !arg.startsWith('--')).slice(2)
+const fixtures = loadFixtures().filter(
+  (fixture) =>
+    fixtureFilter.length === 0 || fixtureFilter.some((value) => fixture.id.includes(value)),
+)
 
 if (fixtures.length === 0) {
   throw new Error('No timeline eval fixtures matched.')
@@ -938,6 +971,7 @@ const report = formatReport(results)
 console.log(report)
 
 if (writeBaseline) {
+  fs.mkdirSync(path.dirname(BASELINE_PATH), { recursive: true })
   fs.writeFileSync(BASELINE_PATH, `${report}\n`)
   console.log(`\nWrote ${BASELINE_PATH}`)
 }
@@ -954,18 +988,20 @@ if (boundaryDefects.length > 0) {
 // Target-Design invariants (always enforced): a green run must mean the design
 // held. kind correctness, no dev apps inside leisure, humanized titles.
 const designDefects = results.flatMap((result) =>
-  result.designIssues.map((issue) => `${result.fixture.id}: ${issue}`))
+  result.designIssues.map((issue) => `${result.fixture.id}: ${issue}`),
+)
 if (designDefects.length > 0) {
   console.error(`\nTarget-Design invariant violated:\n- ${designDefects.join('\n- ')}`)
   process.exitCode = 1
 }
 
 if (strict) {
-  const failed = results.some((result) => (
-    result.scores.segmentationPassed !== result.scores.segmentationTotal
-    || result.scores.labelsPassed !== result.scores.labelsTotal
-    || result.scores.rolesPassed !== result.scores.rolesTotal
-    || result.scores.wrapsPassed !== result.scores.wrapsTotal
-  ))
+  const failed = results.some(
+    (result) =>
+      result.scores.segmentationPassed !== result.scores.segmentationTotal ||
+      result.scores.labelsPassed !== result.scores.labelsTotal ||
+      result.scores.rolesPassed !== result.scores.rolesTotal ||
+      result.scores.wrapsPassed !== result.scores.wrapsTotal,
+  )
   if (failed) process.exitCode = 1
 }

@@ -1,33 +1,17 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { getWrapPreflight } from '../src/main/services/wrapPreflight.ts'
 
-// Wrap pre-flight (Stage 0.4): honest, specific warnings before generation.
-// None block; the renderer offers a one-tap "Generate anyway".
+// Wrap pre-flight: honest, specific warnings before generation. None block;
+// the renderer offers a one-tap "Generate anyway".
 
 const DATE = '2026-06-23' // fixed past Tuesday
 const DAY_START = new Date(2026, 5, 23, 9, 0, 0, 0).getTime()
 
 function makeDb(): Database.Database {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS external_signals (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      date TEXT NOT NULL, source TEXT NOT NULL,
-      payload_json TEXT NOT NULL, captured_at INTEGER NOT NULL,
-      UNIQUE(date, source)
-    );
-    CREATE TABLE IF NOT EXISTS wrapped_narratives (
-      cadence TEXT NOT NULL, period_key TEXT NOT NULL,
-      facts_hash TEXT NOT NULL, narrative_json TEXT NOT NULL,
-      generated_at INTEGER NOT NULL,
-      PRIMARY KEY (cadence, period_key)
-    );
-  `)
-  return db
+  return createProductionTestDatabase()
 }
 
 function seedSessions(db: Database.Database, count: number, titledEvery: number, startMs = DAY_START): void {

@@ -4,6 +4,7 @@ import {
   citationFallback,
   extractNamedEntities,
   verifyCitedEntities,
+  verifyTimestamps,
 } from '../src/main/ai/citations.ts'
 
 test('extractNamedEntities captures quoted and filename entities (not bare capitals)', () => {
@@ -67,3 +68,8 @@ test('citationFallback with empty tool results still mentions the missing entity
   assert.ok(!text.includes("I can't see evidence"))
 })
 
+test('timestamp verification accepts unmarked 12-hour ranges backed by 24-hour evidence', () => {
+  assert.equal(verifyTimestamps('3:00–3:10', ['15:00 15:10']).ok, true)
+  assert.equal(verifyTimestamps('3:00pm–3:10pm', ['15:00 15:10']).ok, true)
+  assert.equal(verifyTimestamps('3:00–3:10', ['09:00 09:10']).ok, false)
+})

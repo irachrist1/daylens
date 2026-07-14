@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { setTestDb, clearTestDb } from './support/database-stub.mjs'
 import { __setSettings, setApiKey } from './support/settings-stub.mjs'
 import { askWrappedQuestion, registerWrappedQuestionProvider } from '../src/main/services/wrappedQuestion.ts'
@@ -13,22 +13,7 @@ import type { DaySnapshot } from '../src/shared/types.ts'
 // prompt redaction — with only the network runner stubbed. Hermetic, no key.
 
 function freshDb(): Database.Database {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
-  // day_snapshots + wrapped_narratives land via migrations in production;
-  // mirror them here (migration v36 / v40).
-  db.exec(`CREATE TABLE IF NOT EXISTS day_snapshots (
-    date TEXT PRIMARY KEY, total_active INTEGER NOT NULL DEFAULT 0,
-    work_sec INTEGER NOT NULL DEFAULT 0, leisure_sec INTEGER NOT NULL DEFAULT 0,
-    personal_sec INTEGER NOT NULL DEFAULT 0, facts_json TEXT NOT NULL,
-    facts_hash TEXT NOT NULL, finalized_at INTEGER NOT NULL DEFAULT 0
-  );`)
-  db.exec(`CREATE TABLE IF NOT EXISTS wrapped_narratives (
-    cadence TEXT NOT NULL, period_key TEXT NOT NULL, facts_hash TEXT NOT NULL,
-    narrative_json TEXT NOT NULL, generated_at INTEGER NOT NULL,
-    PRIMARY KEY (cadence, period_key)
-  );`)
-  return db
+  return createProductionTestDatabase()
 }
 
 function snapshotFor(date: string, hours: number): DaySnapshot {

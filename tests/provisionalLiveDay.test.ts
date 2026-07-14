@@ -1,21 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { getTimelineDayPayload } from '../src/main/services/workBlocks.ts'
 import { localDateString } from '../src/main/lib/localDate.ts'
 
 function localMs(date: string, hour: number, minute = 0): number {
   const [year, month, day] = date.split('-').map(Number)
   return new Date(year, month - 1, day, hour, minute, 0, 0).getTime()
-}
-
-function ensureFocusEventsTable(db: Database.Database): void {
-  db.exec(`CREATE TABLE IF NOT EXISTS focus_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, ts_ms INTEGER NOT NULL, mono_ns INTEGER NOT NULL,
-    event_type TEXT NOT NULL, app_bundle_id TEXT, app_name TEXT, pid INTEGER, window_title TEXT,
-    url TEXT, page_title TEXT, source TEXT NOT NULL, confidence TEXT NOT NULL, platform TEXT, schema_ver INTEGER
-  );`)
 }
 
 function insertSession(db: Database.Database, o: { bundleId: string; appName: string; start: number; end: number; category: string; windowTitle?: string }): void {
@@ -29,16 +21,13 @@ function seedEvent(db: Database.Database, tsMs: number, type: string): void {
   db.prepare(`INSERT INTO activity_state_events (event_ts, event_type, source, metadata_json) VALUES (?, ?, 'test', '{}')`).run(tsMs, type)
 }
 
-// timeline.md §4 founder rule (Jul 2, 2026): today is one provisional block
-// per continuous sitting until the user clicks Analyze — neutral labels, no
-// speculative names. A sitting starts at real activity (not an overnight
-// blip), and overnight sleep before the day began shows no "Away" bar. With
-// no in-memory live session the sitting reads "Earlier today"; the live
-// sitting reads "Active now".
+// Today is one provisional block per continuous sitting until the user
+// clicks Analyze — neutral labels, no speculative names. A sitting starts at
+// real activity (not an overnight blip), and overnight sleep before the day
+// began shows no "Away" bar. With no in-memory live session the sitting reads
+// "Earlier today"; the live sitting reads "Active now".
 test('today is one provisional block per sitting, starting at real activity, no leading Away bar', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
-  ensureFocusEventsTable(db)
+  const db = createProductionTestDatabase()
   const today = localDateString()
 
   // A 24s overnight blip, then an 8h sleep gap, then the real workday.

@@ -1,4 +1,4 @@
-// W1-C: what a chat turn SENDS to the provider is bounded to the newest
+// What a chat turn SENDS to the provider is bounded to the newest
 // MAX_PROVIDER_HISTORY_MESSAGES messages — message paging bounded the screen,
 // this bounds the payload. The answer-quality contract: recent turns (what
 // follow-ups actually reference) always survive the cut.

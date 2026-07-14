@@ -1,0 +1,175 @@
+{
+  "schemaVersion": 1,
+  "id": "reference-workday",
+  "name": "Source-boundary reference workday",
+  "date": "2026-07-14",
+  "timezone": "local",
+  "description": "A controlled workday covering foreground capture, private browsing, exclusions, meetings, memory, correction, and offline sync.",
+  "input": {
+    "kind": "capture-events",
+    "settings": {
+      "trackingControlsEnabled": true,
+      "trackingExcludedApps": ["SecretApp"],
+      "trackingExcludedSites": ["excluded.example"],
+      "trackingSkipIncognito": true,
+      "workMemoryEnabled": true
+    },
+    "foregroundSamples": [
+      {
+        "at": "09:00",
+        "application": "Code",
+        "path": "/Applications/Visual Studio Code.app",
+        "title": "Acme launch plan.md"
+      },
+      {
+        "at": "09:30",
+        "application": "Google Chrome",
+        "path": "/Applications/Google Chrome.app",
+        "title": "Daylens capture documentation",
+        "tab": {
+          "url": "https://docs.example/daylens-capture",
+          "title": "Daylens capture documentation",
+          "modeKnown": true
+        }
+      },
+      {
+        "at": "10:00",
+        "application": "Google Chrome",
+        "path": "/Applications/Google Chrome.app",
+        "title": "Private launch notes",
+        "tab": { "url": "", "title": null, "isPrivate": true, "modeKnown": true }
+      },
+      {
+        "at": "10:10",
+        "application": "Google Chrome",
+        "path": "/Applications/Google Chrome.app",
+        "title": "Excluded customer record",
+        "tab": {
+          "url": "https://excluded.example/customer-record",
+          "title": "Excluded customer record",
+          "modeKnown": true
+        }
+      },
+      {
+        "at": "10:20",
+        "application": "zoom.us",
+        "path": "/Applications/zoom.us.app",
+        "title": "Acme launch sync"
+      },
+      {
+        "at": "10:50",
+        "application": "TextEdit",
+        "path": "/System/Applications/TextEdit.app",
+        "title": "Acme follow-up notes"
+      },
+      {
+        "at": "11:00",
+        "application": "SecretApp",
+        "path": "/Applications/SecretApp.app",
+        "title": "Private customer list"
+      }
+    ],
+    "focusEvents": [
+      {
+        "at": "09:00",
+        "eventType": "app_activated",
+        "appBundleId": "com.microsoft.VSCode",
+        "appName": "Code",
+        "windowTitle": "Acme launch plan.md"
+      },
+      {
+        "at": "09:30",
+        "eventType": "app_deactivated",
+        "appBundleId": "com.microsoft.VSCode",
+        "appName": "Code",
+        "windowTitle": "Acme launch plan.md"
+      },
+      {
+        "at": "09:30",
+        "eventType": "app_activated",
+        "appBundleId": "com.google.Chrome",
+        "appName": "Google Chrome",
+        "windowTitle": null
+      },
+      {
+        "at": "10:00",
+        "eventType": "app_deactivated",
+        "appBundleId": "com.google.Chrome",
+        "appName": "Google Chrome",
+        "windowTitle": null
+      },
+      {
+        "at": "10:00",
+        "eventType": "lock",
+        "appBundleId": null,
+        "appName": null,
+        "windowTitle": null
+      },
+      {
+        "at": "10:10",
+        "eventType": "unlock",
+        "appBundleId": null,
+        "appName": null,
+        "windowTitle": null
+      },
+      {
+        "at": "10:20",
+        "eventType": "app_activated",
+        "appBundleId": "us.zoom.xos",
+        "appName": "zoom.us",
+        "windowTitle": "Acme launch sync"
+      },
+      {
+        "at": "10:50",
+        "eventType": "app_deactivated",
+        "appBundleId": "us.zoom.xos",
+        "appName": "zoom.us",
+        "windowTitle": "Acme launch sync"
+      },
+      {
+        "at": "10:55",
+        "eventType": "app_activated",
+        "appBundleId": "com.secret.app",
+        "appName": "SecretApp",
+        "windowTitle": "Private customer list"
+      },
+      {
+        "at": "10:56",
+        "eventType": "app_activated",
+        "appBundleId": "com.google.Chrome",
+        "appName": "Google Chrome",
+        "windowTitle": "Secret (Incognito)"
+      }
+    ]
+  },
+  "context": {
+    "memoryFacts": ["Acme launch work belongs to the Atlas project."],
+    "calendar": {
+      "events": [
+        {
+          "title": "Acme launch sync",
+          "startClock": "10:20am",
+          "durationMinutes": 30,
+          "attendeeCount": 4
+        }
+      ]
+    }
+  },
+  "expected": {
+    "privacy": {
+      "prohibitedTerms": ["SecretApp", "Private customer", "excluded.example"],
+      "prohibitedSurfaces": [
+        "sessions",
+        "pending evidence",
+        "canonical evidence",
+        "Timeline",
+        "Apps",
+        "search",
+        "memory",
+        "AI context",
+        "MCP",
+        "sync"
+      ]
+    }
+  }
+}

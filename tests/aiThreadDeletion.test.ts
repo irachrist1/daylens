@@ -4,14 +4,12 @@ import Database from 'better-sqlite3'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { createThread, deleteThread } from '../src/main/services/artifacts.ts'
 import { clearTestDb, setTestDb } from './support/database-stub.mjs'
 
 test('deleteThread removes the thread, its messages, and attached artifacts', async () => {
-  const db = new Database(':memory:')
-  db.pragma('foreign_keys = ON')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
 
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'daylens-thread-delete-'))
   const targetArtifactPath = path.join(tempDir, 'target.md')
@@ -84,9 +82,7 @@ test('deleteThread removes the thread, its messages, and attached artifacts', as
 })
 
 test('createThread(null) reuses an unused draft instead of creating duplicates', () => {
-  const db = new Database(':memory:')
-  db.pragma('foreign_keys = ON')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
 
   const now = Date.now()
   db.prepare(`

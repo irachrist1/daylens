@@ -55,30 +55,28 @@ const resolve = (bundleId: string): { canonicalAppId: string | null } => {
   return { canonicalAppId: null }
 }
 
-test('legacy block label sourced from an excluded-host page does not propagate to any app', () => {
-  // Simulates a persisted row from before the domain policy shipped:
-  // label.current matches an excluded (sensitive-category) page artifact
-  // title that co-occurred in this block. The digest must refuse to attach
-  // that label to the co-occurring VS Code app even though it nominally
-  // belongs to the block. `excluded-nsfw.example` classifies as an excluded
-  // host via the domain policy's stem patterns.
+test('block label sourced from a rail-blocked page does not propagate to any app', () => {
+  // label.current matches an entertainment page artifact title that
+  // co-occurred in this block. The digest must refuse to attach that label
+  // to the co-occurring VS Code app even though it nominally belongs to the
+  // block — an entertainment page title is not what the dev work was.
   const excludedPage: PageRef = {
     id: 'page-excluded',
     artifactType: 'page',
-    displayTitle: 'Some Video Title — excluded-nsfw.example',
-    pageTitle: 'Some Video Title — excluded-nsfw.example',
-    domain: 'excluded-nsfw.example',
-    host: 'excluded-nsfw.example',
+    displayTitle: 'Some Video Title — youtube.com',
+    pageTitle: 'Some Video Title — youtube.com',
+    domain: 'youtube.com',
+    host: 'youtube.com',
     totalSeconds: 90,
     confidence: 0.5,
     canonicalBrowserId: 'dia',
     browserBundleId: 'company.thebrowser.dia',
-    openTarget: { kind: 'external_url', value: 'https://excluded-nsfw.example/' },
+    openTarget: { kind: 'external_url', value: 'https://youtube.com/watch' },
   } as PageRef
 
   const block = makeBlock({
     label: {
-      current: 'Some Video Title — excluded-nsfw.example',
+      current: 'Some Video Title — youtube.com',
       source: 'artifact',
       confidence: 0.88,
       narrative: null,
@@ -100,18 +98,18 @@ test('legacy block label sourced from an excluded-host page does not propagate t
 
   assert.ok(vscode, 'vscode row should exist')
   // The contaminated label must be cleared by labelLooksHostBlocked.
-  assert.equal(vscode!.topBlockLabel, null, 'excluded-host-sourced label must not propagate to VS Code')
+  assert.equal(vscode!.topBlockLabel, null, 'rail-blocked label must not propagate to VS Code')
   assert.equal(vscode!.topArtifactTitle, null, 'VS Code must not get the excluded page as its artifact either')
 
   // Dia row: the page IS owned by Dia, so it could in theory surface there,
-  // but isHostBlockedForAppsRail keeps excluded hosts out of the apps view entirely.
+  // but isHostBlockedForAppsRail keeps rail-blocked hosts out of the apps view entirely.
   assert.ok(dia, 'dia row should exist')
-  assert.equal(dia!.topArtifactTitle, null, 'excluded host page must not headline Dia in the apps rail')
+  assert.equal(dia!.topArtifactTitle, null, 'rail-blocked page must not headline Dia in the apps rail')
 })
 
 test('social-feed page does not headline a co-occurring non-browser app', () => {
-  // Twitter is not adult, but it's still suppressed from the apps rail
-  // because the headline "Twitter / X" is low-signal noise on a dev row.
+  // Feed pages are suppressed from the apps rail because the headline
+  // "Twitter / X" is low-signal noise on a dev row.
   const twitterPage: PageRef = {
     id: 'page-twitter',
     artifactType: 'page',

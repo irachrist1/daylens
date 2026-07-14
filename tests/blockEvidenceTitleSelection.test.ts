@@ -1,16 +1,16 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { getWebsiteSummariesForRange, getTopPagesForDomains } from '../src/main/db/queries.ts'
 
-// Invariant 5 (the name says what you did) needs richer INPUT, not raw titles.
-// Evidence selection used to rank page titles purely by reconciled dwell time,
-// so a domain was represented by its longest-dwelt page — which for Notion is a
-// generic hub ("Notes | All Notes | Notion", 649s), while the intent-bearing
-// pages the user briefly opened ("AI Training Session | Notion", 12s;
-// "Andersen AI Training — Level 3: AI Systems with Claude", 9s) were dropped.
-// These are the real 2026-07-02 evening-block dwell numbers.
+// Evidence selection needs richer input, not raw titles: ranking page titles
+// purely by reconciled dwell time makes a domain represented by its
+// longest-dwelt page — which for Notion is a generic hub ("Notes | All Notes
+// | Notion", 649s), while the intent-bearing pages briefly opened
+// ("AI Training Session | Notion", 12s; "Andersen AI Training — Level 3: AI
+// Systems with Claude", 9s) get dropped. These dwell numbers reflect a real
+// evening block.
 
 const DIA = 'company.thebrowser.dia'
 
@@ -46,8 +46,7 @@ function seed(db: Database.Database): void {
 }
 
 test('a domain summary top title prefers a specific page over a generic workspace hub', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   seed(db)
 
   const summaries = getWebsiteSummariesForRange(db, localMs(23, 0), localMs(23, 30))
@@ -60,8 +59,7 @@ test('a domain summary top title prefers a specific page over a generic workspac
 })
 
 test('top-pages evidence surfaces the specific intent-bearing titles, not just the high-dwell hub', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   seed(db)
 
   const byDomain = getTopPagesForDomains(db, localMs(23, 0), localMs(23, 30), ['app.notion.com'], 2)

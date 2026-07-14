@@ -1,4 +1,4 @@
-// W1-C: the chat turn lifecycle as pure state transitions (chatTurns.ts).
+// The chat turn lifecycle as pure state transitions (chatTurns.ts).
 // These pin the reconciliation invariants the AI tab depends on:
 //   cancel  → a cancelled turn NEVER becomes a completed answer or an error,
 //             even when the superseded request settles late;

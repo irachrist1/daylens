@@ -2,11 +2,11 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
 import type { AppCategory } from '../src/shared/types.ts'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { materializeTimelineDayProjection } from '../src/main/core/query/projections.ts'
 import { writeTimelineBlockReview } from '../src/main/services/workBlocks.ts'
 import { getAppDetailPayload } from '../src/main/services/appDetail.ts'
-import { getAppSummariesForRange } from '../src/main/db/queries.ts'
+import { getAppSummariesForRange, searchAll } from '../src/main/db/queries.ts'
 import {
   getCorrectedAppSummariesForRange,
   getCorrectedSessionsForRange,
@@ -14,12 +14,15 @@ import {
   getCorrectedWebsiteSummariesForRange,
 } from '../src/main/services/activityFacts.ts'
 import { localDayBounds } from '../src/main/lib/localDate.ts'
+import { executeTool } from '../src/main/services/aiTools.ts'
+import { chatMemoryPromptBlock } from '../src/main/services/workMemoryProfile.ts'
+import { applyBlockLabelCorrection } from '../src/main/services/blockCorrections.ts'
+import type { TrackingControlsState } from '../src/shared/trackingControls.ts'
 
-// One truth, three views (invariant 7; apps.md invariant 13; v2-ship-plan
-// W1-A outcome 2). Before the corrected read model, the Apps view summed raw
-// sessions directly: an ignored June 30 block still owned ~16 minutes of Dia
-// in the Apps totals while the Timeline honestly showed nothing. These tests
-// prove the two cross-view behaviors end to end:
+// One truth, three views. Before the corrected read model, the Apps view
+// summed raw sessions directly: an ignored block still owned ~16 minutes of
+// Dia in the Apps totals while the Timeline honestly showed nothing. These
+// tests prove the two cross-view behaviors end to end:
 //   1. Deleting a Timeline block changes Apps (and AI) totals immediately,
 //      while the raw capture stays safely stored underneath.
 //   2. A category override on a block reaches Timeline and Apps consistently.
@@ -31,9 +34,7 @@ function localMs(hour: number, minute = 0): number {
 }
 
 function createDb(): Database.Database {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
-  return db
+  return createProductionTestDatabase()
 }
 
 function insertSession(
@@ -107,6 +108,35 @@ test('deleting a Timeline block removes its minutes from Apps and AI totals imme
   const timelineAfter = materializeTimelineDayProjection(db, TEST_DATE, null)
   assert.equal(timelineAfter.totalSeconds, afternoonSeconds)
   assert.equal(timelineAfter.blocks.filter((block) => !block.isLive).length, 1)
+
+  assert.deepEqual(
+    searchAll(db, 'tracker guard'),
+    [],
+    'search must hide evidence owned by the deleted block',
+  )
+  const controls: TrackingControlsState = {
+    enabled: true,
+    paused: false,
+    excludedApps: [],
+    excludedSites: [],
+    skipIncognito: true,
+  }
+  const aiSearch = executeTool(
+    'searchSessions',
+    {
+      query: 'tracker guard',
+      startDate: TEST_DATE,
+      endDate: TEST_DATE,
+    },
+    db,
+    controls,
+  )
+  assert.deepEqual(
+    (aiSearch as { hits: unknown[] }).hits,
+    [],
+    'AI and MCP search must hide deleted evidence',
+  )
+  assert.doesNotMatch(chatMemoryPromptBlock(db, 'tracker guard'), /tracker guard/i)
 
   // And the RAW capture is untouched: the raw summary query still sees all
   // 113 minutes — deletion is a read-time correction, never data loss.
@@ -230,15 +260,33 @@ test('a rename correction on a block is what Apps shows', () => {
 
   const payload = materializeTimelineDayProjection(db, TEST_DATE, null)
   const morning = payload.blocks.filter((block) => !block.isLive)[0]
-  writeTimelineBlockReview(db, TEST_DATE, morning, {
-    state: 'corrected',
-    correctedLabel: 'Building the absence guard',
+  applyBlockLabelCorrection(db, {
+    blockId: morning.id,
+    date: TEST_DATE,
+    label: 'Building the absence guard',
   })
 
   const detail = getAppDetailPayload(db, 'ghostty', TEST_DATE, null)
   const appearance = detail.blockAppearances.find((entry) => entry.blockId === morning.id)
   assert.ok(appearance, 'the renamed block must appear in the app detail')
   assert.equal(appearance.label, 'Building the absence guard')
+
+  assert.ok(
+    searchAll(db, 'Building absence guard', {
+      startDate: TEST_DATE,
+      endDate: TEST_DATE,
+    }).some((result) => result.type === 'block' && result.label === 'Building the absence guard'),
+    'search must expose the corrected label rather than a stale projection',
+  )
+  const controls: TrackingControlsState = {
+    enabled: true,
+    paused: false,
+    excludedApps: [],
+    excludedSites: [],
+    skipIncognito: true,
+  }
+  const aiDay = executeTool('getDaySummary', { date: TEST_DATE }, db, controls)
+  assert.match(JSON.stringify(aiDay), /Building the absence guard/)
 
   db.close()
 })

@@ -371,7 +371,7 @@ test('validate: emoji confetti still dies — multiple, mid-line, or off-set emo
   assert.equal(result!.lines[askable[1]], null, 'an off-set mid-line emoji must die')
 })
 
-// ─── Enrichment feeding the wrap (Stage 0 Gap 1) ──────────────────────────────
+// ─── Enrichment feeding the wrap ──────────────────────────────────────────────
 
 import type { DayEnrichment } from '../src/shared/types.ts'
 import { compactDayFacts } from '../src/main/lib/wrappedNarrative.ts'

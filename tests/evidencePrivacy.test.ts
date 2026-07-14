@@ -67,7 +67,7 @@ test('excluding a site redacts its brand in derived labels and page titles', () 
   const filtered = filterTrackingExcludedEvidence({
     blocks: [
       { label: 'Watching YouTube', pageTitles: ['Some talk - YouTube', 'Keep me'] },
-      { label: 'On Pornhub & YouTube', pageTitles: [] },
+      { label: 'On SomeSite & YouTube', pageTitles: [] },
     ],
     topWebsiteDomains: [
       { domain: 'youtube.com', totalSeconds: 600 },
@@ -85,8 +85,8 @@ test('excluding a site redacts its brand in derived labels and page titles', () 
   assert.equal(filtered.blocks[0].label, '[excluded]')
   assert.equal(filtered.blocks[0].pageTitles[0], '[excluded]')
   assert.equal(filtered.blocks[0].pageTitles[1], 'Keep me')
-  // A string mentioning the excluded brand is redacted whole — so even the
-  // surrounding "On Pornhub &" context goes with it, never leaving a hint.
+  // A string mentioning the excluded brand is redacted whole — the
+  // surrounding context goes with it, never leaving a hint.
   assert.equal(filtered.blocks[1].label, '[excluded]')
   assert.deepEqual(filtered.topWebsiteDomains.map((w) => w.domain), ['github.com'])
 })

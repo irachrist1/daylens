@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { buildTabEvidenceFromFocusEvents } from '../src/main/services/workBlocks.ts'
 import { buildDetailRowTree } from '../src/renderer/lib/blockDetailRowTree.ts'
 import { DEFAULT_TIMELINE_BLOCK_REVIEW } from '../src/shared/timelineReview.ts'
@@ -10,36 +10,12 @@ import type { ArtifactRef, AppCategory, WorkContextAppSummary, WorkContextBlock 
 // The "Active now" detail panel (BlockDetailInspector in Timeline.tsx) must
 // nest a browser's pages under the browser's own app row — a Notion page
 // visited inside Dia is a breakdown of Dia's tracked time, never additional
-// time on top of it (docs/findings.md, "app time and site time
-// double-counted"). This suite pins the pure nesting logic
-// (buildDetailRowTree) the panel now delegates to.
-
-function ensureFocusEventsTable(db: Database.Database): void {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS focus_events (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      ts_ms INTEGER NOT NULL,
-      mono_ns INTEGER NOT NULL,
-      event_type TEXT NOT NULL,
-      app_bundle_id TEXT,
-      app_name TEXT,
-      pid INTEGER,
-      window_title TEXT,
-      url TEXT,
-      page_title TEXT,
-      source TEXT NOT NULL,
-      confidence TEXT NOT NULL,
-      platform TEXT,
-      schema_ver INTEGER
-    );
-  `)
-}
+// time on top of it, otherwise app time and site time get double-counted.
+// This suite pins the pure nesting logic (buildDetailRowTree) the panel now
+// delegates to.
 
 function createDb(): Database.Database {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
-  ensureFocusEventsTable(db)
-  return db
+  return createProductionTestDatabase()
 }
 
 function insertTabEvent(
@@ -108,7 +84,7 @@ const ELECTRON_BUNDLE = 'com.github.Electron'
 test('live-day shape: tab-evidence Notion pages nest under Dia, Electron stays a top-level sibling, nothing orphaned', () => {
   const db = createDb()
   const startMs = 0
-  const endMs = 44 * 60 * 1000 // 44 minutes, matching the founder's reported Dia total
+  const endMs = 44 * 60 * 1000 // 44 minutes, matching a real reported Dia total
 
   // Two Notion pages visited inside Dia, captured the way today's live block
   // actually captures them: focus_events tab-change samples, not

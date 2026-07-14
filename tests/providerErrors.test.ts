@@ -58,7 +58,7 @@ test('non-provider error → unknown', () => {
   assert.equal(classifyProviderError(null).code, 'unknown')
 })
 
-// ── 2026-07-05 founder report: real walls must never read as the blank
+// ── Real walls must never read as the blank
 // "couldn't complete that" ───────────────────────────────────────────────────
 
 test("Anthropic monthly spend limit → quota_exhausted, not a transient retry", () => {

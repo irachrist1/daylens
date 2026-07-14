@@ -81,6 +81,24 @@ test('system prompt forbids entity-free suggestions', () => {
   )
 })
 
+test('follow-up chips use the user voice and complete questions', () => {
+  const raw = JSON.stringify({
+    suggestions: [
+      'Which days did Cursor dominate your focus?',
+      'Would you like Cursor details?',
+      'Which Cursor files shaped my focus?',
+      'How did Cursor affect my week?',
+    ],
+  })
+  const result = parseFollowUpSuggestions(raw, fallback)
+  assert.deepEqual(result.map((item) => item.text), [
+    'Which Cursor files shaped my focus?',
+    'How did Cursor affect my week?',
+  ])
+  assert.ok(result.every((item) => item.text.endsWith('?')))
+  assert.ok(result.every((item) => !/\b(?:you|your|yours|yourself)\b/i.test(item.text)))
+})
+
 // ── Temporal stop-word filter ──────────────────────────────────────────────
 
 test('rejects "What drove Today?" — temporal word in entity slot', () => {

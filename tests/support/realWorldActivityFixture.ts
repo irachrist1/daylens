@@ -1,8 +1,7 @@
 import Database from 'better-sqlite3'
 import type { AppCategory, AppSession } from '../../src/shared/types.ts'
-import { SCHEMA_SQL } from '../../src/main/db/schema.ts'
-import { ensureSearchSchema } from '../../src/main/db/migrations.ts'
 import { insertAppSession, recordActivityStateEvent } from '../../src/main/db/queries.ts'
+import { createProductionTestDatabase } from './testDatabase.ts'
 
 export const REAL_WORLD_DATE = '2026-04-24'
 
@@ -12,9 +11,7 @@ export function localMs(date: string, hour: number, minute = 0): number {
 }
 
 export function setupRealWorldDb(): Database.Database {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
-  ensureSearchSchema(db)
+  const db = createProductionTestDatabase()
   seedRealWorldWorkday(db)
   return db
 }

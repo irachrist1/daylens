@@ -84,7 +84,7 @@ test('a lock ends midnight carryover even when the next session starts quickly',
   assert.equal(previous[1], localDayBounds('2026-06-20')[1])
 })
 
-// The resetting-tracked-time bug (2026-07-02): while a cross-midnight sitting
+// The resetting-tracked-time bug: while a cross-midnight sitting
 // is still running, the carry boundary advanced with every session flush, so
 // "today" never began — its payload held only the in-memory live session and
 // the tracked counter reset on every app switch. An open sitting is never

@@ -1,10 +1,10 @@
-// docs/specs/work-memory.md: the profile is editable, hand edits/deletes are
-// corrections that survive a rebuild, drafting is grounded in real evidence, and
+// The work memory profile is editable, hand edits/deletes are corrections
+// that survive a rebuild, drafting is grounded in real evidence, and
 // rebuild/forget report what changed in plain language. No confidence theater.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import {
   getWorkMemoryProfile,
   addWorkMemoryFact,
@@ -41,8 +41,7 @@ function seedEvidence(db: Database.Database): void {
 }
 
 test('a hand-added fact appears in the profile and is a user correction', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   try {
     const profile = addWorkMemoryFact(db, 'Acme is my biggest client.')
     assert.equal(profile.facts.length, 1)
@@ -54,8 +53,7 @@ test('a hand-added fact appears in the profile and is a user correction', () => 
 })
 
 test('rebuild drafts facts from real evidence', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   try {
     seedEvidence(db)
     const result = rebuildWorkMemory(db)
@@ -68,8 +66,7 @@ test('rebuild drafts facts from real evidence', () => {
 })
 
 test('editing a drafted fact makes it a correction that survives rebuild', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   try {
     seedEvidence(db)
     rebuildWorkMemory(db)
@@ -89,8 +86,7 @@ test('editing a drafted fact makes it a correction that survives rebuild', () =>
 })
 
 test('forgetting a drafted fact keeps it gone across a rebuild', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   try {
     seedEvidence(db)
     rebuildWorkMemory(db)
@@ -110,8 +106,7 @@ test('forgetting a drafted fact keeps it gone across a rebuild', () => {
 })
 
 test('an edited-then-forgotten drafted fact does not resurrect on rebuild', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   try {
     seedEvidence(db)
     rebuildWorkMemory(db)
@@ -135,8 +130,7 @@ test('an edited-then-forgotten drafted fact does not resurrect on rebuild', () =
 })
 
 test('client-scoped memory reaches a chat answer only when the question names that client (memory.md invariant 4)', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   try {
     seedClient(db, 'client-acme', 'Acme')
     addClientMemoryFact(db, 'client-acme', 'Acme prefers Friday demos.')
@@ -158,8 +152,7 @@ test('client-scoped memory reaches a chat answer only when the question names th
 })
 
 test('the prompt block carries the profile as context, or is empty when blank', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   try {
     assert.equal(workMemoryPromptBlock(db), '')
     addWorkMemoryFact(db, 'I treat YouTube as background, not focus.')

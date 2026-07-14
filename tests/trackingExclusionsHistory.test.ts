@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import {
   clearTestDb,
   setTestDb,
@@ -11,27 +11,6 @@ import {
   deleteHistoryForSite,
   deleteTrackedActivity,
 } from '../src/main/services/trackingHistory.ts'
-
-function ensureFocusEventsTable(db: Database.Database): void {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS focus_events (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      ts_ms INTEGER NOT NULL,
-      mono_ns INTEGER NOT NULL,
-      event_type TEXT NOT NULL,
-      app_bundle_id TEXT,
-      app_name TEXT,
-      pid INTEGER,
-      window_title TEXT,
-      url TEXT,
-      page_title TEXT,
-      source TEXT NOT NULL,
-      confidence TEXT NOT NULL,
-      platform TEXT,
-      schema_ver INTEGER
-    );
-  `)
-}
 
 function seed(db: Database.Database): void {
   const start = new Date(2026, 5, 18, 10, 0, 0, 0).getTime()
@@ -60,9 +39,7 @@ function seed(db: Database.Database): void {
 }
 
 test('excluding an app removes its app, browser, and native-focus history', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
-  ensureFocusEventsTable(db)
+  const db = createProductionTestDatabase()
   seed(db)
   setTestDb(db)
 
@@ -79,9 +56,7 @@ test('excluding an app removes its app, browser, and native-focus history', () =
 })
 
 test('excluding a site removes old URL evidence from history and projections', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
-  ensureFocusEventsTable(db)
+  const db = createProductionTestDatabase()
   seed(db)
   setTestDb(db)
 
@@ -98,9 +73,7 @@ test('excluding a site removes old URL evidence from history and projections', (
 })
 
 test('deleting a page removes every visit and clears generated recaps', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
-  ensureFocusEventsTable(db)
+  const db = createProductionTestDatabase()
   seed(db)
   const later = new Date(2026, 5, 20, 12, 0, 0, 0).getTime()
   db.prepare(`

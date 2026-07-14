@@ -126,7 +126,7 @@ async function main(): Promise<void> {
 
   // 1. Stage read-only copy of the real DB BEFORE initDb runs. setPath()
   //    must be set before any module that calls app.getPath('userData').
-  const dbCtx = stageReadOnlyCopyOfRealDb()
+  const dbCtx = await stageReadOnlyCopyOfRealDb()
   console.log(color('dim', `[setup] real DB copy: ${dbCtx.copiedDbPath}`))
 
   // 2. Now we can import modules that touch the DB.

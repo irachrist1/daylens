@@ -4,7 +4,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import {
   getAllAppsForLabeling,
   getCategoryOverrideEffect,
@@ -32,8 +32,7 @@ const DAY = 86_400_000
 const BASE = 1_700_000_000_000
 
 test('Labels list includes every used app, including low-usage ones', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   try {
     // A heavily-used dev app and a barely-used browser — both must be listed.
     insertSession(db, { bundleId: 'com.cursor.app', appName: 'Cursor', startTime: BASE, durationSec: 3600, category: 'development' })
@@ -49,8 +48,7 @@ test('Labels list includes every used app, including low-usage ones', () => {
 })
 
 test('System noise and sub-dwell blips never appear', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   try {
     insertSession(db, { bundleId: 'com.cursor.app', appName: 'Cursor', startTime: BASE, durationSec: 600 })
     insertSession(db, { bundleId: 'com.apple.finder', appName: 'Finder', startTime: BASE + 1000, durationSec: 300 })
@@ -65,8 +63,7 @@ test('System noise and sub-dwell blips never appear', () => {
 })
 
 test('An override wins as the effective category in the list', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   try {
     insertSession(db, { bundleId: 'com.zen.browser', appName: 'Zen', startTime: BASE, durationSec: 120, category: 'browsing' })
     setCategoryOverride(db, 'com.zen.browser', 'entertainment')
@@ -80,8 +77,7 @@ test('An override wins as the effective category in the list', () => {
 })
 
 test('A relabel reports the days/sessions it touched', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   try {
     // Same app on three distinct local days.
     insertSession(db, { bundleId: 'com.zen.browser', appName: 'Zen', startTime: BASE, durationSec: 120 })

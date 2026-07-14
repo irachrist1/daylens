@@ -5,7 +5,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import {
   getWorkMemoryProfile,
   getClientMemory,
@@ -25,9 +25,7 @@ import { createClient } from '../src/main/core/query/attributionResolvers.ts'
 import { deriveClientAliasTokens } from '../src/main/lib/clientAliases.ts'
 
 function freshDb(): Database.Database {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
-  return db
+  return createProductionTestDatabase()
 }
 
 test('client memory is scoped — it does not leak into general memory', () => {

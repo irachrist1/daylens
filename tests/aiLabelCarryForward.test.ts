@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { writeAIBlockLabel } from '../src/main/db/queries.ts'
 import { snapshotCarryForwardAiLabels } from '../src/main/services/workBlocks.ts'
 
@@ -34,8 +34,7 @@ function addSessionMembers(db: Database.Database, blockId: string, sessionIds: n
 }
 
 test('snapshot keys AI names by their session set', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
 
   seedBlock(db, 'blk-a')
   addSessionMembers(db, 'blk-a', [12, 11]) // out of order on purpose
@@ -56,8 +55,7 @@ test('snapshot keys AI names by their session set', () => {
 })
 
 test('snapshot ignores invalidated blocks, rule-only labels, and member-less blocks', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
 
   // Invalidated AI block — its name is stale, must not be carried forward.
   seedBlock(db, 'blk-dead', true)

@@ -5,7 +5,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { attachActionWidgets, buildMemoryProposal, commitAction, undoAction, looksLikeMergeBlocksInstruction } from '../src/main/ai/actions.ts'
 import { looksLikeRenameBlockInstruction } from '../src/main/ai/actions.ts'
 import { getWorkMemoryProfile } from '../src/main/services/workMemoryProfile.ts'
@@ -93,8 +93,7 @@ test('merge detector flags merge instructions, not arbitrary text', () => {
 })
 
 test('committing a memory proposal writes the fact and offers an undo that removes it', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   try {
     const proposal = buildMemoryProposal([{ action: 'add', text: 'Acme is your biggest client.' }], [])
     assert.ok(proposal)

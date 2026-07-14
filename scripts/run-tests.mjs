@@ -35,15 +35,11 @@ const testsDir = path.join(projectRoot, 'tests')
 const loader = path.join(testsDir, 'support', 'ts-loader.mjs')
 const electronBin = require('electron')
 
-// Files that must NOT run in the hermetic suite because they need a live
-// Anthropic key, real keytar, the user's real DB, or otherwise reach the
-// network. They have their own scripts (test:live / test:toolcalls /
-// test:behaviour). Keep this list tiny and explicit — everything else is
+// Files that must NOT run in the hermetic suite because they need a configured
+// provider, the user's real DB, or otherwise reach the network. Keep this list
+// tiny and explicit — everything else is
 // expected to be hermetic, and a new file is hermetic until proven otherwise.
 const LIVE_ONLY = new Set([
-  // aiToolUse self-skips its live subtests without RUN_TOOL_CALL_TESTS, but its
-  // purpose is live tool-calling and it owns the test:toolcalls script.
-  'aiToolUse.test.ts',
   // The Wrapped benchmark generates real wraps and scores them with a live
   // judge — real Anthropic key, real DB, network. It owns `npm run wrapped:bench`.
   'wrappedBenchmark.test.ts',
@@ -71,20 +67,24 @@ if (allFiles.length === 0) {
   process.exit(1)
 }
 
-const concurrency = Number(process.env.TEST_CONCURRENCY) || Math.max(2, Math.min(8, os.cpus().length))
+const concurrency =
+  Number(process.env.TEST_CONCURRENCY) || Math.max(2, Math.min(8, os.cpus().length))
 
 function runFile(file) {
   return new Promise((resolve) => {
     const relLoader = './' + path.relative(projectRoot, loader).replace(/\\/g, '/')
     const relFile = './' + path.relative(projectRoot, file).replace(/\\/g, '/')
-    const child = spawn(
-      electronBin,
-      ['--loader', relLoader, '--test', relFile],
-      { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: ['ignore', 'pipe', 'pipe'] },
-    )
+    const child = spawn(electronBin, ['--loader', relLoader, '--test', relFile], {
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
     let out = ''
-    child.stdout.on('data', (d) => { out += d })
-    child.stderr.on('data', (d) => { out += d })
+    child.stdout.on('data', (d) => {
+      out += d
+    })
+    child.stderr.on('data', (d) => {
+      out += d
+    })
     child.on('close', (code) => {
       const pass = Number((out.match(/^# pass (\d+)/m) || [])[1] || 0)
       const fail = Number((out.match(/^# fail (\d+)/m) || [])[1] || 0)
@@ -107,7 +107,13 @@ async function worker() {
     const mark = ok ? '\x1b[32m✓\x1b[0m' : '\x1b[31m✗\x1b[0m'
     const counts = `${r.pass} pass${r.fail ? `, ${r.fail} fail` : ''}${r.skip ? `, ${r.skip} skip` : ''}`
     console.log(`${mark} ${rel(file)} \x1b[2m(${counts})\x1b[0m`)
-    if (!ok) console.log(r.out.split('\n').filter((l) => /^(not ok|\s+(error|expected|actual|failureType):)/.test(l)).join('\n'))
+    if (!ok)
+      console.log(
+        r.out
+          .split('\n')
+          .filter((l) => /^(not ok|\s+(error|expected|actual|failureType):)/.test(l))
+          .join('\n'),
+      )
   }
 }
 
@@ -122,7 +128,9 @@ const totalSkip = results.reduce((n, r) => n + r.skip, 0)
 const secs = ((Date.now() - started) / 1000).toFixed(1)
 
 console.log(`\n${'─'.repeat(48)}`)
-console.log(`${results.length} files · ${totalPass} pass · ${totalFail} fail · ${totalSkip} skip · ${secs}s`)
+console.log(
+  `${results.length} files · ${totalPass} pass · ${totalFail} fail · ${totalSkip} skip · ${secs}s`,
+)
 if (failed.length > 0) {
   console.log(`\n\x1b[31mFailed files:\x1b[0m`)
   for (const r of failed) console.log(`  ${rel(r.file)} (exit ${r.code}, ${r.fail} fail)`)

@@ -231,11 +231,11 @@ test('a tool brand never becomes the work subject', () => {
   }
 })
 
-// ─── Stage 0.1 audit regressions (2026-07-08) ─────────────────────────────────
+// ─── Audit regressions: meeting-span counting ─────────────────────────────────
 
 test('meetings count by block SPAN, not active seconds', () => {
-  // The Jul 7 class: an 11:15-12:28 meeting block (73m span) with 67m active
-  // read as 49m-class undercounts across the deck. Span is the meeting truth.
+  // An 11:15-12:28 meeting block (73m span) with 67m active reads as a
+  // 49m-class undercount across the deck. Span is the meeting truth.
   const block = makeBlock({ label: 'Team sync', start: NINE_AM, durationSeconds: 73 * 60, category: 'meetings' })
   block.focusOverlap = { totalSeconds: 60 * 60, pct: 82, sessionIds: [] }
   const facts = buildDayWrapFacts(makeDayPayload([block]))

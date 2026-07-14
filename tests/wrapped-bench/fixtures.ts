@@ -33,7 +33,7 @@ export const DAY_FIXTURES: WrapBenchFixture[] = [
 ]
 
 // ─── Period fixtures (week / month / year) ────────────────────────────────────
-// All three period cadences are REQUIRED gate members. Week held the founder's
+// All three period cadences are REQUIRED gate members. Week held the required
 // live bar; month and year were implemented with no quality fixture at all —
 // nothing would have caught a regression in either. One honest fixture each,
 // anchored where the real DB verifiably has data (the day fixtures span

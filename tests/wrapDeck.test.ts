@@ -13,7 +13,7 @@ import { DEFAULT_TIMELINE_BLOCK_REVIEW } from '../src/shared/timelineReview.ts'
 // The deck planner is THE contract between the facts, the AI prompt, and the
 // renderer: same plan on both sides, every number a facts number. These tests
 // drive it with realistic data — a real working day, a real full week — and
-// pin the founder's bar: a full week yields at least 20 slides, no slide ever
+// pin the required bar: a full week yields at least 20 slides, no slide ever
 // appears without the data to back it, and every deck ends with the question,
 // the reflection, and the finale.
 
@@ -197,7 +197,7 @@ test('week plan: a real full week yields at least 20 slides', () => {
   assert.ok(slides.length >= 20, `expected >= 20 slides for a full week, got ${slides.length}: ${slides.map((s) => s.id).join(', ')}`)
 })
 
-test('week plan: covers the founder brief — sink, ratio, best/worst, compare, meetings, forgotten, edges, question, reflection', () => {
+test('week plan covers the required sink, ratio, comparison, meeting, edge, question, and reflection slides', () => {
   const ids = planPeriodWrapSlides(fullWeekFacts()).map((s) => s.id)
   for (const required of [
     'opening', 'headline', 'shape', 'bestday', 'worstday', 'focus', 'timesink', 'split',

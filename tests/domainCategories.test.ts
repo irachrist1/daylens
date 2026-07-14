@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { categoryForDomain } from '../src/shared/domainCategories.ts'
 
-// The site → category half of the weighted block distribution (2026-07-06):
+// The site → category half of the weighted block distribution:
 // a browser session's seconds split across what actually happened inside it.
 
 test('work surfaces map to their own activity category', () => {

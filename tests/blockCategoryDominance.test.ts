@@ -10,8 +10,8 @@ import {
 // Invariant 6: "A single off-task tab never sets a block's category."
 // dominantCategoryForBlock derives the category from the block's foreground
 // app distribution, refined — but never overridden — by the top page artifact
-// when the base is already focused work. These cases use the real 2026-07-02
-// shapes from the live DB (blk_338e5bade088df14 and the Notion review block).
+// when the base is already focused work. These cases use real shapes from the
+// live DB (blk_338e5bade088df14 and the Notion review block).
 
 function makePage(domain: string, seconds: number, title = `${domain} page`): PageRef {
   return {
@@ -42,8 +42,8 @@ test('a single Netflix page never flips an aiTools-dominant block to entertainme
 })
 
 test('a Notion-dominant block with a smaller YouTube detour reads as productivity, not Leisure', () => {
-  // The founder's symptom: 46m reviewing work material in Notion, a YouTube
-  // video open as a side-detour. Both live inside the Dia browser (base=browsing),
+  // 46m reviewing work material in Notion, a YouTube video open as a
+  // side-detour. Both live inside the Dia browser (base=browsing),
   // so intentional Notion work must carry productivity weight via the artifact.
   const distribution: Partial<Record<AppCategory, number>> = { browsing: 2760 }
   const topArtifacts: ArtifactRef[] = [
@@ -157,7 +157,7 @@ function makeLocalhostPage(seconds: number, port = 4321): PageRef {
   } as unknown as PageRef
 }
 
-test('a late-night mostly-leisure block with a localhost tab is NOT development (2026-07-06 shape)', () => {
+test('a late-night mostly-leisure block with a localhost tab is NOT development', () => {
   // Real row: the 00:00-04:00 block. Distribution is browsing-dominant with heavy
   // entertainment+social; only a 262s dev sliver. A localhost:4321 page was open
   // (the SPCS site), and the old localhost rule stamped the whole 4h block

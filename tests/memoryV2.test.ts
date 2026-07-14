@@ -6,7 +6,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import {
   getWorkMemoryProfile,
   addWorkMemoryFact,
@@ -49,8 +49,7 @@ test('classifyWorkMemoryFact groups facts into readable sections', () => {
 })
 
 test('getWorkMemoryProfile returns a category on every fact', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   try {
     addWorkMemoryFact(db, 'Acme is your biggest client.')
     const fact = getWorkMemoryProfile(db).facts[0]
@@ -93,8 +92,7 @@ test('parseMemoryOps returns nothing for malformed JSON', () => {
 })
 
 test('applyMemoryWriteOps adds a chat-remembered fact with source=chat and records the audit', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   try {
     const result = applyMemoryWriteOps(db, [{ action: 'add', text: 'Acme is your biggest client.' }], 'chat')
     assert.equal(result.facts.length, 1)
@@ -113,8 +111,7 @@ test('applyMemoryWriteOps adds a chat-remembered fact with source=chat and recor
 })
 
 test('applyMemoryWriteOps update flips an existing fact to a user correction', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   try {
     const added = addWorkMemoryFact(db, 'You work in engineering.')
     const id = getWorkMemoryProfile(db).facts[0].id
@@ -139,8 +136,7 @@ test('applyMemoryWriteOps update flips an existing fact to a user correction', (
 })
 
 test('applyMemoryWriteOps delete tombstones a drafted fact so rebuild never resurrects it', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   try {
     // Seed evidence + rebuild so there is a drafted fact with a topic_key.
     const BASE = Date.now() - 5 * 86_400_000
@@ -172,8 +168,7 @@ test('applyMemoryWriteOps delete tombstones a drafted fact so rebuild never resu
 })
 
 test('applyMemoryWriteOps with no ops returns an empty summary', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   try {
     const result = applyMemoryWriteOps(db, [], 'chat')
     assert.equal(result.applied.length, 0)

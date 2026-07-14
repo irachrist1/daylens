@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import {
   appendConversationMessage,
   getConversationMessages,
@@ -15,8 +15,7 @@ import {
 } from '../src/main/services/aiFeedbackUpload.ts'
 
 function setupRatedTurn() {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   const conversationId = getOrCreateConversation(db)
   const user = appendConversationMessage(
     db,

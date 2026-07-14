@@ -7,10 +7,11 @@ import type { AppCategory } from '../src/shared/types.ts'
 // wrapKit's categoryColor used to carry its own hardcoded CAT_COLOR palette,
 // completely disconnected from Settings → General → Activity colors. Week/
 // month/year Wrapped's peak-hours bar chart (PeriodWrapped.tsx) reads this
-// function, so a founder override there never showed up — the one confirmed
-// render-layer divergence in the "Week view ignores configured colors" bug.
-// This pins that categoryColor now delegates to the same Settings-aware
-// resolver everywhere else (Day view, Week calendar tab) already uses.
+// function, so a custom color override there never showed up — the one
+// confirmed render-layer divergence in the "Week view ignores configured
+// colors" bug. This pins that categoryColor now delegates to the same
+// Settings-aware resolver everywhere else (Day view, Week calendar tab)
+// already uses.
 
 const CATEGORIES = Object.keys(ACTIVITY_COLORS) as AppCategory[]
 

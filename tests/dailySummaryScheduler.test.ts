@@ -20,7 +20,7 @@ const TODAY = '2026-05-12'
 const YESTERDAY = '2026-05-11'
 
 function at(hour: number, minute = 0): Date {
-  // Year/month/day fixed at 2026-05-12 so the date string passed alongside
+  // Year/month/day fixed so the date string passed alongside
   // stays consistent. Local-time semantics match what the production code uses.
   return new Date(2026, 4, 12, hour, minute, 0, 0)
 }
@@ -259,7 +259,7 @@ test('once fired, the same call does not fire again until state resets', () => {
   assert.deepEqual(secondDecision, { fire: false, reason: 'already-fired-today' })
 })
 
-// ─── AI attempt budget (cost audit 2026-07-07) ────────────────────────────────
+// ─── AI attempt budget ──────────────────────────────────────────────────────
 // A failing wrap call used to retry every 60s for the whole notification
 // window (~116 system-triggered wrapped_narrative calls in 3 days). The budget
 // caps failed attempts per kind per day and spaces retries.

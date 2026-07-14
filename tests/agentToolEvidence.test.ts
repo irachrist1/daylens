@@ -1,5 +1,5 @@
-// Data-layer guard for the two screenshot-failure prompts (ADR 0002, since
-// ported to the agent tool loop under ADR 0003):
+// Data-layer guard for the two screenshot-failure prompts, resolved through
+// the agent tool loop:
 //   1. "What did I do today at 4 p.m., exactly?"
 //   2. "Who are my clients?"
 //
@@ -11,16 +11,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
-import { ensureSearchSchema } from '../src/main/db/migrations.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { executeTool } from '../src/main/services/aiTools.ts'
 import { getMomentEvidence } from '../src/main/lib/momentEvidence.ts'
 
 function setupDb(): Database.Database {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
-  ensureSearchSchema(db)
-  return db
+  return createProductionTestDatabase()
 }
 
 function localMs(date: Date, hour: number, minute = 0): number {

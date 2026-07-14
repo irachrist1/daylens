@@ -2,9 +2,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { buildDayTitleContext, clusterWindowTitles } from '../src/shared/windowTitleContext.ts'
 
-// Stage 0.1: window titles are rich (project names, meeting names, document
-// titles) and were ignored by the wrap facts. These fixtures are real title
-// shapes from the live DB (Jul 7, 2026).
+// Window titles are rich (project names, meeting names, document titles) and
+// were ignored by the wrap facts. These fixtures are real title shapes from
+// the live DB.
 
 test('truncated variants of one title merge into one cluster', () => {
   const clusters = clusterWindowTitles('Dia', [

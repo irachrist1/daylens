@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { writeAIBlockLabel } from '../src/main/db/queries.ts'
 
 function seedBlock(db: Database.Database, id = 'block-1'): void {
@@ -24,8 +24,7 @@ function labelOf(db: Database.Database, id: string): { current: string; source: 
 }
 
 test('writeAIBlockLabel writes an AI label and records a history row', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   seedBlock(db)
 
   const wrote = writeAIBlockLabel(db, { blockId: 'block-1', label: 'Fixing sync uploader retries', narrative: 'n' })
@@ -41,8 +40,7 @@ test('writeAIBlockLabel writes an AI label and records a history row', () => {
 })
 
 test('force = false preserves a user override (no write)', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   seedBlock(db)
   // Simulate a user-renamed block.
   db.prepare(`INSERT INTO block_label_overrides (block_id, label, narrative, updated_at) VALUES ('block-1', 'Client billing', NULL, ?)`).run(Date.now())
@@ -58,8 +56,7 @@ test('force = false preserves a user override (no write)', () => {
 })
 
 test('force = true clears the override and overwrites (the Regenerate path)', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   seedBlock(db)
   db.prepare(`INSERT INTO block_label_overrides (block_id, label, narrative, updated_at) VALUES ('block-1', 'Old wrong label', NULL, ?)`).run(Date.now())
   db.prepare(`UPDATE timeline_blocks SET label_current = 'Old wrong label', label_source = 'user' WHERE id = 'block-1'`).run()
@@ -77,8 +74,7 @@ test('force = true clears the override and overwrites (the Regenerate path)', ()
 })
 
 test('an empty label is rejected', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   seedBlock(db)
   assert.equal(writeAIBlockLabel(db, { blockId: 'block-1', label: '   ' }), false)
   assert.equal(labelOf(db, 'block-1').current, 'Development')
@@ -86,8 +82,7 @@ test('an empty label is rejected', () => {
 })
 
 test('a missing block is not reported as written', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
 
   const wrote = writeAIBlockLabel(db, { blockId: 'missing-block', label: 'Reviewing architecture' })
   assert.equal(wrote, false)

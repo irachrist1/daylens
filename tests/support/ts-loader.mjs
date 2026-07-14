@@ -104,6 +104,17 @@ export async function resolve(specifier, context, defaultResolve) {
     }
   }
 
+  if (specifier.startsWith('@/')) {
+    const resolved = path.resolve(projectRoot, 'apps/web', specifier.slice(2))
+    const withFile = tryFile(resolved)
+    if (withFile) {
+      return {
+        url: pathToFileURL(withFile).href,
+        shortCircuit: true,
+      }
+    }
+  }
+
   try {
     return await defaultResolve(specifier, context, defaultResolve)
   } catch (error) {

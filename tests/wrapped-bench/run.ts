@@ -1,7 +1,7 @@
-// Standalone benchmark runner used to drive the recursive improvement loop
-// (Stage 1.3). Unlike the .test.ts gate, it does NOT throw on failure — it
-// generates, scores, logs, and prints a report so a failing slide can be
-// diagnosed and the prompt retuned, then re-run.
+// Standalone benchmark runner used to drive the recursive improvement loop.
+// Unlike the .test.ts gate, it does NOT throw on failure — it generates,
+// scores, logs, and prints a report so a failing slide can be diagnosed and
+// the prompt retuned, then re-run.
 //
 //   ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron \
 //     --loader ./tests/support/ts-loader-real.mjs ./tests/wrapped-bench/run.ts [day|week|month|year] [date...]

@@ -1,7 +1,7 @@
-// The passive background cleanup/relabel scheduler was deleted on 2026-07-05
-// (docs/issues-2026-07-05.md §1): a stale production build ran its loop against
-// blocks whose relabel result never changed their eligibility, re-spending the
-// same tokens every ~10s. What remains — and what this file guards — is the
+// The passive background cleanup/relabel scheduler was removed: a stale
+// production build ran its loop against blocks whose relabel result never
+// changed their eligibility, re-spending the same tokens every ~10s. What
+// remains — and what this file guards — is the
 // eligibility gate itself, `shouldReanalyzeBlockWithAI`, which the once-per-day
 // auto-analyze and the manual Analyze action both use to decide which blocks
 // are worth an AI call: deterministic floors reopen, good AI labels and user

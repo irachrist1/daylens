@@ -62,6 +62,32 @@ jobs:
       # the Electron binary never trips on a missing X server during startup.
       - name: Run hermetic test suite
         run: xvfb-run -a npm test
+      - name: Verify synthetic product day
+        run: xvfb-run -a npm run verify:synthetic-day
+      - name: Verify deterministic AI turn
+        run: xvfb-run -a npm run verify:ai-turn
+      - name: Verify remote and web behavior
+        run: xvfb-run -a npm run verify:remote-web
+      - name: Run strict Timeline evaluation
+        run: xvfb-run -a npm run timeline:eval -- --strict
+
+  contracts-web-billing:
+    name: contracts-web-billing
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run contract:check
+      - run: npm run web:contract:check
+      - run: npm --prefix apps/web run manifest:check
+      - run: npm run web:typecheck
+      - run: npm run web:build
+      - run: npm run billing:check
+      - run: npm run billing:sandbox
 
   windows:
     name: windows-native-rebuild

@@ -9,7 +9,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { runAttributionForRange } from '../src/main/services/attribution.ts'
 
 function localMs(y: number, m: number, d: number, h: number, min = 0): number {
@@ -59,8 +59,7 @@ function topCandidate(db: Database.Database): { client_id: string | null; decisi
 }
 
 test('memory tips an ambiguous attribution toward the client it recognizes', (t) => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   t.after(() => db.close())
   const [from, to] = seedBase(db)
   // Acme's scoped memory recognizes "ubiquiti", which is in the work's title.
@@ -85,8 +84,7 @@ test('memory tips an ambiguous attribution toward the client it recognizes', (t)
 })
 
 test('without that memory, the same stretch follows the evidence (Beta), not memory', (t) => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   t.after(() => db.close())
   const [from, to] = seedBase(db)
   // No memory for either candidate (only a non-candidate's, which can't apply).

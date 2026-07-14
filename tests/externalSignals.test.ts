@@ -4,7 +4,7 @@ import Database from 'better-sqlite3'
 import { getExternalSignal, putExternalSignal } from '../src/main/services/externalSignals.ts'
 import type { GitActivitySignal } from '../src/shared/types.ts'
 
-// external_signals store (Stage 0.2): one row per date+source, replaced on
+// external_signals store: one row per date+source, replaced on
 // refresh, read back typed; a pre-migration DB reads as "no signal".
 
 function makeDb(): Database.Database {

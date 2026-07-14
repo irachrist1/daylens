@@ -18,14 +18,14 @@ const base: TrackingControlsState = {
   skipIncognito: true,
 }
 
-// ── Invariant: OFF + unpaused is a strict passthrough (acceptance #1) ──────────
+// ── Invariant: OFF + unpaused passes everything through except private windows ─
 
-test('disabled and unpaused captures everything (byte-for-byte unchanged)', () => {
+test('disabled and unpaused captures everything except private windows', () => {
   const s = { ...base, enabled: false, excludedApps: ['com.foo'], excludedSites: ['x.com'] }
   assert.deepEqual(decideAppCapture(s, { bundleId: 'com.foo', appName: 'Foo' }), { capture: true, reason: null })
   assert.deepEqual(decideSiteCapture(s, { domain: 'x.com' }), { capture: true, reason: null })
-  // Even an incognito title is captured when the feature is off.
-  assert.equal(decideAppCapture(s, { windowTitle: 'Secret (Incognito)' }).capture, true)
+  // Private windows are the one unconditional exclusion.
+  assert.equal(decideAppCapture(s, { windowTitle: 'Secret (Incognito)' }).reason, 'incognito')
 })
 
 // ── Pause works regardless of the master switch (acceptance #5) ────────────────
@@ -89,11 +89,19 @@ test('detectIncognitoFromTitle catches common browser private markers', () => {
   assert.equal(detectIncognitoFromTitle(null), false)
 })
 
-test('skipIncognito blocks private windows only when on', () => {
-  const on = { ...base, enabled: true, skipIncognito: true }
-  assert.equal(decideAppCapture(on, { windowTitle: 'x (Incognito)' }).reason, 'incognito')
-  const off = { ...base, enabled: true, skipIncognito: false }
-  assert.equal(decideAppCapture(off, { windowTitle: 'x (Incognito)' }).capture, true)
+test('private windows are never captured, regardless of any setting', () => {
+  const off = { ...base, enabled: false, skipIncognito: false }
+  assert.equal(decideAppCapture(off, { windowTitle: 'x (Incognito)' }).reason, 'incognito')
+  assert.equal(decideSiteCapture(off, { domain: 'example.com', windowTitle: 'x [InPrivate]' }).reason, 'incognito')
+})
+
+test('the structured private-window signal blocks capture even without a title marker', () => {
+  // Chrome on macOS puts no marker in the window title; the browser reader
+  // supplies isPrivate from the window mode instead.
+  const off = { ...base, enabled: false, skipIncognito: false }
+  assert.equal(decideSiteCapture(off, { domain: 'example.com', windowTitle: 'Some page', isPrivate: true }).reason, 'incognito')
+  assert.equal(decideAppCapture(off, { appName: 'Chrome', windowTitle: 'Some page', isPrivate: true }).reason, 'incognito')
+  assert.equal(decideSiteCapture(off, { domain: 'example.com', windowTitle: 'Some page', isPrivate: false }).capture, true)
 })
 
 // ── Settings adapter defaults ──────────────────────────────────────────────────

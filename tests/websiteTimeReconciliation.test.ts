@@ -1,11 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { getWebsiteSummariesForRange } from '../src/main/db/queries.ts'
 
 // A site visited inside a browser is a breakdown of the browser's own tracked
-// time, never additional time on top of it (docs/findings.md: the app/site
+// time, never additional time on top of it (avoiding the app/site
 // double-count). These tests pin the reconciliation rules:
 //   1. Site time clips to when its browser was actually frontmost.
 //   2. A visit behind another focused app is a background tab → zero.
@@ -17,9 +17,7 @@ function localMs(hour: number, minute = 0): number {
 }
 
 function makeDb(): Database.Database {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
-  return db
+  return createProductionTestDatabase()
 }
 
 function insertSession(db: Database.Database, bundleId: string, appName: string, startMs: number, endMs: number, category = 'browsing'): void {

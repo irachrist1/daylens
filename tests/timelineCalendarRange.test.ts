@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { getTimelineRangeBlocks } from '../src/main/services/timelineCalendarRange.ts'
 
 function seedBlock(
@@ -49,8 +49,7 @@ const T0 = new Date(2026, 6, 1, 9, 0, 0, 0).getTime()
 const HOUR = 3_600_000
 
 test('returns blocks grouped by day, ordered, live and invalidated excluded', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   seedBlock(db, { id: 'b2', date: '2026-07-01', startTime: T0 + 2 * HOUR, endTime: T0 + 3 * HOUR })
   seedBlock(db, { id: 'b1', date: '2026-07-01', startTime: T0, endTime: T0 + HOUR })
   seedBlock(db, { id: 'b3', date: '2026-07-02', startTime: T0 + 24 * HOUR, endTime: T0 + 25 * HOUR })
@@ -71,8 +70,7 @@ test('returns blocks grouped by day, ordered, live and invalidated excluded', ()
 })
 
 test('a deleted block is excluded from the month range read', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   seedBlock(db, { id: 'kept', date: '2026-07-01', startTime: T0, endTime: T0 + HOUR })
   seedBlock(db, { id: 'gone', date: '2026-07-01', startTime: T0 + 2 * HOUR, endTime: T0 + 3 * HOUR })
   db.prepare(`
@@ -86,8 +84,7 @@ test('a deleted block is excluded from the month range read', () => {
 })
 
 test('a user rename always wins over label_current', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   seedBlock(db, { id: 'b1', date: '2026-07-01', startTime: T0, endTime: T0 + HOUR, label: 'Stale AI name' })
   db.prepare(`INSERT INTO block_label_overrides (block_id, label, narrative, updated_at) VALUES ('b1', 'Client billing', NULL, ?)`).run(Date.now())
 
@@ -97,8 +94,7 @@ test('a user rename always wins over label_current', () => {
 })
 
 test('active seconds come from session weights, clamped to the wall-clock span', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   // 1h span with 30m of tracked sessions → 30m active.
   seedBlock(db, { id: 'sparse', date: '2026-07-01', startTime: T0, endTime: T0 + HOUR })
   seedMemberSeconds(db, 'sparse', 1800)

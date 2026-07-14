@@ -1,13 +1,12 @@
-// Whole-deck judge (V2 ship plan, W1-D outcome 1). Every anchor and score in
-// the benchmark is per-slide; nothing evaluated the deck as ONE story — which
-// is exactly where "it doesn't sound right" lives: three slides re-announcing
-// the same total, a shuffled arc, two slides disagreeing about the same fact.
+// Whole-deck judge. Every anchor and score in the benchmark is per-slide;
+// nothing evaluated the deck as ONE story — which is exactly where "it
+// doesn't sound right" lives: three slides re-announcing the same total, a
+// shuffled arc, two slides disagreeing about the same fact.
 // This module is the PURE half (prompt, parsing, deterministic checks, verdict
 // math) so the hermetic suite can pin every rule without a provider; the
 // harness owns the actual Anthropic calls.
 //
-// A deck fails on any of (docs/wrapped-slide-catalog.md, "The whole-deck
-// judgment"):
+// A deck fails on any of the following (the whole-deck judgment):
 //   a. cross-slide repetition of the same fact/number/phrase beyond one
 //      deliberate callback                                 (LLM verdict)
 //   b. broken arc — not one day/week told start to finish  (LLM verdict)

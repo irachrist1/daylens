@@ -13,10 +13,10 @@ import {
 } from '../src/main/services/wrappedTools.ts'
 import { looksLikeRawArtifactLabel } from '../src/renderer/lib/wrappedFacts.ts'
 
-// Wrapped tool layer (Stage 0.3) — tested against the REAL database, not
-// mocks (founder requirement). Set DAYLENS_REAL_DB_PATH to a copy of the live
-// daylens.sqlite and DAYLENS_REAL_DB_DATE to an analyzed day inside it. When
-// the env is absent (CI, hermetic suite) every real-data test skips itself.
+// Wrapped tool layer — tested against the REAL database, not mocks. Set
+// DAYLENS_REAL_DB_PATH to a copy of the live daylens.sqlite and
+// DAYLENS_REAL_DB_DATE to an analyzed day inside it. When the env is absent
+// (CI, hermetic suite) every real-data test skips itself.
 
 const DB_PATH = process.env.DAYLENS_REAL_DB_PATH
 const DATE = process.env.DAYLENS_REAL_DB_DATE ?? '2026-07-07'

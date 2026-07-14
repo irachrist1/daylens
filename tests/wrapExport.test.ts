@@ -203,7 +203,7 @@ test('saveWrapExport: a single slide exports as one panel', async () => {
   assert.equal(saved[0].filename, 'daylens-week-opening.png')
 })
 
-// ─── Failures are visible, never swallowed (W1-D outcome 5) ──────────────────
+// ─── Failures are visible, never swallowed ───────────────────────────────────
 // The old UI mapped every failure back to the idle button label, so a null
 // toBlob (the canvas-cap symptom) or a throwing save sink looked like nothing
 // happened. The pipeline must report failure, and the labels must say it.

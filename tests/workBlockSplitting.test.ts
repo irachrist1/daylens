@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
 import type { AppCategory, AppSession } from '../src/shared/types.ts'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { upsertWorkContextInsight } from '../src/main/db/queries.ts'
 import { buildTimelineBlocksFromSessions, getBlockDetailPayload, getTimelineDayPayload, mergeTimelineEpisodes, trimTimelineBlockSpan, writeTimelineBlockReview } from '../src/main/services/workBlocks.ts'
 import { getTimelineDayProjection, materializeTimelineDayProjection } from '../src/main/core/query/projections.ts'
@@ -29,9 +29,7 @@ function dateStringForOffset(offsetDays: number): string {
 }
 
 function createDb(): Database.Database {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
-  return db
+  return createProductionTestDatabase()
 }
 
 function insertSession(
@@ -259,11 +257,10 @@ test('a sub-30-minute fragment folds into the related neighbour it continues', (
 
 test('a 15+ minute untracked gap is a hard boundary even for the same app', () => {
   const db = createDb()
-  // timeline.md §3.1 (15-minute session break, founder decision Jul 2, 2026):
-  // a real activity gap of 15+ minutes ends the block, even when the same app
-  // resumes afterward — the gap is blank space, never absorbed. Both stretches
-  // sit above the 15-min calendar floor (DEV-99), so this isolates the gap
-  // boundary from the floor.
+  // The 15-minute session break: a real activity gap of 15+ minutes ends the
+  // block, even when the same app resumes afterward — the gap is blank space,
+  // never absorbed. Both stretches sit above the 15-min calendar floor, so
+  // this isolates the gap boundary from the floor.
   insertSession(db, { title: 'npm run dev - daylens - Ghostty', bundleId: 'com.mitchellh.ghostty', appName: 'Ghostty', category: 'development', startMinute: 0, durationMinutes: 16 })
   insertSession(db, { title: 'widgets.tsx - daylens - Ghostty', bundleId: 'com.mitchellh.ghostty', appName: 'Ghostty', category: 'development', startMinute: 36, durationMinutes: 63 })
 
@@ -358,8 +355,8 @@ test('a sub-30-minute block with no related neighbour keeps its own block', () =
   insertSession(db, { title: 'router.ts - daylens - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 0, durationMinutes: 40 })
   insertSession(db, { title: 'Inbox - Gmail - Google Chrome', bundleId: 'com.google.Chrome', appName: 'Google Chrome', category: 'email', startMinute: 40, durationMinutes: 20 })
   // A browser session's category comes from the sites reconciled inside it
-  // (site-weighted distribution, 2026-07-06) — the Gmail visit is what makes
-  // this stretch email.
+  // (site-weighted distribution) — the Gmail visit is what makes this
+  // stretch email.
   insertWebsiteVisit(db, {
     domain: 'mail.google.com',
     pageTitle: 'Inbox - Gmail',
@@ -427,8 +424,8 @@ test('timeline hides short gap events while preserving meaningful untracked span
   const shortGaps = gaps.filter((segment) => segment.endTime - segment.startTime < 30 * 60_000)
 
   assert.equal(shortGaps.length, 0, `short gaps should be hidden: ${JSON.stringify(shortGaps)}`)
-  // Typed gaps (Jul 2, 2026): a 10-second idle blip cannot explain an hour —
-  // the gap classifies honestly as "untracked" rather than pretending to know.
+  // Typed gaps: a 10-second idle blip cannot explain an hour — the gap
+  // classifies honestly as "untracked" rather than pretending to know.
   assert.ok(
     gaps.some((segment) => segment.kind === 'untracked' && segment.startTime === localMs(9, 30) && segment.endTime === localMs(10, 30)),
     `expected the full 60-minute untracked span to remain: ${JSON.stringify(gaps)}`,
@@ -436,9 +433,9 @@ test('timeline hides short gap events while preserving meaningful untracked span
   db.close()
 })
 
-// Typed gaps (founder decision, Jul 2, 2026): a visible gap carries the
-// reason derived from the activity events that covered it — Asleep for a
-// suspend, Away for a lock, Passive when media held the session open.
+// Typed gaps: a visible gap carries the reason derived from the activity
+// events that covered it — Asleep for a suspend, Locked for a lock, Passive
+// when media held the session open.
 test('gaps classify by their activity-event cause', () => {
   const db = createDb()
   insertSession(db, { title: 'a.ts - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 0, durationMinutes: 30 })
@@ -458,8 +455,10 @@ test('gaps classify by their activity-event cause', () => {
   )
   assert.ok(
     gaps.some((gap) => gap.kind === 'locked' && gap.startTime === localMs(11, 0)),
-    `lock-covered gap should read Away (locked): ${JSON.stringify(gaps)}`,
+    `lock-covered gap should read Locked: ${JSON.stringify(gaps)}`,
   )
+  assert.equal(gaps.find((gap) => gap.kind === 'asleep')?.label, 'Asleep')
+  assert.equal(gaps.find((gap) => gap.kind === 'locked')?.label, 'Locked')
   db.close()
 })
 
@@ -568,7 +567,7 @@ test('contiguous AI assistant and GitHub repo review collapse into one assisted 
   const db = createDb()
   insertSession(db, { title: 'Claude Code - Dia', bundleId: 'company.thebrowser.dia', appName: 'Dia', category: 'aiTools', startMinute: 0, durationMinutes: 120 })
   // Dia is a browser: the claude.ai visit is what makes its stretch aiTools
-  // under the site-weighted distribution (2026-07-06).
+  // under the site-weighted distribution.
   insertWebsiteVisit(db, {
     domain: 'claude.ai',
     pageTitle: 'Claude Code',
@@ -697,7 +696,7 @@ test('a deleted block stays deleted through a rebuild and is not absorbed by a n
   insertSession(db, { title: 'router.ts - daylens - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 0, durationMinutes: 40 })
   insertSession(db, { title: 'Video A - YouTube', bundleId: 'com.google.Chrome', appName: 'Google Chrome', category: 'entertainment', startMinute: 40, durationMinutes: 25 })
   // The YouTube visit is what makes the browser stretch entertainment under
-  // the site-weighted distribution (2026-07-06).
+  // the site-weighted distribution.
   insertWebsiteVisit(db, {
     domain: 'youtube.com',
     pageTitle: 'Video A - YouTube',
@@ -762,7 +761,7 @@ test('a category correction wins, recolors the kind, and survives rebuild', () =
   const db = createDb()
   insertSession(db, { title: 'Stranger Things - Netflix', bundleId: 'com.google.Chrome', appName: 'Google Chrome', category: 'entertainment', startMinute: 0, durationMinutes: 40 })
   // The Netflix visit is what makes the browser stretch entertainment under
-  // the site-weighted distribution (2026-07-06).
+  // the site-weighted distribution.
   insertWebsiteVisit(db, {
     domain: 'netflix.com',
     pageTitle: 'Stranger Things - Netflix',
@@ -818,11 +817,11 @@ test('clearing a corrected review reverts the block to its computed label', () =
   db.close()
 })
 
-// timeline.md §4 (founder decision, Jul 2, 2026): today, before it has been
-// analyzed, is one provisional block PER CONTINUOUS SITTING — neutral labels,
-// never per-activity named. A real 15+ minute activity gap ends the sitting;
-// the gap is blank space, never absorbed into a whole-day card. Daylens makes
-// no claim about the day's shape until the user analyzes it.
+// Today, before it has been analyzed, is one provisional block PER CONTINUOUS
+// SITTING — neutral labels, never per-activity named. A real 15+ minute
+// activity gap ends the sitting; the gap is blank space, never absorbed into
+// a whole-day card. Daylens makes no claim about the day's shape until the
+// user analyzes it.
 test('the live day is one provisional block per sitting until it is analyzed', () => {
   const db = createDb()
   const today = dateStringForOffset(0)

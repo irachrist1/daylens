@@ -2,9 +2,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { cleanSubject, stripPathsAndBranches } from '../src/main/services/gitSignals.ts'
 
-// Git subject sanitization (Stage 0.3, Gap 3): commit subjects and PR titles
-// must never carry a file path or a branch name to a wrap or a tool result
-// (voice.md: name the work, never the plumbing). These are the real shapes
+// Git subject sanitization: commit subjects and PR titles
+// must never carry a file path or a branch name to a wrap or a tool result —
+// name the work, never the plumbing. These are the real shapes
 // that show up in a commit log.
 
 test('strips relative file paths under known code dirs', () => {

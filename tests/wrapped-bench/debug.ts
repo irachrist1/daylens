@@ -3,14 +3,14 @@
 // per-line validation report, so we can see why lines die (fall back).
 //
 //   ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron \
-//     --loader ./tests/support/ts-loader-real.mjs ./tests/wrapped-bench/debug.ts 2026-07-07
+//     --loader ./tests/support/ts-loader-real.mjs ./tests/wrapped-bench/debug.ts YYYY-MM-DD
 
 import Anthropic from '@anthropic-ai/sdk'
 import { stageReadOnlyCopyOfRealDb, cleanupRealDbCopy } from '../ai-behaviour/realDb'
 
 async function main(): Promise<void> {
   const date = process.argv.find((a) => /^\d{4}-\d{2}-\d{2}$/.test(a)) ?? '2026-07-07'
-  const dbCtx = stageReadOnlyCopyOfRealDb()
+  const dbCtx = await stageReadOnlyCopyOfRealDb()
   const { initDb, getDb } = await import('../../src/main/services/database')
   initDb()
 

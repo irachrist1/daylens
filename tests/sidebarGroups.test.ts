@@ -1,6 +1,6 @@
-// W1-C: sidebar grouping invariants (sidebarGroups.ts) — one row per thread
+// Sidebar grouping invariants (sidebarGroups.ts) — one row per thread
 // id, disjoint active/archive partition, recency buckets newest-first. The
-// founder-visible "duplicate" rows ("This Week Focus" twice) were distinct DB
+// visible "duplicate" rows ("This Week Focus" twice) were distinct DB
 // rows with identical derived titles; the creation-side fix lives in
 // aiService/artifacts (authoritative threadId + empty-draft reuse), and this
 // grouping layer guarantees the LIST itself can never double-render a thread.

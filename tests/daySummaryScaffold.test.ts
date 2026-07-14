@@ -1,4 +1,4 @@
-// Day-summary scaffold context trim (cost audit 2026-07-07).
+// Day-summary scaffold context trim.
 //
 // The old scaffold sent the top-4 blocks twice (as `dominantBlocks` AND inside
 // `blocks`) and pretty-printed the JSON. These tests pin the new shape — each

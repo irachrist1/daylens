@@ -1,10 +1,15 @@
 import os from 'node:os'
 
+let userDataOverride = null
+
 export const app = {
   isPackaged: false,
   getPath(name) {
-    if (name === 'userData') return os.tmpdir()
+    if (name === 'userData') return userDataOverride ?? os.tmpdir()
     return os.tmpdir()
+  },
+  setPath(name, value) {
+    if (name === 'userData') userDataOverride = value
   },
   getAppPath() {
     // Tests that exercise path resolution (e.g. mcpServer) can point this at a

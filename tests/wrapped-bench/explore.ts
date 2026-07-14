@@ -10,7 +10,7 @@
 import { stageReadOnlyCopyOfRealDb, cleanupRealDbCopy } from '../ai-behaviour/realDb'
 
 async function main(): Promise<void> {
-  const dbCtx = stageReadOnlyCopyOfRealDb()
+  const dbCtx = await stageReadOnlyCopyOfRealDb()
   const { initDb, getDb } = await import('../../src/main/services/database')
   initDb()
   const db = getDb()

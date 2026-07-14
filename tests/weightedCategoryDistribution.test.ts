@@ -1,24 +1,23 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { clearTestDb, setTestDb } from './support/database-stub.mjs'
 import { weightedCategoryDistributionFor } from '../src/main/services/workBlocks.ts'
 import type { AppSession } from '../src/shared/types.ts'
 
-// Site-weighted category distribution (2026-07-06 founder audit): a browser
-// session's seconds split across the categories of the sites reconciled
-// inside the block, so a browser-centric day stops collapsing every block
-// into the browser app's own category (one color everywhere). Invariant under
-// test: Σ distribution = Σ session seconds — capture-gap visit credit is
-// page EVIDENCE, never extra category seconds (Codex review finding #6).
+// Site-weighted category distribution: a browser session's seconds split
+// across the categories of the sites reconciled inside the block, so a
+// browser-centric day stops collapsing every block into the browser app's
+// own category (one color everywhere). Invariant under test: Σ distribution
+// = Σ session seconds — capture-gap visit credit is page EVIDENCE, never
+// extra category seconds.
 
 const DAY_START = new Date(2026, 6, 3, 9, 0, 0, 0).getTime()
 const HOUR = 3_600_000
 
 function makeDb(): Database.Database {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   setTestDb(db)
   return db
 }

@@ -123,6 +123,7 @@ function looksLikeUnknownLabel(value: string | null | undefined) {
   return (
     !normalized ||
     /^unknown-\d+$/.test(normalized) ||
+    /^unknown\s+\d+$/.test(normalized) ||
     /^[a-z]$/.test(normalized) ||
     /^pid-\d+$/.test(normalized)
   );
@@ -269,6 +270,7 @@ function sanitizeWorkBlock(block: WorkBlockSummary): WorkBlockSummary {
     ...block,
     label: sanitizeBlockLabel(block.label, topApps),
     topApps,
+    artifactIds: [],
     topPages: block.topPages
       .map((page) => ({
         domain: normalizeWhitespace(page.domain).toLowerCase(),

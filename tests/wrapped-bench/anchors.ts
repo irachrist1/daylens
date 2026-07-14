@@ -2,9 +2,8 @@
 // against an ABSTRACT rubric with no exemplars, so it graded weak lines high
 // and swung run to run. These anchors give the judge concrete calibration:
 // for the slide it is scoring, what an excellent (9-10) line reads like and
-// what a failing (<7) line reads like. Distilled from
-// docs/wrapped-slide-catalog.md (the official catalog, 2026-07-10 finalization)
-// and founder-approved examples — keep the two in sync.
+// what a failing (<7) line reads like. Anchors here must stay in sync with
+// the approved slide examples.
 //
 // Anchors are ILLUSTRATIVE, never templates: they show the BAR (specific, real,
 // voice-true) and the failure modes (vague, hype, restating the card,

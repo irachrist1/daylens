@@ -1,7 +1,7 @@
-// Enrichment demo (Stage 0 Gap 1) — shows the ACTUAL slide generation for one
-// real day, with git/calendar enrichment flowing into the prompt. Not a test,
-// not the benchmark: it generates ONE real deck and prints it so the founder can
-// read the actual lines and confirm enrichment is being narrated.
+// Enrichment demo — shows the ACTUAL slide generation for one real day, with
+// git/calendar enrichment flowing into the prompt. Not a test, not the
+// benchmark: it generates ONE real deck and prints it so a human can read the
+// actual lines and confirm enrichment is being narrated.
 //
 //   ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron \
 //     --loader ./tests/support/ts-loader-real.mjs ./tests/wrapped-bench/enrichment-demo.ts [YYYY-MM-DD]

@@ -6,12 +6,12 @@ import {
   kindFromCategoryDistribution,
 } from '../src/shared/workKind.ts'
 
-// Regression suite for the 2026-07-08 Stage 0 audit finding: a real Jul 5 day
-// spent redesigning a website in the browser (Canva, a local dev server, the
-// company's own domain) read as 50m work / 9h 37m personal, because block kind
-// was re-derived from a top-5 site list through a short domain allowlist that
-// had never heard of the sites — while the block's own persisted, site-weighted
-// category distribution said "work" all along.
+// Regression suite: a day spent redesigning a website in the browser (Canva,
+// a local dev server, the company's own domain) read as 50m work / 9h 37m
+// personal, because block kind was re-derived from a top-5 site list through
+// a short domain allowlist that had never heard of the sites — while the
+// block's own persisted, site-weighted category distribution said "work" all
+// along.
 
 test('kindFromCategoryDistribution: work-heavy distribution is work', () => {
   // The actual Jul 5 block's distribution (seconds).

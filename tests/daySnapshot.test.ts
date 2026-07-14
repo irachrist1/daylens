@@ -143,7 +143,7 @@ test('an empty day yields an empty snapshot', () => {
   assert.equal(snap.longestBlock, null)
 })
 
-// ─── Stage 0 period audit regressions (2026-07-08) ───────────────────────────
+// ─── Period-audit regressions ────────────────────────────────────────────────
 
 test('snapshots are stamped with the current builder version', () => {
   const snap = buildDaySnapshot(makePayload([

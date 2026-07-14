@@ -6,14 +6,11 @@ import Database from 'better-sqlite3'
 // for these tests regardless of the host environment.
 process.env.DAYLENS_WORK_MEMORY_ENABLED = '1'
 
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { backfillMemoryFromHistory } from '../src/main/jobs/eveningConsolidation.ts'
 
 function createDb(): Database.Database {
-  const db = new Database(':memory:')
-  db.pragma('foreign_keys = ON')
-  db.exec(SCHEMA_SQL)
-  return db
+  return createProductionTestDatabase()
 }
 
 function localDateOffset(offsetDays: number): { date: string; start: number } {

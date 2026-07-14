@@ -4,13 +4,14 @@ import os from 'node:os'
 import path from 'node:path'
 import Database from 'better-sqlite3'
 import type BetterSqlite from 'better-sqlite3'
-import { insertWebsiteVisit } from '../db/queries'
+import { insertWebsiteVisit, insertPendingWebsiteVisit } from '../db/queries'
 import { normalizeUrlForStorage, pageKeyForUrl, resolveCanonicalBrowser } from '../lib/appIdentity'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { localDateString } from '../lib/localDate'
 import { getBrowserEntries, type BrowserEntry } from './browser'
 import { getSettings } from './settings'
 import { decideSiteCapture, detectIncognitoFromTitle, trackingControlsStateFromSettings } from '@shared/trackingControls'
+import { categoryForDomain } from '@shared/domainCategories'
 import {
   resolveBrowserApplication,
   type BrowserApplication,
@@ -38,12 +39,22 @@ export interface ActiveBrowserTab {
   title: string | null
   // True when the read produced a structured private/incognito signal (e.g.
   // Chromium's AppleScript `mode of front window`). Private windows are never
-  // tracked — no website visit, no app session — regardless of the
-  // Tracking Controls master switch (founder rule, 2026-07-06).
+  // tracked — no website visit, no app session — regardless of settings.
   isPrivate?: boolean
+  // False when the browser could not report its window mode (Chromium forks
+  // that dropped the property, WebKit). Visits from such reads are quarantined
+  // until the browser's own history corroborates them — private windows never
+  // write history, so uncorroborated visits are deleted, never stored.
+  modeKnown?: boolean
 }
 
 export type ActiveBrowserTabReader = (snapshot: ActiveBrowserWindowSnapshot) => ActiveBrowserTab | null
+
+export interface ActiveBrowserContextSample {
+  isPrivate: boolean
+  passivePresence: boolean
+  captureBlockReason?: 'paused' | 'excluded_app' | 'excluded_site' | 'incognito'
+}
 
 interface InFlightBrowserContext {
   snapshot: ActiveBrowserWindowSnapshot
@@ -65,6 +76,16 @@ function extractDomain(url: string): string | null {
   } catch {
     return null
   }
+}
+
+function passivePresenceForDomain(domain: string, snapshot: ActiveBrowserWindowSnapshot): boolean {
+  const decision = decideSiteCapture(
+    trackingControlsStateFromSettings(getSettings()),
+    { domain, windowTitle: snapshot.windowTitle },
+  )
+  if (!decision.capture) return false
+  const category = categoryForDomain(domain)
+  return category === 'entertainment' || category === 'meetings'
 }
 
 function browserAppIdFor(snapshot: ActiveBrowserWindowSnapshot): string | null {
@@ -132,10 +153,10 @@ function parseChromiumTabOutput(output: string): ActiveBrowserTab | null {
   if (mode.includes('incognito')) {
     // Never carry the private URL/title out of the read — the signal is all
     // the caller needs to drop the sample.
-    return { url: '', title: null, isPrivate: true }
+    return { url: '', title: null, isPrivate: true, modeKnown: true }
   }
   const title = lines.slice(2).join(' ').trim() || null
-  return { url, title }
+  return { url, title, modeKnown: mode.includes('normal') }
 }
 
 function macActiveTab(snapshot: ActiveBrowserWindowSnapshot): ActiveBrowserTab | null {
@@ -143,13 +164,16 @@ function macActiveTab(snapshot: ActiveBrowserWindowSnapshot): ActiveBrowserTab |
   if (!application || application.family === 'firefox') return null
 
   if (application.family === 'webkit') {
-    return runOsaScript(`
+    const tab = runOsaScript(`
       tell application "${application.name}"
         if (count of windows) is 0 then return ""
         if (count of tabs of front window) is 0 then return ""
         return URL of current tab of front window & linefeed & name of current tab of front window
       end tell
     `)
+    // WebKit has no window-mode signal at all — every visit goes through the
+    // history-corroboration quarantine.
+    return tab ? { ...tab, modeKnown: false } : null
   }
 
   const output = execOsaScript(`
@@ -423,23 +447,22 @@ export class ActiveBrowserContextTracker {
     }
   }
 
-  sample(db: BetterSqlite.Database, snapshot: ActiveBrowserWindowSnapshot): { isPrivate: boolean } {
+  sample(db: BetterSqlite.Database, snapshot: ActiveBrowserWindowSnapshot): ActiveBrowserContextSample {
     if (!this.isBrowser(snapshot)) {
       this.flush(db, snapshot.capturedAt)
       this.pending = null
       this.lastWindowTitle = null
-      return { isPrivate: false }
+      return { isPrivate: false, passivePresence: false }
     }
 
-    // Private windows are never tracked, independent of the Tracking Controls
-    // master switch (founder rule, 2026-07-06). The window-title markers are
-    // the cross-browser fallback; the structured Chromium signal comes back on
-    // the tab read below.
+    // Private windows are never tracked, independent of any setting. The
+    // window-title markers are the cross-browser fallback; the structured
+    // Chromium signal comes back on the tab read below.
     if (detectIncognitoFromTitle(snapshot.windowTitle)) {
       this.flush(db, snapshot.capturedAt)
       this.pending = null
       this.lastWindowTitle = null
-      return { isPrivate: true }
+      return { isPrivate: true, passivePresence: false }
     }
 
     // Same browser window + same title + still inside the trust window → almost
@@ -459,7 +482,11 @@ export class ActiveBrowserContextTracker {
         cached.lastSeenAt = snapshot.capturedAt
         if (this.pending) this.promotePending(db, snapshot.capturedAt)
       }
-      return { isPrivate: false }
+      const domain = cached ? extractDomain(cached.tab.url) : null
+      return {
+        isPrivate: false,
+        passivePresence: domain ? passivePresenceForDomain(domain, snapshot) : false,
+      }
     }
 
     const tab = this.readTab(snapshot)
@@ -471,7 +498,7 @@ export class ActiveBrowserContextTracker {
       this.flush(db, snapshot.capturedAt)
       this.pending = null
       this.lastWindowTitle = null
-      return { isPrivate: true }
+      return { isPrivate: true, passivePresence: false }
     }
 
     const domain = tab ? extractDomain(tab.url) : null
@@ -479,14 +506,32 @@ export class ActiveBrowserContextTracker {
       this.flush(db, snapshot.capturedAt)
       this.pending = null
       this.lastWindowTitle = null
-      return { isPrivate: false }
+      return { isPrivate: false, passivePresence: false }
+    }
+
+    const captureDecision = decideSiteCapture(
+      trackingControlsStateFromSettings(getSettings()),
+      { domain, windowTitle: snapshot.windowTitle, isPrivate: tab.isPrivate },
+    )
+    if (!captureDecision.capture) {
+      this.flush(db, snapshot.capturedAt)
+      this.pending = null
+      this.lastWindowTitle = null
+      return {
+        isPrivate: captureDecision.reason === 'incognito',
+        passivePresence: false,
+        captureBlockReason: captureDecision.reason ?? undefined,
+      }
     }
 
     this.lastWindowTitle = snapshot.windowTitle ?? null
 
     const normalizedUrl = normalizeUrlForStorage(tab.url)
     this.observeTab(db, snapshot, tab, normalizedUrl)
-    return { isPrivate: false }
+    return {
+      isPrivate: false,
+      passivePresence: passivePresenceForDomain(domain, snapshot),
+    }
   }
 
   flush(db: BetterSqlite.Database, endTime = Date.now()): boolean {
@@ -513,7 +558,7 @@ export class ActiveBrowserContextTracker {
     if (durationSec < MIN_CONTEXT_SEC) return false
 
     const browserIdentity = resolveCanonicalBrowser(context.snapshot.bundleId)
-    const inserted = insertWebsiteVisit(db, {
+    const visit = {
       domain,
       pageTitle: context.tab.title,
       url: context.tab.url,
@@ -526,7 +571,17 @@ export class ActiveBrowserContextTracker {
       canonicalBrowserId: browserIdentity.canonicalBrowserId,
       browserProfileId: browserIdentity.browserProfileId,
       source: 'active_browser_context',
-    })
+    }
+
+    // A read without a window-mode signal cannot prove the window was not
+    // private: quarantine the visit until the browser's own history
+    // corroborates it (see reconcilePendingLiveVisits in browser.ts).
+    if (context.tab.modeKnown === false) {
+      insertPendingWebsiteVisit(db, visit)
+      return false
+    }
+
+    const inserted = insertWebsiteVisit(db, visit)
 
     if (inserted) {
       invalidateProjectionScope('timeline', 'active_browser_context_recorded', {
@@ -556,7 +611,7 @@ export function __setActiveBrowserContextTrackerForTest(tracker: ActiveBrowserCo
 export function recordActiveBrowserContextSample(
   db: BetterSqlite.Database,
   snapshot: ActiveBrowserWindowSnapshot,
-): { isPrivate: boolean } {
+): ActiveBrowserContextSample {
   return activeBrowserContextTracker.sample(db, snapshot)
 }
 

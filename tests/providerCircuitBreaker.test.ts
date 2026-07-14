@@ -1,7 +1,7 @@
-// Provider circuit breaker (W1-B): when a provider reports a hard wall
+// Provider circuit breaker: when a provider reports a hard wall
 // (quota_exhausted / credit_exhausted), background AI jobs must stop hitting
 // it for a real cooldown — hours, persisted across restarts — instead of the
-// ~740k futile retries the founder's real install logged in May–June 2026.
+// ~740k futile retries a real install logged over two months.
 // These are the unit tests for the persisted breaker store itself; the
 // orchestration-level skip/attempt behavior is covered in
 // providerBreakerOrchestration.test.ts.
@@ -11,7 +11,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import Database from 'better-sqlite3'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import {
   DEFAULT_COOLDOWN_MS,
   MAX_COOLDOWN_MS,
@@ -23,9 +23,7 @@ import {
 } from '../src/main/services/providerCircuitBreaker.ts'
 
 function makeDb(): InstanceType<typeof Database> {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
-  return db
+  return createProductionTestDatabase()
 }
 
 const NOW = new Date(2026, 6, 11, 10, 0, 0, 0).getTime()
@@ -116,8 +114,7 @@ test('a repeated hard failure extends the cooldown but keeps the original opened
 
 test('the open breaker survives an app restart (state persists in the DB file)', () => {
   const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'daylens-breaker-')), 'test.sqlite')
-  const first = new Database(dbPath)
-  first.exec(SCHEMA_SQL)
+  const first = createProductionTestDatabase(dbPath)
   recordProviderHardFailure(first, 'google', 'quota_exhausted', null, NOW)
   first.close()
 

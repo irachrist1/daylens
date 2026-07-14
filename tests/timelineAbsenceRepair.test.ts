@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
 import type { AppCategory, WorkContextBlock } from '../src/shared/types.ts'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { materializeTimelineDayProjection } from '../src/main/core/query/projections.ts'
 import { analyzeTimelineDay } from '../src/main/services/analyzeDay.ts'
 import { mergeTimelineEpisodes, writeTimelineBlockReview } from '../src/main/services/workBlocks.ts'
@@ -10,13 +10,13 @@ import { getSessionsForRange, setBlockLabelOverride } from '../src/main/db/queri
 import { absenceSpannedBy } from '../src/main/lib/absenceGuard.ts'
 import { getCorrectedSessionsForRange } from '../src/main/services/activityFacts.ts'
 
-// The absence guard end-to-end (v2-ship-plan W1-A). The founder's real July 10
-// had a block from 3:49 PM to 10:05 PM with a real absence from 8:01 PM to
-// 9:39 PM inside it — a merge path joined work across time away. These tests
-// pin the three defenses: the write-path veto in mergeTimelineEpisodes, the
-// regroup partition in analyzeTimelineDay (the AI proposes, the guard
-// decides), and the repair path that splits an already-stored bad day at the
-// gap while user corrections survive.
+// The absence guard end-to-end. A real day had a block from 3:49 PM to
+// 10:05 PM with a real absence from 8:01 PM to 9:39 PM inside it — a merge
+// path joined work across time away. These tests pin the three defenses:
+// the write-path veto in mergeTimelineEpisodes, the regroup partition in
+// analyzeTimelineDay (the AI proposes, the guard decides), and the repair
+// path that splits an already-stored bad day at the gap while user
+// corrections survive.
 
 const TEST_DATE = '2026-04-22'
 
@@ -30,9 +30,7 @@ function localMs(hour: number, minute = 0): number {
 }
 
 function createDb(): Database.Database {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
-  return db
+  return createProductionTestDatabase()
 }
 
 function insertSession(
@@ -227,7 +225,7 @@ test('re-analyze REPAIRS a stored day and carries the fused block correction to 
   })
   setBlockLabelOverride(db, poisonedBlocks[0].id, 'Fixing the tracker', null)
 
-  // The founder's one click: re-analyze. No AI needed to repair the shape.
+  // One click: re-analyze. No AI needed to repair the shape.
   const result = await analyzeTimelineDay(db, TEST_DATE, {
     regroupPlan: async () => [],
     blockInsight: async () => ({ label: 'Repaired work', narrative: '' }),

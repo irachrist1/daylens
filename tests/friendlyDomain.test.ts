@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { friendlyDomain } from '../src/shared/humanize.ts'
 
-// Regression for the "App" chart bar (2026-07-07 audit): app.intercom.com,
+// Regression for the "App" chart bar: app.intercom.com,
 // app.notion.com, and app.weavy.ai all collapsed into one slice literally
 // named "App", and us.posthog.com became "Us". Generic hosting labels say
 // where a product lives, never what it is.

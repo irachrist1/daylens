@@ -1,5 +1,5 @@
 // Provider circuit breaker through the real orchestration choke point
-// (executeTextAIJob). Proves the W1-B contract end to end:
+// (executeTextAIJob). Proves the following contract end to end:
 //   - a quota/credit hard-wall failure OPENS the breaker for that provider,
 //   - machine-initiated background jobs are then SKIPPED without a provider
 //     call (and without logging a phantom ai_usage_events attempt),
@@ -10,7 +10,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { setTestDb, clearTestDb } from './support/database-stub.mjs'
 import { __resetSettings, __setSettings, setApiKey } from './support/settings-stub.mjs'
 import { executeTextAIJob } from '../src/main/services/aiOrchestration.ts'
@@ -28,8 +28,7 @@ function quotaWallError(): Error {
 }
 
 async function setup(): Promise<InstanceType<typeof Database>> {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   setTestDb(db)
   __resetSettings()
   __setSettings({ aiProvider: 'anthropic', aiChatProvider: 'anthropic' })

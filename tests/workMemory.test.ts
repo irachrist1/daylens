@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import {
   extractProjectHintFromEvidence,
   gatherConcurrentEvidence,
@@ -13,10 +13,7 @@ import {
 const START = 1_800_000_000_000
 
 function createDb(): Database.Database {
-  const db = new Database(':memory:')
-  db.pragma('foreign_keys = ON')
-  db.exec(SCHEMA_SQL)
-  return db
+  return createProductionTestDatabase()
 }
 
 function ghosttyBlock(overrides: Partial<WorkMemoryBlockInput> = {}): WorkMemoryBlockInput {

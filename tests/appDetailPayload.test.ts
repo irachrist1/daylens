@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { getAppDetailPayload } from '../src/main/services/appDetail.ts'
 
 function todayKey(): string {
@@ -15,8 +15,7 @@ function localMs(date: string, hour: number, minute = 0): number {
 }
 
 test('app detail omits app-name-only block appearances', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   const date = todayKey()
   const start = localMs(date, 9)
   const end = start + 12 * 60_000
@@ -54,8 +53,7 @@ test('app detail omits app-name-only block appearances', () => {
 })
 
 test('app detail keeps total time but merges quick returns into one human session', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   const date = todayKey()
   const start = localMs(date, 9)
 
@@ -87,8 +85,7 @@ test('app detail keeps total time but merges quick returns into one human sessio
 })
 
 test('browser detail reconciles overlapping visits into deduped pages under their domains', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   const date = todayKey()
   const start = localMs(date, 9)
 
@@ -143,8 +140,7 @@ test('browser detail reconciles overlapping visits into deduped pages under thei
 })
 
 test('browser detail subtracts a partial ignored span from both header and page credit', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   const date = '2026-04-22'
   const start = localMs(date, 9)
   const end = localMs(date, 10)
@@ -179,8 +175,7 @@ test('browser detail subtracts a partial ignored span from both header and page 
 })
 
 test('past-day app detail never mixes in the current live session', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   const past = new Date()
   past.setDate(past.getDate() - 1)
   const date = `${past.getFullYear()}-${String(past.getMonth() + 1).padStart(2, '0')}-${String(past.getDate()).padStart(2, '0')}`

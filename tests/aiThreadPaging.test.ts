@@ -4,15 +4,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { getThread } from '../src/main/services/artifacts.ts'
 import { getThreadMessagesPage } from '../src/main/db/queries.ts'
 import { clearTestDb, setTestDb } from './support/database-stub.mjs'
 
 function seedDb(): Database.Database {
-  const db = new Database(':memory:')
-  db.pragma('foreign_keys = ON')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   const now = 1_700_000_000_000
   db.prepare(`INSERT INTO ai_conversations (id, messages, created_at) VALUES (1, '[]', ?)`).run(now)
   db.prepare(`
@@ -71,9 +69,7 @@ test('getThreadMessagesPage returns the newest page, ascending, and flags earlie
 })
 
 test('getThreadMessagesPage pages correctly across identical created_at timestamps', () => {
-  const db = new Database(':memory:')
-  db.pragma('foreign_keys = ON')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   const now = 1_700_000_000_000
   db.prepare(`INSERT INTO ai_conversations (id, messages, created_at) VALUES (1, '[]', ?)`).run(now)
   db.prepare(`

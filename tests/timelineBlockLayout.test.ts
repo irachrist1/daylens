@@ -1,6 +1,6 @@
-// Regression for docs/issues-2026-07-05.md §3: the readability floor let a
-// short card paint past its real end, covering the idle gap (and its caption)
-// between it and the next block. The clock wins over the floor.
+// Regression: the readability floor let a short card paint past its real
+// end, covering the idle gap (and its caption) between it and the next
+// block. The clock wins over the floor.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { calendarCardHeights } from '../src/renderer/lib/timelineBlockLayout.ts'

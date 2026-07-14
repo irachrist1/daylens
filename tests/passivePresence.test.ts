@@ -9,6 +9,7 @@ function s(opts: {
   appName?: string
   rawAppName?: string
   windowTitle?: string | null
+  passivePresence?: boolean
 }) {
   return {
     category: opts.category ?? 'browsing',
@@ -16,6 +17,7 @@ function s(opts: {
     appName: opts.appName ?? 'App',
     rawAppName: opts.rawAppName ?? opts.appName ?? 'App',
     windowTitle: opts.windowTitle ?? null,
+    passivePresence: opts.passivePresence ?? false,
   }
 }
 
@@ -30,6 +32,24 @@ test('native meeting apps are present', () => {
 
 test('watched media stays present', () => {
   assert.equal(looksLikePassivePresenceSession(s({ category: 'entertainment', appName: 'Safari', windowTitle: 'long lecture · YouTube' })), true)
+})
+
+test('titleless Dia on a recognized media domain stays present', () => {
+  assert.equal(looksLikePassivePresenceSession(s({
+    category: 'browsing',
+    appName: 'Dia',
+    windowTitle: null,
+    passivePresence: true,
+  })), true)
+})
+
+test('titleless Dia on a non-media domain remains subject to idle handling', () => {
+  assert.equal(looksLikePassivePresenceSession(s({
+    category: 'browsing',
+    appName: 'Dia',
+    windowTitle: null,
+    passivePresence: false,
+  })), false)
 })
 
 test('a Zoom web call is present', () => {

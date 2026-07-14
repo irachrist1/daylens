@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { clearTestDb, setTestDb } from './support/database-stub.mjs'
 import {
   __setTrackingFsmTestHarness,
@@ -9,14 +9,18 @@ import {
   __recoverPersistedLiveSnapshotForTest,
   getCurrentSession,
 } from '../src/main/services/tracking.ts'
+import {
+  ActiveBrowserContextTracker,
+  __setActiveBrowserContextTrackerForTest,
+} from '../src/main/services/browserContext.ts'
 
-// Sleep-gap regression tests (2026-07-06 founder audit): macOS lid-close
-// sleep froze the poll timer WITHOUT firing the powerMonitor suspend or
-// lock-screen events, so the pre-sleep session survived a 9h44m hole and
-// absorbed it as active time ("Active now · 16h 34m"). poll() now detects a
-// wall-clock gap between two ticks and ends the session at the last evidence
-// of activity — the provisional-idle input boundary when we were already
-// idle, else the last completed tick.
+// Sleep-gap regression tests: macOS lid-close sleep froze the poll timer
+// WITHOUT firing the powerMonitor suspend or lock-screen events, so the
+// pre-sleep session survived a 9h44m hole and absorbed it as active time
+// ("Active now · 16h 34m"). poll() now detects a wall-clock gap between two
+// ticks and ends the session at the last evidence of activity — the
+// provisional-idle input boundary when we were already idle, else the last
+// completed tick.
 
 interface FlushInfo {
   startTime: number
@@ -34,14 +38,21 @@ const WIN = {
   icon: '',
 }
 
+const DIA_WIN = {
+  title: null,
+  application: 'Dia',
+  path: '/Applications/Dia.app',
+  pid: 7331,
+  icon: '',
+}
+
 // 10:00 local, mid-day so a 10h sleep still lands inside one calendar day is
 // NOT possible — the overnight scenario intentionally crosses midnight the way
 // the real bug did, exercising the midnight split on the flushed slice.
 const BASE = new Date(2026, 6, 3, 10, 0, 0, 0).getTime()
 
 function setupDb(): Database.Database {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   setTestDb(db)
   return db
 }
@@ -54,14 +65,14 @@ interface Rig {
   teardown: () => void
 }
 
-function makeRig(): Rig {
+function makeRig(activeWindow = () => WIN): Rig {
   const db = setupDb()
   const flushes: FlushInfo[] = []
   const clock = { now: BASE, lastInput: BASE }
   __setTrackingFsmTestHarness({
     now: () => clock.now,
     idleSeconds: () => Math.max(0, (clock.now - clock.lastInput) / 1_000),
-    activeWindow: () => WIN,
+    activeWindow,
     recordFlush: (info) => flushes.push(info),
   })
   return {
@@ -77,11 +88,38 @@ function makeRig(): Rig {
     },
     teardown: () => {
       __setTrackingFsmTestHarness(null)
+      __setActiveBrowserContextTrackerForTest(null)
       clearTestDb()
       db.close()
     },
   }
 }
+
+test('sleep still ends titleless Netflix passive-media time at the last awake poll', async () => {
+  __setActiveBrowserContextTrackerForTest(new ActiveBrowserContextTracker(
+    () => ({ url: 'https://netflix.com/watch/81234567', title: 'Netflix', modeKnown: true }),
+    () => true,
+  ))
+  const rig = makeRig(() => DIA_WIN)
+  try {
+    await rig.poll(BASE, { input: true })
+    await rig.poll(BASE + 30_000, { input: true })
+    await rig.poll(BASE + 85_000)
+    await rig.poll(BASE + 140_000)
+    await rig.poll(BASE + 155_000)
+    assert.ok(getCurrentSession(), 'Netflix should be held open during ordinary no-input time')
+
+    const wake = BASE + 4 * 3_600_000
+    await rig.poll(wake, { input: true })
+
+    const gapFlush = rig.flushes.find((flush) => flush.endedReason === 'sleep_gap')
+    assert.ok(gapFlush)
+    assert.equal(gapFlush?.endTime, BASE + 155_000)
+    assert.equal(gapFlush?.durationSeconds, 155)
+  } finally {
+    rig.teardown()
+  }
+})
 
 test('the July 6 shape: sleep during provisional idle ends the session at the true last input', async () => {
   const rig = makeRig()

@@ -1,12 +1,9 @@
 #!/usr/bin/env bash
 # Overnight verification harness.
 #
-# Runs the full NON-BILLED check set (typecheck + safe unit tests + the three
-# Vite bundles) and appends a timestamped pass/fail report to
-# logs/overnight-verify.log. It deliberately does NOT run any test that hits a
-# live AI provider (test:behaviour, test:toolcalls, test:entity-prompts,
-# ai:bench, or the API-backed chat tests) so it can run unattended without
-# spending money.
+# Runs the safe deterministic shipping gate and appends a timestamped pass/fail
+# report to logs/overnight-verify.log. Provider, payment, connector, and remote
+# boundaries remain local fakes, so the script can run unattended.
 #
 # Usage:
 #   bash scripts/overnight-verify.sh
@@ -19,38 +16,6 @@ cd "$(dirname "$0")/.." || exit 2
 mkdir -p logs
 LOG="logs/overnight-verify.log"
 STAMP="$(date '+%Y-%m-%d %H:%M:%S')"
-ELECTRON="./node_modules/.bin/electron"
-TS_LOADER="./tests/support/ts-loader.mjs"
-
-# Curated list of tests confirmed to run without any live API call.
-SAFE_TESTS=(
-  tests/workBlockSplitting.test.ts
-  tests/categoryOverridesCache.test.ts
-  tests/migrationRoundtrip.test.ts
-  tests/databaseBootstrap.test.ts
-  tests/rendererHookSafety.test.ts
-  tests/appActivityDigest.test.ts
-  tests/appDetailPayload.test.ts
-  tests/attributionBrowserEvidence.test.ts
-  tests/recap.test.ts
-  tests/search.test.ts
-  tests/trackingHeuristics.test.ts
-  tests/trackingSelfCapture.test.ts
-  tests/appsTopDomains.test.ts
-  tests/wrappedFacts.test.ts
-  tests/workMemory.test.ts
-  tests/peakHours.test.ts
-  tests/evidenceBackedQuery.test.ts
-  tests/derivedStateReset.test.ts
-  tests/artifactPreview.test.ts
-  tests/linuxActiveWindow.test.ts
-  tests/processMonitorParse.test.ts
-  tests/linuxPackageScripts.test.ts
-  tests/linuxSmokeMode.test.ts
-  tests/linuxWorkflowSmoke.test.ts
-  tests/settingsApiKeyOverride.test.ts
-)
-
 fail=0
 log() { echo "$1" | tee -a "$LOG"; }
 
@@ -67,11 +32,7 @@ run_step() {
   fi
 }
 
-run_step "typecheck" npm run typecheck
-run_step "tests (safe set)" env ELECTRON_RUN_AS_NODE=1 "$ELECTRON" --loader "$TS_LOADER" --test "${SAFE_TESTS[@]}"
-run_step "build:main" npm run build:main
-run_step "build:preload" npm run build:preload
-run_step "build:renderer" npm run build:renderer
+run_step "safe shipping gate" npm run verify:shipping
 
 if [ "$fail" -eq 0 ]; then
   log "RESULT $STAMP  ALL GREEN"

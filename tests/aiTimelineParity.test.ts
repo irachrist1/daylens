@@ -11,8 +11,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
-import { ensureSearchSchema } from '../src/main/db/migrations.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { executeTool } from '../src/main/services/aiTools.ts'
 import type { DaySummaryResult } from '../src/main/services/aiTools.ts'
 import { buildTimelineBlocksFromSessions } from '../src/main/services/workBlocks.ts'
@@ -20,10 +19,7 @@ import { getSessionsForRange } from '../src/main/db/queries.ts'
 import { localDayBounds } from '../src/main/lib/localDate.ts'
 
 function setupDb(): Database.Database {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
-  ensureSearchSchema(db)
-  return db
+  return createProductionTestDatabase()
 }
 
 function localMs(date: Date, hour: number, minute = 0): number {

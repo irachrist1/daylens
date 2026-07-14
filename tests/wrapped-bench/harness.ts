@@ -1,11 +1,11 @@
-// Wrapped benchmark harness (Stage 1.2). The ground-truth quality bar for the
-// Wrapped AI content, run against the REAL provider and the REAL database.
+// Wrapped benchmark harness. The ground-truth quality bar for the Wrapped AI
+// content, run against the REAL provider and the REAL database.
 //
 // It does NOT mock. It stages a read-only copy of the user's DB, imports the
 // real aiService (which registers the real provider runners), generates each
 // fixture's deck through the exact production path (getWrappedNarrative /
 // getWrappedPeriodWrap with force), then scores every AI-written line against
-// the catalog rubric (docs/wrapped-slide-catalog.md):
+// the catalog rubric:
 //
 //   Specificity 0-3, Tone 0-2, Accuracy 0-3, Narrative motion 0-2  (max 10)
 //
@@ -74,7 +74,7 @@ export interface SlideResult {
    *  rejected and the deterministic floor showed (an AI failure for the loop). */
   source: 'ai' | 'fallback'
   /** true for caption/deterministic-heavy slides held to a lighter bar and kept
-   *  out of the strict deck-average math (founder decision 2026-07-08). */
+   *  out of the strict deck-average math. */
   caption: boolean
   line: string
   score: SlideScore
@@ -86,7 +86,7 @@ export interface DeckResult {
   cadence: WrapBenchCadence
   key: string // date or period anchor
   slides: SlideResult[]
-  /** Average over the PROSE slides (captions excluded, founder Q2). */
+  /** Average over the PROSE slides (captions excluded). */
   deckAverage: number
   /** Every prose slide >= 7 and every caption slide >= 7. */
   allSlidesPassed: boolean
@@ -115,7 +115,7 @@ export interface BenchContext {
 /** Stage the DB copy, boot the real DB, register the real provider runners, and
  *  build an Anthropic client for the judge from the keytar key. */
 export async function setupBench(): Promise<BenchContext> {
-  const dbCtx = stageReadOnlyCopyOfRealDb()
+  const dbCtx = await stageReadOnlyCopyOfRealDb()
   const { initDb } = await import('../../src/main/services/database')
   initDb()
 
@@ -352,7 +352,7 @@ function clamp(v: unknown, lo: number, hi: number): number {
 function sleep(ms: number): Promise<void> { return new Promise((r) => setTimeout(r, ms)) }
 
 // ─── Deterministic honesty pre-check ──────────────────────────────────────────
-// Never depends on an LLM's taste ("wrapped yes or no.md" §benchmark item 3):
+// Never depends on an LLM's taste (docs/product/product.md, evidence-before-narrative):
 // a line that leaks raw technical text (paths, ids, branches, JSON) or claims
 // something the tracked data cannot back (attendance, idle, speculation) fails
 // outright, no matter how well the judge scores its prose.

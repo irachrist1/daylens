@@ -8,9 +8,9 @@ import {
   partitionAtRealAbsences,
 } from '../src/main/lib/absenceGuard.ts'
 
-// The one deterministic absence guard (v2-ship-plan W1-A): a real absence of
-// 15+ minutes with no captured activity is a boundary NO merge decision may
-// cross — heuristic, AI regroup, cleanup, stored correction, or manual merge.
+// The one deterministic absence guard: a real absence of 15+ minutes with no
+// captured activity is a boundary NO merge decision may cross — heuristic,
+// AI regroup, cleanup, stored correction, or manual merge.
 // These tests pin the arithmetic every merge path relies on.
 
 const MIN = 60_000

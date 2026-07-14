@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { deriveTitleFromMessage, isWeakThreadTitle } from '../src/main/lib/threadTitles.ts'
+import { deriveTitleFromMessage, isWeakThreadTitle, parseGeneratedThreadTitle } from '../src/main/lib/threadTitles.ts'
 
 // FB6: titles must be meaningful 2–5 word topic phrases — never a bare stopword,
 // never a raw truncated sentence.
@@ -76,4 +76,14 @@ test('isWeakThreadTitle flags bare stopwords/timeframes and ellipsis', () => {
 test('a possessive title is not double-capitalized after the apostrophe', () => {
   const title = deriveTitleFromMessage('What did I work on today?')
   assert.ok(!/'S\b/.test(title), `apostrophe-s should stay lowercase, got: ${title}`)
+})
+
+test('a weekday chunk request becomes a breakdown title', () => {
+  assert.equal(deriveTitleFromMessage('Break my Monday into 30-minute chunks'), 'Monday Breakdown')
+})
+
+test('generated titles accept concise topics and reject weak prose', () => {
+  assert.equal(parseGeneratedThreadTitle('"Monday Project Review"'), 'Monday Project Review')
+  assert.equal(parseGeneratedThreadTitle('What did I do on the…'), null)
+  assert.equal(parseGeneratedThreadTitle('Activity'), null)
 })

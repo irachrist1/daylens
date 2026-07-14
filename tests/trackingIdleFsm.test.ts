@@ -1,12 +1,17 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { clearTestDb, setTestDb } from './support/database-stub.mjs'
 import {
   __setTrackingFsmTestHarness,
   __pollForTest,
+  getCurrentSession,
 } from '../src/main/services/tracking.ts'
+import {
+  ActiveBrowserContextTracker,
+  __setActiveBrowserContextTrackerForTest,
+} from '../src/main/services/browserContext.ts'
 
 // These tests drive the idle/session finite-state machine in tracking.ts through
 // a scripted clock + idle timer + canned active window (the __setTrackingFsmTestHarness
@@ -34,12 +39,19 @@ const WIN = {
   icon: '',
 }
 
+const DIA_WIN = {
+  title: null,
+  application: 'Dia',
+  path: '/Applications/Dia.app',
+  pid: 7331,
+  icon: '',
+}
+
 // All timestamps live inside one local calendar day so no midnight split fires.
 const BASE = new Date(2026, 6, 3, 10, 0, 0, 0).getTime()
 
 function setupDb(): Database.Database {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   setTestDb(db)
   return db
 }
@@ -54,7 +66,7 @@ interface Rig {
   teardown: () => void
 }
 
-function makeRig(): Rig {
+function makeRig(activeWindow = () => WIN): Rig {
   const db = setupDb()
   const flushes: FlushInfo[] = []
   const clock = { now: BASE, lastInput: BASE }
@@ -63,7 +75,7 @@ function makeRig(): Rig {
     // Idle seconds = wall-clock time since the last real input, exactly like the
     // OS idle timer the FSM reads in production.
     idleSeconds: () => Math.max(0, (clock.now - clock.lastInput) / 1_000),
-    activeWindow: () => WIN,
+    activeWindow,
     recordFlush: (info) => flushes.push(info),
   })
   return {
@@ -79,17 +91,109 @@ function makeRig(): Rig {
     },
     teardown: () => {
       __setTrackingFsmTestHarness(null)
+      __setActiveBrowserContextTrackerForTest(null)
       clearTestDb()
       db.close()
     },
   }
 }
 
+test('titleless Dia on Netflix remains active beyond the five-minute idle threshold', async () => {
+  let win: typeof DIA_WIN | typeof WIN = DIA_WIN
+  __setActiveBrowserContextTrackerForTest(new ActiveBrowserContextTracker(
+    () => ({ url: 'https://www.netflix.com/watch/81234567', title: 'Netflix', modeKnown: true }),
+    () => win.application === 'Dia',
+  ))
+  const rig = makeRig(() => win)
+  try {
+    await rig.poll(BASE, { input: true })
+    await pollThrough(rig, BASE, BASE + 360_000)
+
+    const live = getCurrentSession()
+    assert.ok(live, 'Netflix must remain live after six minutes without input')
+    assert.equal(live.appName, 'Dia')
+    assert.equal(live.windowTitle, null)
+    assert.equal(rig.flushes.length, 0)
+
+    win = WIN
+    await rig.poll(BASE + 365_000, { input: true })
+
+    const row = rig.db.prepare(`
+      SELECT app_name, start_time, end_time, duration_sec, ended_reason
+      FROM app_sessions
+      WHERE app_name = 'Dia'
+    `).get() as {
+      app_name: string
+      start_time: number
+      end_time: number
+      duration_sec: number
+      ended_reason: string | null
+    } | undefined
+    assert.ok(row)
+    assert.equal(row?.start_time, BASE)
+    assert.equal(row?.end_time, BASE + 365_000)
+    assert.equal(row?.duration_sec, 365)
+    assert.equal(row?.ended_reason, 'app_switch')
+  } finally {
+    rig.teardown()
+  }
+})
+
+test('titleless Dia on a non-media domain still flushes under normal idle handling', async () => {
+  __setActiveBrowserContextTrackerForTest(new ActiveBrowserContextTracker(
+    () => ({ url: 'https://example.com/article', title: 'Article', modeKnown: true }),
+    () => true,
+  ))
+  const rig = makeRig(() => DIA_WIN)
+  try {
+    await rig.poll(BASE, { input: true })
+    await rig.poll(BASE + 60_000, { input: true })
+    await pollThrough(rig, BASE + 60_000, BASE + 365_000)
+
+    assert.equal(getCurrentSession(), null)
+    const row = rig.db.prepare(`
+      SELECT end_time, duration_sec, ended_reason
+      FROM app_sessions
+      WHERE app_name = 'Dia'
+    `).get() as { end_time: number; duration_sec: number; ended_reason: string | null } | undefined
+    assert.ok(row)
+    assert.equal(row?.end_time, BASE + 60_000)
+    assert.equal(row?.duration_sec, 60)
+    assert.equal(row?.ended_reason, 'away')
+  } finally {
+    rig.teardown()
+  }
+})
+
+test('losing active-window permission clears the browser passive-presence signal', async () => {
+  let win: typeof DIA_WIN | null = DIA_WIN
+  __setActiveBrowserContextTrackerForTest(new ActiveBrowserContextTracker(
+    () => ({ url: 'https://netflix.com/watch/81234567', title: 'Netflix', modeKnown: true }),
+    () => true,
+  ))
+  const rig = makeRig(() => win)
+  try {
+    await rig.poll(BASE, { input: true })
+    await pollThrough(rig, BASE, BASE + 240_000)
+    win = null
+    await rig.poll(BASE + 245_000)
+
+    const live = getCurrentSession() as (ReturnType<typeof getCurrentSession> & { passivePresence?: boolean })
+    assert.ok(live)
+    assert.equal(live?.passivePresence, false)
+
+    await rig.poll(BASE + 305_000)
+    assert.equal(getCurrentSession(), null, 'stale Netflix presence must not survive permission loss')
+  } finally {
+    rig.teardown()
+  }
+})
+
 // The production poller ticks every 5s whenever the machine is awake, so the
 // wall clock never jumps more than a tick while someone idles at the desk.
 // These scripted scenarios therefore advance in ≤55s steps: a larger hole
-// between two ticks IS a sleep and (since 2026-07-06) trips the sleep-gap
-// flush — that path has its own suite in trackingSleepGap.test.ts.
+// between two ticks IS a sleep and trips the sleep-gap flush — that path has
+// its own suite in trackingSleepGap.test.ts.
 async function pollThrough(rig: Rig, fromMs: number, toMs: number): Promise<void> {
   for (let t = fromMs + 55_000; t < toMs; t += 55_000) await rig.poll(t)
   await rig.poll(toMs)
@@ -194,10 +298,10 @@ test('single-touch reproduction (17:51 sitting): one wake-touch then grace then 
     await pollThrough(rig, touch + 1_000, touch + 126_000) // idle 126s → provisional_idle
     await pollThrough(rig, touch + 126_000, touch + 306_000) // idle 306s → away → S1 collapses to 0s and dies at MIN_SESSION_SEC
 
-    // FOUNDER-PENDING POLICY DECISION: a bare wake-touch with no follow-up input
+    // OPEN POLICY DECISION: a bare wake-touch with no follow-up input
     // is intentionally NOT credited. Making these visible would mean crediting the
     // idle-grace window on away-escalation for a session with zero real activity,
-    // which was rejected for now. If that policy flips, this expectation changes.
+    // which is rejected for now. If that policy flips, this expectation changes.
     const rows = rig.db
       .prepare(`SELECT COUNT(*) AS n FROM app_sessions WHERE start_time >= ?`)
       .get(touch) as { n: number }

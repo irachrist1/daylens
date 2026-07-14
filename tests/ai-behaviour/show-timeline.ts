@@ -1,19 +1,4 @@
-// Terminal Timeline viewer — shows what the Timeline view would render for a
-// given date, side-by-side with what the AI reads from the DB. Reuses the
-// behavioural harness staging (read-only DB copy + electron-real stub).
-//
-// Run:
-//   npm run timeline                # today
-//   npm run timeline -- 2026-05-12  # specific date
-//
-// This is the "show me the logs / show me the view from the terminal" tool.
-
-import fs from 'node:fs'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { stageReadOnlyCopyOfRealDb, cleanupRealDbCopy } from './realDb'
-
-const HERE = path.dirname(fileURLToPath(import.meta.url))
 
 const ANSI = {
   reset: '\x1b[0m',
@@ -22,13 +7,11 @@ const ANSI = {
   red: '\x1b[31m',
   green: '\x1b[32m',
   yellow: '\x1b[33m',
-  blue: '\x1b[34m',
-  magenta: '\x1b[35m',
   cyan: '\x1b[36m',
   gray: '\x1b[90m',
 }
 const isTTY = process.stdout.isTTY
-const c = (k: keyof typeof ANSI, s: string) => (isTTY ? `${ANSI[k]}${s}${ANSI.reset}` : s)
+const c = (key: keyof typeof ANSI, value: string) => isTTY ? `${ANSI[key]}${value}${ANSI.reset}` : value
 
 function ymd(date: Date): string {
   const y = date.getFullYear()
@@ -42,150 +25,187 @@ function fmtTime(ms: number): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
-function fmtDuration(ms: number): string {
-  const total = Math.round(ms / 1000)
+function fmtDuration(seconds: number): string {
+  const total = Math.round(seconds)
   const h = Math.floor(total / 3600)
   const m = Math.floor((total % 3600) / 60)
   if (h > 0) return `${h}h${m.toString().padStart(2, '0')}m`
   return `${m}m`
 }
 
-async function main() {
+interface ComparableBlock {
+  startMs: number
+  endMs: number
+  label: string
+}
+
+function equalBlocks(left: ComparableBlock[], right: ComparableBlock[]): boolean {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
+function printBlockDiff(leftName: string, left: ComparableBlock[], rightName: string, right: ComparableBlock[]): void {
+  const count = Math.max(left.length, right.length)
+  for (let index = 0; index < count; index += 1) {
+    const a = left[index]
+    const b = right[index]
+    if (JSON.stringify(a) === JSON.stringify(b)) continue
+    const describe = (block: ComparableBlock | undefined) => block
+      ? `${fmtTime(block.startMs)}–${fmtTime(block.endMs)} ${JSON.stringify(block.label)}`
+      : '(absent)'
+    console.log(c('red', `   [${index}] ${leftName}=${describe(a)} || ${rightName}=${describe(b)}`))
+  }
+}
+
+async function main(): Promise<void> {
   const dateArg = process.argv[2] ?? ymd(new Date())
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateArg)) {
     console.error(c('red', `Bad date: ${dateArg}. Use YYYY-MM-DD.`))
-    process.exit(2)
+    process.exitCode = 2
+    return
   }
 
-  const dbCtx = stageReadOnlyCopyOfRealDb()
-  console.log(c('dim', `[setup] DB copy at ${dbCtx.copiedDbPath}`))
+  const dbCtx = await stageReadOnlyCopyOfRealDb()
+  console.log(c('dim', `[setup] coherent DB backup at ${dbCtx.copiedDbPath}`))
 
-  const { initDb, getDb } = await import('../../src/main/services/database')
-  initDb()
+  try {
+    const { initDb, getDb } = await import('../../src/main/services/database')
+    initDb()
+    const db = getDb()
+    const { userVisibleLabelForBlock, getTimelineDayPayload } = await import('../../src/main/services/workBlocks')
+    const { getTimelineDayProjection } = await import('../../src/main/core/query/projections')
+    const projection = getTimelineDayProjection(db, dateArg, null, { materialize: false })
+    const projectionBlocks = projection.blocks.map((block) => ({
+      startMs: block.startTime,
+      endMs: block.endTime,
+      label: userVisibleLabelForBlock(block),
+    }))
 
-  const { getTimelineDayPayload, userVisibleLabelForBlock } = await import('../../src/main/services/workBlocks')
-  const db = getDb()
+    console.log(c('bold', `\n=== Timeline view for ${dateArg} ===\n`))
+    console.log(c('bold', 'A) Renderer production projection (GET_TIMELINE_DAY owner):'))
+    console.log(c('dim', `   version: ${projection.version} · total: ${fmtDuration(projection.totalSeconds)} · focus: ${fmtDuration(projection.focusSeconds ?? 0)} · blocks: ${projection.blocks.length}`))
+    console.log('')
+    if (projection.blocks.length === 0) console.log(c('gray', '   (no blocks)'))
+    for (const block of projection.blocks) {
+      const apps = block.topApps.slice(0, 5).map((app) => app.appName ?? '?').join(', ')
+      const pages = block.pageRefs.slice(0, 3).map((page) => page.title ?? page.url ?? '?').join(' | ')
+      console.log(`   ${c('cyan', `${fmtTime(block.startTime)}–${fmtTime(block.endTime)}`)} (${fmtDuration((block.endTime - block.startTime) / 1_000)})  ${c('bold', userVisibleLabelForBlock(block))}`)
+      if (apps) console.log(c('dim', `      apps: ${apps}`))
+      if (pages) console.log(c('dim', `      pages: ${pages}`))
+    }
 
-  console.log(c('bold', `\n=== Timeline view for ${dateArg} ===\n`))
+    console.log('')
+    console.log(c('bold', 'B) Direct work-block payload parity:'))
+    const direct = getTimelineDayPayload(db, dateArg, null, { materialize: false })
+    const directBlocks = direct.blocks.map((block) => ({
+      startMs: block.startTime,
+      endMs: block.endTime,
+      label: userVisibleLabelForBlock(block),
+    }))
+    const directBlocksMatch = equalBlocks(projectionBlocks, directBlocks)
+    const directTotalMatches = projection.totalSeconds === direct.totalSeconds
+    console.log(`   direct version: ${direct.version} · total: ${fmtDuration(direct.totalSeconds)} · blocks: ${direct.blocks.length}`)
+    console.log(directBlocksMatch ? c('green', '   block sequence matches renderer projection.') : c('red', '   block sequence differs from renderer projection.'))
+    if (!directBlocksMatch) printBlockDiff('renderer', projectionBlocks, 'direct', directBlocks)
+    console.log(directTotalMatches ? c('green', '   tracked total matches renderer projection.') : c('red', `   tracked total differs: renderer=${projection.totalSeconds}s direct=${direct.totalSeconds}s`))
+    const directDivergence = Number(!directBlocksMatch) + Number(!directTotalMatches)
 
-  // ─── Side A: what the renderer would show ────────────────────────────────
-  const payload = getTimelineDayPayload(db, dateArg)
-  console.log(c('bold', `A) Renderer view (getTimelineDayPayload — live recompute from app_sessions):`))
-  console.log(c('dim', `   total tracked: ${fmtDuration(payload.totalSeconds * 1000)} · focus: ${fmtDuration((payload.focusSeconds ?? 0) * 1000)} · blocks: ${payload.blocks.length}`))
-  console.log('')
-  if (payload.blocks.length === 0) {
-    console.log(c('gray', '   (no blocks)'))
+    console.log('')
+    console.log(c('bold', 'C) Stored timeline index (informational):'))
+    const storedRows = db.prepare(`
+      SELECT start_time AS startTime, end_time AS endTime, label_current AS label,
+             label_source AS labelSource, invalidated_at AS invalidatedAt
+      FROM timeline_blocks
+      WHERE date = ?
+      ORDER BY start_time ASC
+    `).all(dateArg) as Array<{
+      startTime: number
+      endTime: number
+      label: string
+      labelSource: string
+      invalidatedAt: number | null
+    }>
+    const activeRows = storedRows.filter((row) => row.invalidatedAt == null)
+    console.log(c('dim', `   ${activeRows.length} active row(s), ${storedRows.length - activeRows.length} invalidated`))
+    for (const row of activeRows) {
+      console.log(`   ${c('cyan', `${fmtTime(row.startTime)}–${fmtTime(row.endTime)}`)} ${row.label} ${c('dim', `[${row.labelSource}]`)}`)
+    }
+
+    console.log('')
+    console.log(c('bold', 'D) AI getDaySummary parity:'))
+    const { executeTool } = await import('../../src/main/services/aiTools')
+    const summary = executeTool('getDaySummary', { date: dateArg }, db) as {
+      blocks: Array<{ startMs: number; endMs: number; label: string }>
+      totalTrackedSeconds: number
+      _evidence: { topApps: Array<{ appName: string; bundleId: string; totalSeconds: number }> }
+    }
+    const aiBlocks = summary.blocks.map((block) => ({
+      startMs: block.startMs,
+      endMs: block.endMs,
+      label: block.label,
+    }))
+    const aiBlocksMatch = equalBlocks(projectionBlocks, aiBlocks)
+    const aiTotalMatches = projection.totalSeconds === summary.totalTrackedSeconds
+    console.log(aiBlocksMatch ? c('green', '   AI block evidence matches renderer projection.') : c('red', '   AI block evidence differs from renderer projection.'))
+    if (!aiBlocksMatch) printBlockDiff('renderer', projectionBlocks, 'AI', aiBlocks)
+    console.log(aiTotalMatches ? c('green', '   AI tracked total matches renderer projection.') : c('red', `   AI tracked total differs: renderer=${projection.totalSeconds}s AI=${summary.totalTrackedSeconds}s`))
+    const aiDivergence = Number(!aiBlocksMatch) + Number(!aiTotalMatches)
+
+    console.log('')
+    console.log(c('bold', 'E) Apps parity:'))
+    const { localDayBounds } = await import('../../src/main/lib/localDate')
+    const { getCorrectedAppSummariesForRange } = await import('../../src/main/services/activityFacts')
+    const [fromMs, toMs] = localDayBounds(dateArg)
+    const apps = getCorrectedAppSummariesForRange(db, fromMs, toMs)
+    const timelineApps = new Map<string, { name: string; seconds: number }>()
+    for (const session of projection.sessions) {
+      const key = session.canonicalAppId ?? session.bundleId
+      const current = timelineApps.get(key) ?? { name: session.appName, seconds: 0 }
+      current.seconds += session.durationSeconds
+      timelineApps.set(key, current)
+    }
+    const appsSurface = new Map(apps.map((app) => [
+      app.canonicalAppId ?? app.bundleId,
+      { name: app.appName, seconds: app.totalSeconds },
+    ]))
+    const allAppKeys = [...new Set([...timelineApps.keys(), ...appsSurface.keys()])]
+    let appsDivergence = 0
+    for (const key of allAppKeys) {
+      const timeline = timelineApps.get(key)
+      const app = appsSurface.get(key)
+      if (timeline?.seconds === app?.seconds) continue
+      appsDivergence += 1
+      console.log(c('red', `   ${timeline?.name ?? app?.name ?? key}: Timeline=${timeline ? `${timeline.seconds}s` : '(absent)'} Apps=${app ? `${app.seconds}s` : '(absent)'}`))
+    }
+    const appsTotal = apps.reduce((sum, app) => sum + app.totalSeconds, 0)
+    const totalsMatch = projection.totalSeconds === appsTotal
+    if (!totalsMatch) {
+      appsDivergence += 1
+      console.log(c('red', `   tracked total differs: Timeline=${projection.totalSeconds}s Apps=${appsTotal}s`))
+    }
+    console.log(appsDivergence === 0 ? c('green', '   Apps and Timeline app facts match.') : c('red', `   ${appsDivergence} Apps/Timeline disagreement(s).`))
+
+    const aiAppTotals = new Map(summary._evidence.topApps.map((app) => [app.bundleId, app.totalSeconds]))
+    let aiAppDivergence = 0
+    for (const [bundleId, seconds] of aiAppTotals) {
+      const app = apps.find((candidate) => candidate.bundleId === bundleId)
+      if (app?.totalSeconds === seconds) continue
+      aiAppDivergence += 1
+      console.log(c('red', `   AI/Apps ${bundleId}: AI=${seconds}s Apps=${app?.totalSeconds ?? '(absent)'}`))
+    }
+    console.log(aiAppDivergence === 0 ? c('green', '   AI top-app facts match Apps.') : c('red', `   ${aiAppDivergence} AI/Apps disagreement(s).`))
+
+    const divergenceCount = directDivergence + aiDivergence + appsDivergence + aiAppDivergence
+    console.log('')
+    console.log(divergenceCount === 0
+      ? c('green', 'PASS: renderer, direct payload, AI, and Apps agree.')
+      : c('red', `FAIL: ${divergenceCount} cross-surface divergence(s).`))
+    process.exitCode = divergenceCount === 0 ? 0 : 1
+  } finally {
+    cleanupRealDbCopy(dbCtx)
   }
-  for (const b of payload.blocks) {
-    const labelText = userVisibleLabelForBlock(b)
-    const apps = (b.topApps ?? []).slice(0, 5).map((a) => a.appName ?? '?').join(', ')
-    const pages = (b.pageRefs ?? []).slice(0, 3).map((p) => (p as { title?: string; url?: string }).title ?? (p as { url?: string }).url ?? '?').join(' | ')
-    const artifacts = (b.topArtifacts ?? []).slice(0, 3).map((a) => (a as { name?: string; path?: string }).name ?? (a as { path?: string }).path ?? '?').join(' | ')
-    console.log(`   ${c('cyan', `${fmtTime(b.startTime)}–${fmtTime(b.endTime)}`)} (${fmtDuration(b.endTime - b.startTime)})  ${c('bold', labelText)}`)
-    if (apps) console.log(c('dim', `      apps: ${apps}`))
-    if (pages) console.log(c('dim', `      pages: ${pages}`))
-    if (artifacts) console.log(c('dim', `      artifacts: ${artifacts}`))
-  }
-
-  // ─── Side B: persisted timeline_blocks index (NOT the AI source anymore) ─
-  // After AI-FIX-STRATEGY F2, the AI tool layer reads block labels via the
-  // same live recompute path the renderer uses (Section A). This section is
-  // kept for inspection so you can see how badly the persisted labels drift
-  // — but the divergence in Section C no longer reaches the user.
-  console.log('')
-  console.log(c('bold', `B) Stored view (timeline_blocks.label_current — index only; informational):`))
-  const storedRows = db.prepare(`
-    SELECT
-      id,
-      start_time AS startTime,
-      end_time   AS endTime,
-      label_current AS label,
-      label_source AS labelSource,
-      dominant_category AS dominantCategory,
-      heuristic_version AS heuristicVersion,
-      invalidated_at AS invalidatedAt
-    FROM timeline_blocks
-    WHERE date = ?
-    ORDER BY start_time ASC
-  `).all(dateArg) as Array<{
-    id: string
-    startTime: number
-    endTime: number
-    label: string
-    labelSource: string
-    dominantCategory: string
-    heuristicVersion: string
-    invalidatedAt: number | null
-  }>
-
-  const activeRows = storedRows.filter((r) => r.invalidatedAt == null)
-  const invalidatedRows = storedRows.filter((r) => r.invalidatedAt != null)
-  console.log(c('dim', `   ${activeRows.length} active row(s), ${invalidatedRows.length} invalidated`))
-  console.log('')
-  for (const r of activeRows) {
-    const sourceColor = r.labelSource === 'artifact' ? 'green' : r.labelSource === 'ai' ? 'yellow' : 'gray'
-    console.log(`   ${c('cyan', `${fmtTime(r.startTime)}–${fmtTime(r.endTime)}`)} (${fmtDuration(r.endTime - r.startTime)})  ${c('bold', r.label)}  ${c(sourceColor as keyof typeof ANSI, `[${r.labelSource}]`)}`)
-    console.log(c('dim', `      id=${r.id} category=${r.dominantCategory} heuristic=${r.heuristicVersion}`))
-  }
-
-  // ─── Side-by-side diff ───────────────────────────────────────────────────
-  console.log('')
-  console.log(c('bold', `C) Divergence (block start → renderer label || stored label):`))
-  const rendererByStart = new Map<number, string>()
-  for (const b of payload.blocks) {
-    const labelText = userVisibleLabelForBlock(b)
-    rendererByStart.set(b.startTime, labelText)
-  }
-  const storedByStart = new Map<number, string>()
-  for (const r of activeRows) {
-    if (!storedByStart.has(r.startTime)) storedByStart.set(r.startTime, r.label)
-  }
-  const allStarts = [...new Set<number>([...rendererByStart.keys(), ...storedByStart.keys()])].sort((a, b) => a - b)
-  let diverged = 0
-  for (const st of allStarts) {
-    const rl = rendererByStart.get(st) ?? '(absent)'
-    const sl = storedByStart.get(st) ?? '(absent)'
-    const match = rl === sl
-    if (!match) diverged += 1
-    const tag = match ? c('green', '   match  ') : c('red', '   DIVERGE')
-    console.log(`${tag} ${c('cyan', fmtTime(st))}  renderer="${rl}"  ||  stored="${sl}"`)
-  }
-  console.log('')
-  console.log(
-    diverged === 0
-      ? c('green', `   No divergence on ${dateArg}.`)
-      : c('yellow', `   ${diverged}/${allStarts.length} blocks diverge between renderer and stored labels. After F2 this is informational only — AI tools read the renderer path.`)
-  )
-
-  // ─── Section D: what AI tools now see ─────────────────────────────────────
-  // Exercise the actual AI-facing tool to prove parity with the renderer.
-  console.log('')
-  console.log(c('bold', `D) What AI tools see now (execGetDaySummary via aiTools):`))
-  const { executeTool } = await import('../../src/main/services/aiTools')
-  const summary = executeTool('getDaySummary', { date: dateArg }, db) as { timelineBlockLabels: string[] }
-  const aiLabels = new Set(summary.timelineBlockLabels)
-  const rendererLabels = new Set([...rendererByStart.values()])
-  let aiDivergence = 0
-  for (const label of aiLabels) {
-    if (!rendererLabels.has(label)) aiDivergence += 1
-  }
-  for (const label of rendererLabels) {
-    if (!aiLabels.has(label) && summary.timelineBlockLabels.length >= rendererByStart.size) aiDivergence += 1
-  }
-  console.log(c('dim', `   AI sees ${aiLabels.size} unique labels; renderer produced ${rendererLabels.size}.`))
-  console.log(
-    aiDivergence === 0
-      ? c('green', `   AI and renderer labels are in sync (Option B holds).`)
-      : c('red', `   ${aiDivergence} label(s) differ between AI tool output and renderer.`)
-  )
-
-  cleanupRealDbCopy(dbCtx)
-  // Exit non-zero only when the AI surface itself disagrees with the
-  // renderer. Renderer-vs-stored divergence is no longer a build break.
-  process.exit(aiDivergence > 0 ? 1 : 0)
 }
 
-main().catch((err) => {
-  console.error(c('red', `[fatal] ${err instanceof Error ? err.stack : String(err)}`))
-  process.exit(1)
+main().catch((error) => {
+  console.error(c('red', `[fatal] ${error instanceof Error ? error.stack : String(error)}`))
+  process.exitCode = 1
 })

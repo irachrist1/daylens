@@ -9,7 +9,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { getAppDetailPayload } from '../src/main/services/appDetail.ts'
 
 function localDateString(offset = 0): string {
@@ -50,8 +50,7 @@ function seedBrowserDays(db: Database.Database, days: number, visitsPerDay: numb
 }
 
 test('30d browser detail reconciles and never exceeds the browser total', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   seedBrowserDays(db, 30, 200)
 
   const detail = getAppDetailPayload(db, 'safari', 30, null)
@@ -75,8 +74,7 @@ test('30d browser detail reconciles and never exceeds the browser total', () => 
 })
 
 test('30d browser detail stays fast on a heavy history (no O(visits²) regression)', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   // ~36k in-window visits across 30 days. On the old quadratic path this took
   // several seconds; the reconciled path finishes in a few hundred ms.
   seedBrowserDays(db, 30, 1200)

@@ -1,4 +1,4 @@
-// W1-C real cancel: the main-process cancellation plumbing.
+// The main-process cancellation plumbing.
 // ai:cancel-message resolves a clientRequestId to the turn's AbortController,
 // and the turn's signal rides an AsyncLocalStorage context so every provider
 // call made anywhere inside the turn can be aborted without threading a

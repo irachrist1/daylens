@@ -1,7 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import Database from 'better-sqlite3'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { clearTestDb, setTestDb } from './support/database-stub.mjs'
 import {
   ActiveBrowserContextTracker,
@@ -14,12 +13,12 @@ import {
   getCurrentSession,
 } from '../src/main/services/tracking.ts'
 
-// Founder rule (2026-07-06): a private/incognito window is never tracked — no
-// website visit AND no app session — regardless of the Tracking Controls
-// master switch. The old gate was a window-title regex inside the opt-in
-// module, which Dia (the founder's main browser) never matched; the structured
-// signal is Chromium's AppleScript window mode, surfaced by the tab reader as
-// `isPrivate` and consumed by the poll BEFORE any session is created.
+// A private/incognito window is never tracked — no website visit AND no app
+// session — regardless of the Tracking Controls master switch. The old gate
+// was a window-title regex inside the opt-in module, which Dia (a primary
+// browser in use) never matched; the structured signal is Chromium's
+// AppleScript window mode, surfaced by the tab reader as `isPrivate` and
+// consumed by the poll BEFORE any session is created.
 
 function snapshot(overrides: Partial<ActiveBrowserWindowSnapshot> = {}): ActiveBrowserWindowSnapshot {
   return {
@@ -32,8 +31,7 @@ function snapshot(overrides: Partial<ActiveBrowserWindowSnapshot> = {}): ActiveB
 }
 
 test('a structured private signal records no website visit and flushes the open context', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   try {
     let priv = false
     const tracker = new ActiveBrowserContextTracker(
@@ -42,11 +40,11 @@ test('a structured private signal records no website visit and flushes the open 
     )
 
     // Regular context accrues 20s, then a private window takes focus.
-    assert.deepEqual(tracker.sample(db, snapshot()), { isPrivate: false })
+    assert.deepEqual(tracker.sample(db, snapshot()), { isPrivate: false, passivePresence: false })
     tracker.sample(db, snapshot({ capturedAt: 1_800_000_020_000 }))
     priv = true
     const result = tracker.sample(db, snapshot({ capturedAt: 1_800_000_040_000, windowTitle: 'Something' }))
-    assert.deepEqual(result, { isPrivate: true })
+    assert.deepEqual(result, { isPrivate: true, passivePresence: false })
 
     // The regular visit was flushed (ending when the private window arrived);
     // nothing about the private window was recorded.
@@ -65,15 +63,14 @@ test('a structured private signal records no website visit and flushes the open 
 })
 
 test('the private-window title fallback drops the sample even with Tracking Controls off', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   try {
     const tracker = new ActiveBrowserContextTracker(
       () => ({ url: 'https://example.com/', title: 'Example' }),
       () => true,
     )
     const result = tracker.sample(db, snapshot({ windowTitle: 'Example — Private Browsing' }))
-    assert.deepEqual(result, { isPrivate: true })
+    assert.deepEqual(result, { isPrivate: true, passivePresence: false })
     tracker.flush(db)
     assert.equal((db.prepare('SELECT COUNT(*) AS n FROM website_visits').get() as { n: number }).n, 0)
   } finally {
@@ -82,8 +79,7 @@ test('the private-window title fallback drops the sample even with Tracking Cont
 })
 
 test('poll: a private window creates no app session and cuts the one before it', async () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   setTestDb(db)
   const BASE = new Date(2026, 6, 3, 10, 0, 0, 0).getTime()
   try {
@@ -122,10 +118,48 @@ test('poll: a private window creates no app session and cuts the one before it',
     assert.equal(sessions.length, 1, 'only the pre-private session persists')
     assert.equal(sessions[0].ended_reason, 'incognito')
     assert.equal(sessions[0].end_time, BASE + 60_000)
+    assert.equal((db.prepare('SELECT COUNT(*) AS n FROM website_visits_pending').get() as { n: number }).n, 0)
+    assert.equal((db.prepare('SELECT COUNT(*) AS n FROM focus_events').get() as { n: number }).n, 0)
 
     // Still private on later polls: still no session.
     await poll(BASE + 90_000)
     assert.equal(getCurrentSession(), null)
+  } finally {
+    __setTrackingFsmTestHarness(null)
+    __setActiveBrowserContextTrackerForTest(null)
+    clearTestDb()
+    db.close()
+  }
+})
+
+test('private Netflix activity produces neither a domain nor an app session', async () => {
+  const db = createProductionTestDatabase()
+  setTestDb(db)
+  const BASE = new Date(2026, 6, 3, 12, 0, 0, 0).getTime()
+  try {
+    __setActiveBrowserContextTrackerForTest(new ActiveBrowserContextTracker(
+      () => ({ url: '', title: null, isPrivate: true }),
+      () => true,
+    ))
+    __setTrackingFsmTestHarness({
+      now: () => BASE,
+      idleSeconds: () => 0,
+      activeWindow: () => ({
+        title: null,
+        application: 'Dia',
+        path: '/Applications/Dia.app',
+        pid: 78,
+        icon: '',
+      }),
+    })
+
+    await __pollForTest()
+
+    assert.equal(getCurrentSession(), null)
+    assert.equal((db.prepare('SELECT COUNT(*) AS n FROM app_sessions').get() as { n: number }).n, 0)
+    assert.equal((db.prepare('SELECT COUNT(*) AS n FROM website_visits').get() as { n: number }).n, 0)
+    assert.equal((db.prepare('SELECT COUNT(*) AS n FROM website_visits_pending').get() as { n: number }).n, 0)
+    assert.equal((db.prepare('SELECT COUNT(*) AS n FROM focus_events').get() as { n: number }).n, 0)
   } finally {
     __setTrackingFsmTestHarness(null)
     __setActiveBrowserContextTrackerForTest(null)

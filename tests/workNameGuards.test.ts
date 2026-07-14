@@ -9,7 +9,7 @@ import {
 } from '../src/shared/workNameGuards.ts'
 
 // Every rejected string below LEAKED into a real period wrap as a thread
-// subject or stretch label (Jul 1-7 week, 2026-07-08 period audit).
+// subject or stretch label.
 
 test('tool brands are never work subjects, decorated or not', () => {
   assert.ok(isToolBrandName('Claude Code'))

@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { AI_PROVIDER_META } from '../src/renderer/lib/aiProvider.ts'
 
-// M1: catalog integrity + the verified GA refresh (2026-05-31).
+// Catalog integrity + the verified GA models.
 
 test('every provider default model is one of its offered models', () => {
   for (const [provider, meta] of Object.entries(AI_PROVIDER_META)) {
@@ -24,5 +24,6 @@ test('flagship ids are refreshed (OpenAI 5.5, Anthropic Opus 4.8)', () => {
   assert.equal(AI_PROVIDER_META.openai.defaultModel, 'gpt-5.5')
   assert.ok(AI_PROVIDER_META.openai.models.some((m) => m.id === 'gpt-5.5'))
   assert.equal(AI_PROVIDER_META.anthropic.defaultModel, 'claude-opus-4-8')
+  assert.ok(AI_PROVIDER_META.anthropic.models.some((m) => m.id === 'claude-sonnet-5'))
   assert.ok(!AI_PROVIDER_META.anthropic.models.some((m) => m.id === 'claude-opus-4-6'), 'opus 4.6 should be replaced by 4.8')
 })

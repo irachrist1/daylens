@@ -1,4 +1,4 @@
-// W1-C: rename persistence + the empty-draft reuse that stops duplicate
+// Rename persistence + the empty-draft reuse that stops duplicate
 // sidebar threads at the source. A failed first send leaves an EMPTY thread
 // row behind (the turn is persisted only at the end); the next draft send must
 // reuse that row (createThread(null)) instead of minting another identically
@@ -6,16 +6,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { createThread, getThread, renameThread } from '../src/main/services/artifacts.ts'
 import { deriveTitleFromMessage, isWeakThreadTitle } from '../src/main/lib/threadTitles.ts'
 import { clearTestDb, setTestDb } from './support/database-stub.mjs'
 
 function freshDb(): Database.Database {
-  const db = new Database(':memory:')
-  db.pragma('foreign_keys = ON')
-  db.exec(SCHEMA_SQL)
-  return db
+  return createProductionTestDatabase()
 }
 
 test('renameThread persists the new title and normalizes an empty one', () => {

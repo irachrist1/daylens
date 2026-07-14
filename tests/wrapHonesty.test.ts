@@ -1,4 +1,4 @@
-// The evidence-honesty contract ("wrapped yes or no.md"): a wrap says only what
+// The evidence-honesty contract (docs/product/product.md, evidence-before-narrative): a wrap says only what
 // was observed. These tests pin the deterministic guards — shared by the runtime
 // validator AND the benchmark — and the coverage slide that makes every wrap
 // name what it saw and what it didn't.
@@ -43,9 +43,9 @@ test('overclaim guard passes honest observed phrasing', () => {
   assert.equal(findOverclaimViolation('The 1:1 sat on the calendar and the afternoon built around it.'), null)
 })
 
-// The product never narrates in its own name (voice.md §2.8) — the exact
-// failure the 2026-07-11 paid benchmark caught on thin days, where the old
-// honesty directive induced "Daylens only saw ..." and the judge capped tone.
+// The product never narrates in its own name — the exact failure the paid
+// benchmark caught on thin days, where the old honesty directive induced
+// "Daylens only saw ..." and the judge capped tone.
 
 test('overclaim guard kills the product speaking as the narrator', () => {
   assert.ok(findOverclaimViolation('Daylens only saw 23 minutes of screen activity today.'))
@@ -97,7 +97,7 @@ test('wrapLineViolation passes an honest calendar-anchored line', () => {
   assert.equal(wrapLineViolation('Your calendar held the design review, and the code got the rest of the morning from 9am.', ctx), null)
 })
 
-// ─── Time-of-day words (founder decision 2026-07-10) ─────────────────────────
+// ─── Time-of-day words ────────────────────────────────────────────────────────
 // No time word is banned and none is forced; the only rule is accuracy. "noon"
 // and "midnight" are precise clock claims (12pm / 12am) and must ground in the
 // slide's own facts like any clock time; "midday" / "morning" / "the evening"

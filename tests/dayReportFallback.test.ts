@@ -41,7 +41,7 @@ test('isUserFacingReportMarkdown accepts human report prose', () => {
   ].join('\n')), true)
 })
 
-// No fake AI (W1-C): the templated "report" that used to be presented as an AI
+// No fake AI: the templated "report" that used to be presented as an AI
 // answer when the model call failed must stay deleted. If someone reintroduces
 // it, the chat report path is at risk of showing text no model produced.
 test('the fake-AI fallback report template stays deleted', () => {

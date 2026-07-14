@@ -5,7 +5,7 @@
 // All times are constructed at fixed local-clock positions so router answers
 // are deterministic regardless of when the harness runs.
 import Database from 'better-sqlite3'
-import { SCHEMA_SQL } from '../../src/main/db/schema'
+import { createProductionTestDatabase } from '../support/testDatabase'
 
 export interface FixtureContext {
   db: Database.Database
@@ -85,9 +85,7 @@ function insertWebsite(
 }
 
 function freshDb(): Database.Database {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
-  return db
+  return createProductionTestDatabase()
 }
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
-// AI-telemetry retention (W1-B / storage audit): ai_usage_events grew forever
-// (888k rows, ~364 MB with indexes in the founder's real DB — 55% of the
-// file) because nothing pruned it. The retention job keeps recent per-event
+// AI-telemetry retention: ai_usage_events grew forever (a real install saw it
+// reach 888k rows, ~364 MB with indexes — 55% of the file) because nothing
+// pruned it. The retention job keeps recent per-event
 // detail and rolls older rows into per-day aggregates, and this suite proves
 // the one contract that matters: everything the Settings → Usage screen and
 // the CSV export read is EXACTLY preserved across the rollup, the expired
@@ -8,7 +8,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { setTestDb, clearTestDb } from './support/database-stub.mjs'
 import {
   AI_USAGE_DETAIL_RETENTION_DAYS,
@@ -25,9 +25,7 @@ const NOW = new Date(2026, 6, 11, 12, 0, 0, 0).getTime()
 const DAY_MS = 86_400_000
 
 function makeDb(): InstanceType<typeof Database> {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
-  return db
+  return createProductionTestDatabase()
 }
 
 interface EventSpec {

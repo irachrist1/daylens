@@ -35,7 +35,7 @@ function median(values: number[]): number {
 async function main(): Promise<void> {
   console.log('\n=== R1 starter-prompt gate (real Gemini) ===\n')
 
-  const dbCtx = stageReadOnlyCopyOfRealDb()
+  const dbCtx = await stageReadOnlyCopyOfRealDb()
   console.log(`[setup] real DB copy: ${dbCtx.copiedDbPath}`)
 
   const { initDb } = await import('../../src/main/services/database')

@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { ANALYTICS_EVENT, buildAIGenerationProperties, sanitizeAnalyticsProperties } from '../src/shared/analytics.ts'
 
-// The ten-event feature taxonomy (2026-07-07). Each entry mirrors the exact
+// The ten-event feature taxonomy. Each entry mirrors the exact
 // payload its call site sends; the assertion is that the sanitizer's allowlist
 // passes every property through — a silently-dropped key is how these events
 // break without any test going red.

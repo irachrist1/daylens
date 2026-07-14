@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
 import type { AppSession } from '../src/shared/types.ts'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { buildTimelineBlocksFromSessions } from '../src/main/services/workBlocks.ts'
 import { blockActiveSeconds } from '../src/shared/blockDuration.ts'
 
@@ -42,9 +42,7 @@ function session(opts: {
 }
 
 function freshDb(): Database.Database {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
-  return db
+  return createProductionTestDatabase()
 }
 
 function seedActivityEvent(db: Database.Database, tsMs: number, type: string): void {
@@ -350,7 +348,7 @@ test('a sub-15-minute sliver between brief lulls folds into the surrounding work
   db.close()
 })
 
-// The 15-minute session break (founder decision, Jul 2, 2026): real activity
+// The 15-minute session break: real activity
 // gaps of 15+ minutes END the block and are never absorbed. The same morning
 // with 20-minute lulls is three sittings; the isolated 8-minute Spotify blip
 // bounded by real gaps on both sides is noise, not a block — it is dropped,
@@ -370,7 +368,7 @@ test('15+ minute gaps end blocks; an isolated sub-floor blip between real gaps i
   db.close()
 })
 
-// FLOOR (guard regression, 2026-07-01): the floor pass must fold EVERY sub-floor
+// FLOOR: the floor pass must fold EVERY sub-floor
 // sliver, however fragmented the day. The old fold loop was bounded by the
 // shrinking result length, so a day with many slivers exited early and 12-second
 // blocks reached the screen. Alternating work/leisure runs force many hard-cut

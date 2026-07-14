@@ -2,17 +2,17 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
 import type { AppCategory } from '../src/shared/types.ts'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { materializeTimelineDayProjection } from '../src/main/core/query/projections.ts'
 import { analyzeTimelineDay } from '../src/main/services/analyzeDay.ts'
 
-// Invariant 3 ("same-intent neighbours merge into one block") used to be
-// enforced ONLY behind the manual "Analyze" click: the automatic finalize path
-// shipped the engine's over-split heuristic blocks (on 2026-07-02 the day
-// materialized to 14 artifact-labeled fragments and only Re-analyze collapsed
-// them to 6). analyzeTimelineDay is now the ONE shared pipeline both paths run,
-// so the automatic entry point produces the same merged blocks as the manual
-// one. The AI planner is mocked here — the suite never reaches a provider.
+// "Same-intent neighbours merge into one block" used to be enforced ONLY
+// behind the manual "Analyze" click: the automatic finalize path shipped the
+// engine's over-split heuristic blocks (a day materialized to 14
+// artifact-labeled fragments and only Re-analyze collapsed them to 6).
+// analyzeTimelineDay is now the ONE shared pipeline both paths run, so the
+// automatic entry point produces the same merged blocks as the manual one.
+// The AI planner is mocked here — the suite never reaches a provider.
 
 const TEST_DATE = '2026-04-22'
 
@@ -21,9 +21,7 @@ function localMs(hour: number, minute = 0): number {
 }
 
 function createDb(): Database.Database {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
-  return db
+  return createProductionTestDatabase()
 }
 
 function insertSession(

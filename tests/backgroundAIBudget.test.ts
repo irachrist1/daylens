@@ -1,12 +1,12 @@
-// Regression for the 2026-07-05 cost audit (docs/issues-2026-07-05.md §1): a
-// runaway background loop made 77k relabel calls in a week because nothing
-// between a scheduler and the provider ever refused to spend. The daily budget
+// Regression test: a runaway background loop once made 77k relabel calls in a
+// week because nothing between a scheduler and the provider ever refused to
+// spend. The daily budget
 // breaker counts every attempted background call in ai_usage_events and trips
 // at the cap, so any future loop — known or not — is bounded to pennies.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { countBackgroundAIUsageEventsSince, startAIUsageEvent } from '../src/main/db/queries.ts'
 import { BACKGROUND_AI_DAILY_CALL_CAP, backgroundAIBudgetExhausted } from '../src/main/services/aiOrchestration.ts'
 
@@ -21,8 +21,7 @@ function insertEvent(db: Database.Database, id: string, triggerSource: string, s
 }
 
 test('breaker counts only background attempts since the given time', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
 
   const midnight = new Date(2026, 6, 5, 0, 0, 0, 0).getTime()
   insertEvent(db, 'bg-before', 'background', midnight - 60_000)
@@ -36,8 +35,7 @@ test('breaker counts only background attempts since the given time', () => {
 })
 
 test('the daily background budget trips at the cap and only for background work', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
 
   const now = new Date(2026, 6, 5, 14, 30, 0, 0).getTime()
   const morning = new Date(2026, 6, 5, 9, 0, 0, 0).getTime()

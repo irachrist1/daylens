@@ -130,6 +130,8 @@ function makeBlock(overrides: Partial<WorkContextBlock> = {}): WorkContextBlock 
     confidence: overrides.confidence ?? 'medium',
     review: overrides.review ?? DEFAULT_TIMELINE_BLOCK_REVIEW,
     isLive: overrides.isLive ?? false,
+    kind: overrides.kind,
+    boundary: overrides.boundary,
   }
 }
 
@@ -277,4 +279,41 @@ test('noisy loading and entertainment pages do not become fake intent subjects',
   assert.equal(intent.role, 'research')
   assert.equal(intent.subject, null)
   assert.doesNotMatch(intent.summary, /Dia \+ Warp|Watch Inception/)
+})
+
+test('browser episodes cut by meeting boundaries are coordination', () => {
+  const block = makeBlock({
+    dominantCategory: 'browsing',
+    kind: 'work',
+    topApps: [makeApp('Chrome', 'browsing', 2400, true)],
+    pageRefs: [makePage({ title: 'Engineering sync', domain: 'meet.google.com', url: 'https://meet.google.com/abc-defg-hij' })],
+    boundary: { startReasons: ['meeting-start'], endReasons: ['meeting-end'] },
+  })
+
+  assert.equal(inferWorkIntent(block).role, 'coordination')
+})
+
+test('browser-hosted documentation and research notes remain research', () => {
+  const block = makeBlock({
+    dominantCategory: 'writing',
+    topApps: [makeApp('Chrome', 'writing', 3900, true)],
+    pageRefs: [
+      makePage({ title: 'ActivityWatch documentation', domain: 'activitywatch.net', url: 'https://activitywatch.net/docs' }),
+      makePage({ title: 'Competitive research notes', domain: 'docs.google.com', url: 'https://docs.google.com/document/d/1' }),
+    ],
+  })
+
+  assert.equal(inferWorkIntent(block).role, 'research')
+})
+
+test('browser-hosted operational trackers are coordination, not writing execution', () => {
+  const block = makeBlock({
+    dominantCategory: 'writing',
+    topApps: [makeApp('Chrome', 'writing', 1320, true)],
+    pageRefs: [
+      makePage({ title: 'Budget tracker', domain: 'docs.google.com', url: 'https://docs.google.com/spreadsheets/d/1' }),
+    ],
+  })
+
+  assert.equal(inferWorkIntent(block).role, 'coordination')
 })

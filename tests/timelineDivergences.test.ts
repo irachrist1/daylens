@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { getTopPagesForDomains, getWebsiteSummariesForRange } from '../src/main/db/queries.ts'
 import { getTimelineDayPayload, trimTimelineBlockSpan } from '../src/main/services/workBlocks.ts'
 import { localDateString } from '../src/main/lib/localDate.ts'
@@ -10,8 +10,8 @@ import { localDateString } from '../src/main/lib/localDate.ts'
 // does TODAY, bugs included. They exist to freeze current behavior so a later
 // fix pass can flip them deliberately instead of discovering a silent
 // behavior change by accident. Do not treat a passing test here as a
-// blessing of the behavior — see the docs/specs/timeline.md references in
-// each comment for what the spec actually promises.
+// blessing of the behavior — each comment states the documented invariant
+// the current behavior diverges from.
 
 const TEST_DATE = '2026-04-22'
 
@@ -25,9 +25,7 @@ function localMsForDate(dateStr: string, hour: number, minute = 0): number {
 }
 
 function createDb(): Database.Database {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
-  return db
+  return createProductionTestDatabase()
 }
 
 function insertSession(
@@ -67,11 +65,10 @@ function insertActivityEvent(db: Database.Database, eventType: string, ts: numbe
 // ---------------------------------------------------------------------------
 // Divergence #2 — cross-browser site attribution.
 //
-// A domain belongs to the browser that actually loaded it (spec:
-// docs/specs/apps.md §3.3 "Domain attribution" and invariant 4; see also
-// timeline.md §3.0 — "every browser's sites must reach the evidence"). When
-// the same domain is genuinely visited from two different browsers in one
-// range, getWebsiteSummariesForRange must return one summary row per browser,
+// A domain belongs to the browser that actually loaded it — every browser's
+// sites must reach the evidence. When the same domain is genuinely visited
+// from two different browsers in one range, getWebsiteSummariesForRange must
+// return one summary row per browser,
 // each carrying only that browser's own time — never merge the two into a
 // single row credited to whichever visit was inserted first.
 // ---------------------------------------------------------------------------
@@ -116,12 +113,12 @@ test('cross-browser site attribution: same domain from two browsers yields two s
 // active time was silently dropped — it produced no provisional block at
 // all, not even a small one, including the sitting being lived in right now.
 //
-// docs/specs/timeline.md §4: "The day so far is one provisional block per
-// continuous sitting … a new provisional block starts when activity
-// resumes." The 15-minute block floor (§3.4) applies at Analyze/finalize,
-// not to the live provisional view — a live sitting is exempt from it.
+// The day so far is one provisional block per continuous sitting, and a new
+// provisional block starts when activity resumes. The 15-minute block floor
+// applies at Analyze/finalize, not to the live provisional view — a live
+// sitting is exempt from it.
 // ---------------------------------------------------------------------------
-test('a fresh sitting under 15 minutes after an earlier real sitting gets its own provisional block (spec §4)', () => {
+test('a fresh sitting under 15 minutes after an earlier real sitting gets its own provisional block', () => {
   const db = createDb()
   const today = localDateString()
   // A 2h sitting, well clear of the 15-minute floor.
@@ -167,13 +164,13 @@ test('a fresh sitting of 15+ minutes after an earlier real sitting DOES get its 
 // whichever kind covered more of the gap won outright, even a lower-priority
 // one.
 //
-// docs/specs/timeline.md §3.1: "When several causes covered parts of one gap,
-// the strongest real-absence signal names it (asleep > locked > paused >
-// passive > idle)" — priority order, not coverage share. Separately,
-// "Untracked — no signal covered at least half the gap" is unaffected by this
-// fix: that rule still runs first, on total coverage.
+// When several causes covered parts of one gap, the strongest real-absence
+// signal should name it (asleep > locked > paused > passive > idle) —
+// priority order, not coverage share. Separately, "Untracked — no signal
+// covered at least half the gap" is unaffected by this fix: that rule still
+// runs first, on total coverage.
 // ---------------------------------------------------------------------------
-test('a gap covered 60% idle and 40% asleep classifies as Asleep — priority outranks coverage share (spec §3.1)', () => {
+test('a gap covered 60% idle and 40% asleep classifies as Asleep — priority outranks coverage share', () => {
   const db = createDb()
   insertSession(db, { bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', start: localMs(9, 0), end: localMs(9, 30), windowTitle: 'a.ts - Cursor' })
   insertSession(db, { bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', start: localMs(11, 10), end: localMs(11, 40), windowTitle: 'b.ts - Cursor' })
@@ -201,15 +198,14 @@ test('a gap covered 60% idle and 40% asleep classifies as Asleep — priority ou
 // `newStart = Math.max(block.startTime, Math.min(startMs, block.endTime))`
 // and `newEnd = Math.min(block.endTime, Math.max(endMs, block.startTime))`.
 // Any requested edge outside [block.startTime, block.endTime] is clamped back
-// onto the original boundary instead of throwing — the spec says the time
-// inputs are "trim-only: edges move inward, never outward" but does not say
-// what should happen to an out-of-range request; the current code neither
-// rejects it nor reports it, it just quietly no-ops that edge.
+// onto the original boundary instead of throwing — trimming is meant to be
+// inward-only (edges move inward, never outward), but the current code says
+// nothing about an out-of-range request; it neither rejects it nor reports
+// it, it just quietly no-ops that edge.
 // ---------------------------------------------------------------------------
-// CHARACTERIZATION: current behavior, diverges from docs/specs/timeline.md
-// §3.4 rule 5 (edges "move inward, never outward" — an outward request is
-// silently absorbed rather than surfaced as an error) — will be flipped when
-// fixed (divergence #5c)
+// CHARACTERIZATION: current behavior — an outward trim request is silently
+// absorbed rather than surfaced as an error, diverging from the intended
+// inward-only trim rule; will be flipped when fixed.
 test('trimming both edges outward is a silent no-op, not a rejection', () => {
   const db = createDb()
   insertSession(db, { bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', start: localMs(9, 0), end: localMs(10, 40), windowTitle: 'work.ts - daylens - Cursor' })
@@ -228,8 +224,9 @@ test('trimming both edges outward is a silent no-op, not a rejection', () => {
   db.close()
 })
 
-// CHARACTERIZATION: current behavior, diverges from docs/specs/timeline.md
-// §3.4 rule 5 — will be flipped when fixed (divergence #5c, mixed case)
+// CHARACTERIZATION: current behavior — mixed case: the outward edge is
+// silently clamped while the inward edge still cuts, diverging from the
+// intended inward-only trim rule; will be flipped when fixed.
 test('trimming one edge outward and the other inward: the outward edge silently clamps, only the inward edge actually cuts', () => {
   const db = createDb()
   insertSession(db, { bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', start: localMs(9, 0), end: localMs(10, 40), windowTitle: 'work.ts - daylens - Cursor' })
@@ -273,9 +270,8 @@ test('trimming one edge outward and the other inward: the outward edge silently 
 // foreground overlap in the requested span and (b) an exclusive claim
 // against every other visit sharing that browser's time pool, so a
 // domain's page times can never sum to more than the domain's own
-// reconciled total (spec: timeline.md §3.0 "evidence object", invariant 6
-// "every number on screen comes from the same blocks"; apps.md's
-// reconciliation rule).
+// reconciled total: every number on screen comes from the same underlying
+// blocks.
 // ---------------------------------------------------------------------------
 test('page-level evidence reconciles like domain-level: a background-accrued visit contributes 0 and never appears as a page (divergence #4)', () => {
   const db = createDb()

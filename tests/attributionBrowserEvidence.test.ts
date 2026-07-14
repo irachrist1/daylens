@@ -1,8 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
-import { ensureSearchSchema } from '../src/main/db/migrations.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { runAttributionForRange } from '../src/main/services/attribution.ts'
 import { executeTool } from '../src/main/services/aiTools.ts'
 import type { GetAttributionContextResult } from '../src/main/services/aiTools.ts'
@@ -17,9 +16,7 @@ function localDayBounds(year: number, month: number, day: number): [number, numb
 }
 
 test('active browser page titles feed evidence-backed time answers', async () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
-  ensureSearchSchema(db)
+  const db = createProductionTestDatabase()
 
   const startTime = localMs(2026, 5, 1, 10, 0)
   const endTime = localMs(2026, 5, 1, 10, 45)
@@ -105,8 +102,7 @@ test('active browser page titles feed evidence-backed time answers', async () =>
 })
 
 test('Dia (a real browser with no "browser"-shaped bundle id) is detected and gets domain evidence', async () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
 
   const startTime = localMs(2026, 5, 1, 10, 0)
   const endTime = localMs(2026, 5, 1, 10, 30)
@@ -185,5 +181,42 @@ test('Dia (a real browser with no "browser"-shaped bundle id) is detected and ge
     segments.some((row) => row.domain === 'notion.so'),
     'Dia session should be enriched with browser evidence (domain), not left null',
   )
+  db.close()
+})
+
+test('passive-media idle metadata preserves the full attribution segment', () => {
+  const db = createProductionTestDatabase()
+
+  const startTime = localMs(2026, 5, 1, 20, 0)
+  const endTime = startTime + 10 * 60_000
+  db.prepare(`
+    INSERT INTO app_sessions (
+      bundle_id, app_name, start_time, end_time, duration_sec, category,
+      is_focused, window_title, raw_app_name, canonical_app_id,
+      app_instance_id, capture_source, capture_version
+    ) VALUES ('company.thebrowser.dia', 'Dia', ?, ?, 600, 'browsing',
+      0, NULL, 'Dia', 'dia', 'company.thebrowser.dia', 'test', 2)
+  `).run(startTime, endTime)
+  db.prepare(`
+    INSERT INTO website_visits (
+      domain, page_title, url, visit_time, visit_time_us, duration_sec,
+      browser_bundle_id, canonical_browser_id, source
+    ) VALUES ('netflix.com', 'Netflix', 'https://netflix.com/watch/81234567',
+      ?, ?, 600, 'company.thebrowser.dia', 'dia', 'active_browser_context')
+  `).run(startTime, BigInt(startTime) * 1000n)
+  db.prepare(`
+    INSERT INTO activity_state_events (event_ts, event_type, source, metadata_json)
+    VALUES (?, 'idle_start', 'tracking', '{"heldForMediaPlayback":true}'),
+           (?, 'idle_end', 'tracking', '{}')
+  `).run(startTime + 2 * 60_000, endTime)
+
+  runAttributionForRange(startTime, endTime, {}, db)
+
+  const total = db.prepare(`
+    SELECT COALESCE(SUM(duration_ms), 0) AS durationMs
+    FROM activity_segments
+    WHERE primary_bundle_id = 'company.thebrowser.dia'
+  `).get() as { durationMs: number }
+  assert.equal(total.durationMs, 10 * 60_000)
   db.close()
 })

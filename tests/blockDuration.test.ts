@@ -4,7 +4,7 @@ import { blockDisplayedSpanSeconds } from '../src/shared/blockDuration.ts'
 
 // Synthesize timestamps at known second offsets within a fixed minute.
 function minuteMs(hour: number, minute: number, second = 0): number {
-  // 2026-05-13 in a fixed UTC offset so the math is deterministic.
+  // A fixed date and UTC offset so the math is deterministic.
   const base = Date.UTC(2026, 4, 13, hour, minute, second)
   return base
 }

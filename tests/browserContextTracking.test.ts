@@ -74,6 +74,47 @@ test('frontmost Safari tab context is persisted as website evidence', () => {
   assert.equal(row.source, 'active_browser_context')
 })
 
+test('active media domains produce only a privacy-safe passive-presence signal', () => {
+  const db = createDb()
+  let current = {
+    url: 'https://www.netflix.com/watch/81234567?trackId=abc',
+    title: 'Netflix',
+  }
+  const tracker = new ActiveBrowserContextTracker(() => current, () => true)
+
+  assert.deepEqual(tracker.sample(db, snapshot()), {
+    isPrivate: false,
+    passivePresence: true,
+  })
+
+  current = {
+    url: 'https://example.com/articles/idle',
+    title: 'An article',
+  }
+  assert.deepEqual(
+    tracker.sample(db, snapshot({ capturedAt: 1_800_000_005_000, windowTitle: 'An article' })),
+    { isPrivate: false, passivePresence: false },
+  )
+  db.close()
+})
+
+test('missing tab access clears a previously active passive-presence signal', () => {
+  const db = createDb()
+  let current: { url: string; title: string | null } | null = {
+    url: 'https://netflix.com/watch/81234567',
+    title: 'Netflix',
+  }
+  const tracker = new ActiveBrowserContextTracker(() => current, () => true)
+
+  assert.equal(tracker.sample(db, snapshot()).passivePresence, true)
+  current = null
+  assert.deepEqual(
+    tracker.sample(db, snapshot({ capturedAt: 1_800_000_005_000 })),
+    { isPrivate: false, passivePresence: false },
+  )
+  db.close()
+})
+
 test('explicit browser-context cutoff beats a later cached last-seen timestamp', () => {
   const db = createDb()
   const tracker = new ActiveBrowserContextTracker(

@@ -1,13 +1,12 @@
-// Adversarial honesty checks (V2 ship plan, W1-D outcome 4). Each block builds
-// the situation most likely to TEMPT the writer into a specific dishonest claim
-// and proves the deterministic guards kill it — as true negatives, with an
-// honest control line that must survive, so the guard is strict without being
-// trigger-happy.
+// Adversarial honesty checks. Each block builds the situation most likely to
+// TEMPT the writer into a specific dishonest claim and proves the
+// deterministic guards kill it — as true negatives, with an honest control
+// line that must survive, so the guard is strict without being trigger-happy.
 //
 // The same guard functions run inside the live benchmark's deterministic
 // pre-check (tests/wrapped-bench/harness.ts) and inside the runtime validator,
 // so a live deck that makes any of these claims fails the paid gate AND never
-// ships to a user. The six claims, from the ship plan:
+// ships to a user. The six claims:
 //   1. attendance         — a calendar event is a schedule, not proof of presence
 //   2. unobserved time    — time away from the screen is unknown, never narrated
 //   3. reading / watching — an open page or player was open, not consumed

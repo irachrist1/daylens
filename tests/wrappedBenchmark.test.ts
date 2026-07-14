@@ -1,10 +1,10 @@
 // tests/wrappedBenchmark.test.ts — the ground truth for whether Wrapped content
-// is good enough to ship (Stage 1.2 + W1-D). Runs against the REAL provider and
-// the REAL database, never mocks. The fixture days (tests/wrapped-bench/
-// fixtures.ts, one list shared with the runner) deliberately span day SHAPES —
-// rich, thin, boring, low-variety, and near-empty — because a wrap that only
-// passes on good days is the failure mode this suite exists to catch
-// ("wrapped yes or no.md").
+// is good enough to ship. Runs against the REAL provider and the REAL
+// database, never mocks. The fixture days (tests/wrapped-bench/fixtures.ts,
+// one list shared with the runner) deliberately span day SHAPES — rich, thin,
+// boring, low-variety, and near-empty — because a wrap that only passes on
+// good days is the failure mode this suite exists to catch (docs/product/product.md,
+// "The honest ceiling").
 //
 // The REQUIRED gate, in one run:
 //   - the complete DAY fixture set, TWICE consecutively (both passes must be
@@ -98,7 +98,7 @@ for (let pass = 1; pass <= DAY_PASSES; pass++) {
   }
 }
 
-// Every period cadence is REQUIRED: the week held the founder's live bar, and
+// Every period cadence is REQUIRED: the week held the required live bar, and
 // month/year previously had no quality fixture at all.
 for (const fixture of PERIOD_FIXTURES) {
   test(`${fixture.period} wrap ${fixture.anchorDate} clears the rubric`, { timeout: 420_000 }, async () => {

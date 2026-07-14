@@ -5,7 +5,7 @@ import { putExternalSignal } from '../src/main/services/externalSignals.ts'
 import { resolveDayEnrichment } from '../src/main/services/enrichmentResolve.ts'
 import type { CalendarSignal, FocusAppSignal, GitActivitySignal } from '../src/shared/types.ts'
 
-// resolveDayEnrichment (Stage 0 Gap 1): stored connector signals → the sanitized,
+// resolveDayEnrichment: stored connector signals → the sanitized,
 // humanized, pre-formatted shape the wrap WRITER sees. Never a raw path/branch,
 // never a clock, null when a connector had nothing.
 
@@ -113,7 +113,7 @@ test('meeting titles with a path or clock time are sanitized before the prompt',
   const titles = enrichment!.meetings!.items.map((i) => i.title).join(' | ')
   assert.ok(!/src\/main/.test(titles), `no path leaks: ${titles}`)
   assert.ok(!/2pm/.test(titles), `no clock leaks: ${titles}`)
-  // A clean personal title (the founder wants full detail) survives.
+  // A clean personal title survives with full detail.
   assert.ok(titles.includes('1:1 with Sarah'))
   db.close()
 })
