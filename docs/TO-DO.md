@@ -6,7 +6,6 @@ This is the one place for documentation, decision, and research work that has no
 
 - [ ] Choose the first-customer wedge for positioning and connector priority. Recorded recommendation: professionals who account for their time to clients (consultants, freelancers, agency ICs) — it matches the paid job in the organizational-sharing draft and the strongest competitors' audiences. Alternatives considered: AI-forward knowledge workers wanting personal memory; keeping the broad "any individual" framing. The V2 foundations are identical under all three, so no implementation waits on this.
 - [ ] Review and accept the wave-0 repair tickets in `docs/tickets/`.
-- [ ] Review the private 2026-07-13 real-day reconstruction, record corrections in its local `review.json`, and confirm it only when Timeline blocks, Apps totals, calendar interpretation, search, memory, and the agent answer match the day. The current draft exposes a large Timeline/Apps disagreement and must not be accepted unchanged merely to create a baseline.
 
 ## Product validation
 
@@ -23,6 +22,7 @@ This is the one place for documentation, decision, and research work that has no
 - [ ] Add repository checks that prevent captured personal data, real activity titles, message or document content, access tokens, provider credentials, and production identifiers from entering fixtures, logs, documentation, or Git history. Complete when the contribution guidance and automated checks use synthetic examples and fail on seeded sensitive values.
 - [ ] Normalize the existing Prettier baseline in a dedicated clean-tree mechanical change. `npm run format:check` now excludes generated output and nested agent worktrees but reports 605 existing files. Complete when those files are formatted without mixing the rewrite into product work and the command is added to CI.
 - [ ] Make `knip` and `depcheck` workspace- and alias-aware, then remove confirmed dead code and dependencies. Complete when both commands distinguish Vite aliases, workspace dependencies, generated Convex exports, and intentional public APIs from real findings and exit successfully.
+- [ ] Fix the unhandled "Database not initialised" rejection a background job raises during desktop-replay startup. Complete when `verify:real-day:desktop` starts without an unhandled rejection and the racing job is gated on database initialization.
 
 ## Specifications to review
 
@@ -82,7 +82,7 @@ Each item states the evidence required and what completes it. Items marked **(de
 
 ## Implementation blocked by later V2 production code
 
-- [ ] Complete [real-day Timeline, Apps, and AI reconciliation](tickets/real-day-timeline-apps-reconciliation.md) after the capture/evidence, Timeline, and Apps specifications are accepted and the first private day is reviewed.
+- [ ] Complete [real-day Timeline, Apps, and AI reconciliation](tickets/real-day-timeline-apps-reconciliation.md) after the capture/evidence, Timeline, and Apps specifications are accepted. The private 2026-07-13 day stays a failing benchmark until then; it is reviewed and accepted only at that ticket's exit, when Timeline, Apps, meetings, and the agent agree.
 - [ ] Complete [canonical deletion ownership](tickets/canonical-deletion-ownership.md) after the organized-fact model is accepted.
 - [ ] Complete the [encrypted sync terminal foundation](tickets/encrypted-sync-terminal-foundation.md) after the desktop fact model and browser-encryption decision.
 - [ ] Complete the [screen-context terminal foundation](tickets/screen-context-terminal-foundation.md) after the experiment specification and extraction runtime are accepted.
