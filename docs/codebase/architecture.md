@@ -30,7 +30,7 @@ macOS / Windows / Linux signals      consented external signals
 
 Platform capture enters through services under `src/main/services`. macOS and Windows have different adapters and fallbacks. Browser evidence is read separately and reconciled with foreground-browser time before it contributes to user-facing totals.
 
-`src/main/services/database.ts` opens the local `better-sqlite3` database. The schema and forward-only migrations live under `src/main/db`; most existing reads and writes remain in the broad `src/main/db/queries.ts` module while narrower repositories are introduced incrementally.
+`src/main/services/database.ts` opens the local `better-sqlite3` database. The schema and forward-only migrations live under `src/main/db`; most existing reads and writes remain in the broad `src/main/db/queries.ts` module while narrower repositories are introduced incrementally. Focus events are the first migrated slice: the typed contract in `src/main/core/evidence/focusEvent.ts` validates helper events through one capture gate, and `src/main/db/focusEventRepository.ts` owns their reads and writes.
 
 Activity interpretation currently spans `src/main/core`, `src/main/services/workBlocks.ts`, correction services, and query helpers. The codebase is already moving toward explicit evidence and projection boundaries, but the migration is incomplete. Do not assume a folder name means all policy has moved there.
 

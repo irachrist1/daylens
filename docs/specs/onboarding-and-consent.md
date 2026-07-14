@@ -1,6 +1,6 @@
 # Onboarding and consent
 
-**Status:** Ready for review.
+**Status:** Accepted.
 
 This specification defines the first run: how a new person consents to capture, grants the operating-system permissions Daylens needs, sees proof that capture works on their own machine, and sets their first privacy boundaries.
 

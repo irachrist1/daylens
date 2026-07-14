@@ -24,6 +24,8 @@ This changelog explains released and upcoming improvements in language meant for
 - Background AI work has a daily limit to prevent runaway provider costs.
 - Automatic day analysis runs at controlled lifecycle points and falls back to deterministic behavior when a provider is unavailable.
 - AI labels prefer specific evidence and avoid exposing raw filenames or internal-looking artifact names as activity titles.
+- The assistant can only read files in visible, non-private folders of your home directory. Hidden folders, credentials such as SSH keys, system data, and anything outside your home directory are refused before any content is read, even when the assistant is asked directly.
+- The assistant's read-only git access can no longer be steered into reading unrelated files or changing branches, and connected MCP servers no longer inherit the application's environment, so provider keys and tokens stay out of their reach.
 
 ### More reliable macOS updates
 

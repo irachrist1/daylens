@@ -5,7 +5,6 @@ This is the one place for documentation, decision, and research work that has no
 ## Decisions waiting on me
 
 - [ ] Choose the first-customer wedge for positioning and connector priority. Recorded recommendation: professionals who account for their time to clients (consultants, freelancers, agency ICs) — it matches the paid job in the organizational-sharing draft and the strongest competitors' audiences. Alternatives considered: AI-forward knowledge workers wanting personal memory; keeping the broad "any individual" framing. The V2 foundations are identical under all three, so no implementation waits on this.
-- [ ] Review and accept the wave-0 repair tickets in `docs/tickets/`.
 
 ## Product validation
 
@@ -26,14 +25,7 @@ This is the one place for documentation, decision, and research work that has no
 
 ## Specifications to review
 
-Review in wave order — the [implementation waves](product/v2.md#implementation-waves) define the dependency reasoning. Acceptance of a later wave never unblocks work in an earlier one.
-
-Wave 1:
-
-- [ ] Review and accept the [Capture and evidence specification](specs/capture-and-evidence.md).
-- [ ] Review and accept the [Timeline specification](specs/timeline.md).
-- [ ] Review and accept the [Apps specification](specs/apps.md).
-- [ ] Review and accept the [Onboarding and consent specification](specs/onboarding-and-consent.md).
+Review in wave order — the [implementation waves](product/v2.md#implementation-waves) define the dependency reasoning. Acceptance of a later wave never unblocks work in an earlier one. The four Wave 1 specifications are accepted; implementation issues derive from them next.
 
 Wave 2:
 

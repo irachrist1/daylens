@@ -1,6 +1,6 @@
 # Apps
 
-**Status:** Ready for review.
+**Status:** Accepted.
 
 This specification defines Apps as an explanation of what happened inside each application and how that activity connected to pages, files, meetings, projects, clients, and Timeline blocks.
 

@@ -1,6 +1,6 @@
 # Capture and evidence
 
-**Status:** Ready for review.
+**Status:** Accepted.
 
 This specification defines how Daylens observes computer activity, protects private activity, stores evidence, and exposes one factual foundation to Timeline, Apps, search, memory, the AI agent, MCP, and sync.
 

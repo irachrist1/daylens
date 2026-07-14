@@ -1,6 +1,6 @@
 # Timeline
 
-**Status:** Ready for review.
+**Status:** Accepted.
 
 This specification defines the first V2 Timeline: a calendar-like account of what actually happened during one day.
 
