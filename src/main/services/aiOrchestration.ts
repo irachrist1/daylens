@@ -476,7 +476,7 @@ export async function resolveProviderConfigsForJob(
   return configs
 }
 
-// Briefs & wraps no-credits gate (briefs-wraps.md §7): the wrap surfaces ask
+// Briefs & wraps no-credits gate: the wrap surfaces ask
 // whether a provider is resolvable for the wrapped job BEFORE rendering, so they
 // can show one "connect a provider in Settings" message instead of any content.
 // This never makes a network call — it only checks that a key/CLI exists for the

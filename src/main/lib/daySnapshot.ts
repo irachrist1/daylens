@@ -1,5 +1,5 @@
 // Frozen daily snapshots — the trustworthy spine under weekly/monthly/annual
-// wraps (briefs-wraps.md §6.1, invariant 4). A snapshot freezes one day's
+// wraps. A snapshot freezes one day's
 // numbers from the SAME trusted timeline blocks the Timeline view reads, so a
 // wrap that sums snapshots can never disagree with the day it came from.
 //

@@ -84,7 +84,7 @@ function writeState(state: DailyNotifierState): void {
 }
 
 
-// The no-credits rule (briefs-wraps.md §7, invariant 1/2): a brief or wrap's
+// The no-credits rule: a brief or wrap's
 // every word comes through a real API call. This returns the narrative ONLY when
 // it came from the provider — never the deterministic fallback. When it returns
 // null (no provider, no credits, or the call failed) the notifier does NOT fire:

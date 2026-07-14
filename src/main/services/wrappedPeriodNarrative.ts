@@ -1,6 +1,6 @@
 // Period (week / month / year) Wrapped — service layer. Builds the facts by
 // SUMMING frozen daily snapshots (so the stat card and narrative agree), then
-// overlays the AI deck narrative. briefs-wraps.md §6, invariant 4.
+// overlays the AI deck narrative.
 //
 // Persistence (DEV-118 / wrapped.md §3.3): a generated period wrap is stored
 // keyed by cadence + period start. A CLOSED period never regenerates without an

@@ -9,7 +9,7 @@ import { ghostButton, pickPalette, primaryButton, WrapGate } from './wrap/wrapKi
 
 // ─── Weekly / Monthly / Annual Wrapped ──────────────────────────────────────────
 // The wider lens on the same deck engine as the day wrap. Facts come from
-// frozen daily snapshots (briefs-wraps.md §6.1) so the headline number and the
+// frozen daily snapshots so the headline number and the
 // narrative can never disagree; `planPeriodWrapSlides` turns them into 20+
 // slides for a real week, the AI writes the prose, WrapDeck plays it. With no
 // provider connected we show one Settings message and nothing else (§7).

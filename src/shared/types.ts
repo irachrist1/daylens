@@ -1496,7 +1496,7 @@ export interface WrappedPeriodNarrative {
   generatedAt?: number
 }
 
-/** The no-credits rule (briefs-wraps.md §7): with no provider connected, no brief
+/** The no-credits rule: with no provider connected, no brief
  *  or wrap is generated — the surface shows one message pointing to Settings and
  *  nothing else. The renderer reads this before rendering any wrap. */
 export interface WrapProviderState {

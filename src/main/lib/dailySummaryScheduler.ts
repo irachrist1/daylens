@@ -2,7 +2,7 @@
 // has no dependency on settings, the database, or providers — tests drive the
 // gate logic with synthetic state alone.
 //
-// briefs-wraps.md §4: the morning brief is TWO separate notifications with
+// The morning brief is TWO separate notifications with
 // different firing rules. §5: the evening wrap fires as you shut down.
 //
 // The notifier (`src/main/services/dailySummaryNotifier.ts`) gathers settings +

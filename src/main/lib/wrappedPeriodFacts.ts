@@ -1,5 +1,5 @@
 // Pure aggregation of frozen daily snapshots into period facts (week / month /
-// year). The whole point of briefs-wraps.md invariant 4: the wrap's stat card
+// year). The invariant: the wrap's stat card
 // and its narrative both read THIS — a sum of frozen days — so they can't
 // disagree. No re-summarizing, no live recompute.
 

@@ -280,7 +280,7 @@ export function mergePeriodWrapRepair(
 }
 
 // ─── Deterministic baseline ─────────────────────────────────────────────────
-// briefs-wraps.md §7 forbids showing template text as the wrap. This baseline is
+// Template text must never be shown as the wrap. This baseline is
 // the internal last resort when a CONNECTED provider returns unusable output:
 // every slide renders its deterministic fallbackLine.
 

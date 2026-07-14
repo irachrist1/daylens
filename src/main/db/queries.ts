@@ -3413,7 +3413,7 @@ export function getDaysTracked(
   return row?.day_count ?? 0
 }
 
-// ─── Frozen daily snapshots (briefs-wraps.md §6.1) ─────────────────────────────
+// ─── Frozen daily snapshots ─────────────────────────────
 
 interface DaySnapshotRow {
   facts_json: string

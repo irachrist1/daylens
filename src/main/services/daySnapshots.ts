@@ -3,7 +3,7 @@
 // underlying facts change, e.g. the user corrects a label). Today stays live
 // (finalizedAt = 0) and is never persisted, because it isn't done yet.
 //
-// briefs-wraps.md §6.1, invariant 4: weekly/monthly/annual wraps SUM these.
+// Weekly/monthly/annual wraps SUM these.
 
 import type Database from 'better-sqlite3'
 import type { DaySnapshot } from '@shared/types'

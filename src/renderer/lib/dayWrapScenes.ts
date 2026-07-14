@@ -2,7 +2,7 @@
 //
 // ONE reconciled facts object for the whole story. The headline number, the
 // "what you did" list, the day ribbon, and the standout all derive from this,
-// so no two scenes can ever disagree (invariant briefs-wraps.md §8.3, §8.4).
+// so no two scenes can ever disagree.
 // The AI narrative only ever supplies prose on top of these numbers — it never
 // invents or restates one.
 //
