@@ -90,6 +90,8 @@ function startFakeUpstream(port) {
         // its `model_name` list, so it MUST be the alias, not the real upstream model.
         fake.lastChatModel = body.model
         const feature = body?.metadata?.feature
+        // Keep the winner in flight so the race check reaches the active-reservation branch.
+        if (feature === 'race') await new Promise((resolve) => setTimeout(resolve, 25))
         const cost = feature === 'drain' ? 5.0 : feature === 'oversize' ? 6.0 : feature === 'race' ? 5.0 : 0.0123
         return send(
           200,

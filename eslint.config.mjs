@@ -8,6 +8,42 @@ import tseslint from 'typescript-eslint'
 import reactHooks from 'eslint-plugin-react-hooks'
 import prettier from 'eslint-config-prettier'
 
+// AGENTS.md bans meta-commentary in source: no dates, internal codenames, names,
+// or citations of docs/ paths that can be renamed or deleted out from under the
+// comment. This rule makes that a lint failure instead of a convention to remember.
+const DATE_RE = /\b(19|20)\d{2}-\d{2}-\d{2}\b/
+const CODENAME_RE = /\bWave\s?\d+\b|\bStage\s?\d+(\.\d+)?\b|\bW\d-[A-D]\b|\bSession\s?[A-F]\b/
+const PERSON_RE = /\bfounder\b/i
+const DOC_REF_RE = /\bdocs\/(specs|adr|findings|agent-sessions|roadmap|research)\b|\bADR\s?0?\d{3,4}\b/i
+
+const noMetaCommentary = {
+  rules: {
+    'no-meta-commentary': {
+      create(context) {
+        return {
+          Program() {
+            for (const comment of context.sourceCode.getAllComments()) {
+              const text = comment.value
+              if (
+                DATE_RE.test(text) ||
+                CODENAME_RE.test(text) ||
+                PERSON_RE.test(text) ||
+                DOC_REF_RE.test(text)
+              ) {
+                context.report({
+                  loc: comment.loc,
+                  message:
+                    'Meta-commentary: no dates, internal codenames, names, or docs/ path citations in comments (AGENTS.md). State the invariant itself instead.',
+                })
+              }
+            }
+          },
+        }
+      },
+    },
+  },
+}
+
 export default tseslint.config(
   {
     ignores: [
@@ -47,6 +83,10 @@ export default tseslint.config(
       // without hard-failing the floor — not a license to add more.
       '@typescript-eslint/no-explicit-any': 'warn',
     },
+  },
+  {
+    plugins: { local: noMetaCommentary },
+    rules: { 'local/no-meta-commentary': 'error' },
   },
   // Keep last: disables any rules that would fight Prettier.
   prettier,

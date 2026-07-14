@@ -13,9 +13,7 @@
     "tests/**/*.test.{ts,mjs}",
     "tests/**/run.ts",
     "tests/**/show-timeline.ts",
-    "tests/**/show-trace.ts",
-    "tests/**/runner.bench.ts",
-    "tests/routerHardPromptBenchmark.ts"
+    "tests/**/show-trace.ts"
   ],
   "project": ["src/**/*.{ts,tsx}", "packages/**/*.ts", "scripts/**/*.{mjs,js}"],
   "ignore": ["src/main/services/bip39wordlist.ts"],
