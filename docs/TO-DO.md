@@ -5,7 +5,6 @@ This is the one place for documentation, decision, and research work that has no
 ## Decisions waiting on me
 
 - [ ] Choose the first-customer wedge for positioning and connector priority. Recorded recommendation: professionals who account for their time to clients (consultants, freelancers, agency ICs) — it matches the paid job in the organizational-sharing draft and the strongest competitors' audiences. Alternatives considered: AI-forward knowledge workers wanting personal memory; keeping the broad "any individual" framing. The V2 foundations are identical under all three, so no implementation waits on this.
-- [ ] Decide whether proactive brief notifications (morning brief, evening recap, yesterday recap, carryover nudge, weekly brief) are inside the Version 2 release gate or rebuilt immediately after it. Recorded recommendation: after — the rebuilt Wrapped already covers the period-summary job on the shared systems, the agent answers the same questions on demand, and briefs add scheduling and notification delivery rather than new capability, so they should not delay the release. Either way they are rebuilt on the shared evidence, interpretation, and voice systems and never remain a separate pipeline.
 
 ## Product validation
 
@@ -44,6 +43,7 @@ Wave 3:
 Wave 4:
 
 - [ ] Review and accept the [Wrapped specification](specs/wrapped.md).
+- [ ] Review and accept the [Briefs specification](specs/briefs.md).
 
 After Version 2:
 
@@ -89,4 +89,4 @@ Each item states the evidence required and what completes it. Items marked **(de
 - Organizational sharing: the [specification](specs/organization-sharing.md) is drafted and explicitly deferred until the individual products succeed.
 - Web companion implementation: waits for desktop acceptance and the browser-encryption research above.
 - Subscription-backed runtime adapters: excluded until the provider-permission questions above are answered in writing.
-- The frozen current web surfaces and the shipped brief notifications: dispositions recorded in [V2 direction](product/v2.md#existing-features-during-the-transition). Wrapped is not deferred — its rebuild is inside the Version 2 release gate per the [Wrapped specification](specs/wrapped.md).
+- The frozen current web surfaces: disposition recorded in [V2 direction](product/v2.md#existing-features-during-the-transition). Wrapped and the briefs are not deferred — their rebuilds are inside the Version 2 release gate per their specifications.

@@ -62,6 +62,7 @@ Contributors should also read [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](
 | [Apps](docs/specs/apps.md)                                               | Day, week, and month application explanations and canonical totals              |
 | [AI agent](docs/specs/ai-agent.md)                                       | Voice, retrieval tools, sources, model choice, and Daylens actions              |
 | [Wrapped](docs/specs/wrapped.md)                                         | Day, week, month, and year recaps on shared facts, voice, and evidence          |
+| [Briefs](docs/specs/briefs.md)                                           | Morning, evening, and weekly notifications from the same facts and voice        |
 | [Agent runtime and context](docs/specs/agent-runtime-and-context.md)     | Context assembly, file disclosure, scoped tools, and provider runtimes          |
 | [Connectors](docs/specs/connectors.md)                                   | Authorization, read-only synchronization, normalization, and disconnection      |
 | [Privacy, retention, and sync](docs/specs/privacy-retention-and-sync.md) | Local retention, export, model context, encryption, sync, and deletion          |
