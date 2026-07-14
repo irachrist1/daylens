@@ -7,60 +7,23 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { app } from 'electron'
 import { getDb } from './database'
+import { insertFocusEvents } from '../db/focusEventRepository'
 import { getSettings } from './settings'
 import { resolveCanonicalApp } from '../lib/appIdentity'
+import { resolveBrowserApplication } from './browserRegistry'
 import { decideAppCapture, decideSiteCapture, detectIncognitoFromTitle, trackingControlsStateFromSettings, type TrackingControlsState } from '@shared/trackingControls'
 import { isSystemNoiseApp } from '@shared/systemNoise'
-const FOCUS_EVENT_SCHEMA_VERSION = 1
-const FOCUS_EVENT_TYPES = [
-  'app_activated',
-  'app_deactivated',
-  'window_changed',
-  'space_changed',
-  'sleep',
-  'wake',
-  'lock',
-  'unlock',
-  'tab_changed',
-  'tab_sampled',
-] as const
-const FOCUS_EVENT_SOURCES = ['nsworkspace_event', 'apple_events_tab'] as const
-const FOCUS_EVENT_CONFIDENCES = ['observed', 'unknown'] as const
+import {
+  FOCUS_EVENT_SCHEMA_VERSION,
+  isFocusEventConfidence,
+  isFocusEventType,
+  isMacFocusEventSource,
+  sourceAcceptsFocusEventType,
+  type FocusEvent,
+  type MacFocusEventSource,
+} from '../core/evidence/focusEvent'
 
-type FocusEventType = typeof FOCUS_EVENT_TYPES[number]
-type FocusEventSource = typeof FOCUS_EVENT_SOURCES[number]
-type FocusEventConfidence = typeof FOCUS_EVENT_CONFIDENCES[number]
-
-const FOCUS_EVENT_TYPE_SET = new Set<string>(FOCUS_EVENT_TYPES)
-const FOCUS_EVENT_SOURCE_SET = new Set<string>(FOCUS_EVENT_SOURCES)
-const FOCUS_EVENT_CONFIDENCE_SET = new Set<string>(FOCUS_EVENT_CONFIDENCES)
-const WORKSPACE_EVENT_TYPES = new Set<FocusEventType>([
-  'app_activated',
-  'app_deactivated',
-  'window_changed',
-  'space_changed',
-  'sleep',
-  'wake',
-  'lock',
-  'unlock',
-])
-const TAB_EVENT_TYPES = new Set<FocusEventType>(['tab_changed', 'tab_sampled'])
-
-interface HelperEvent {
-  ts_ms: number
-  mono_ns: number
-  event_type: FocusEventType
-  app_bundle_id?: string | null
-  app_name?: string | null
-  pid?: number | null
-  window_title?: string | null
-  url?: string | null
-  page_title?: string | null
-  source: FocusEventSource
-  confidence: FocusEventConfidence
-  platform?: string | null
-  schema_ver?: number | null
-}
+type HelperEvent = FocusEvent<MacFocusEventSource>
 
 let child: ChildProcessWithoutNullStreams | null = null
 let stopping = false
@@ -97,9 +60,9 @@ function normalizeHelperEvent(raw: unknown): HelperEvent | null {
   const schemaVersion = raw.schema_ver ?? FOCUS_EVENT_SCHEMA_VERSION
   if (typeof raw.ts_ms !== 'number' || !Number.isFinite(raw.ts_ms)) return null
   if (typeof raw.mono_ns !== 'number' || !Number.isFinite(raw.mono_ns)) return null
-  if (typeof eventType !== 'string' || !FOCUS_EVENT_TYPE_SET.has(eventType)) return null
-  if (typeof source !== 'string' || !FOCUS_EVENT_SOURCE_SET.has(source)) return null
-  if (typeof confidence !== 'string' || !FOCUS_EVENT_CONFIDENCE_SET.has(confidence)) return null
+  if (!isFocusEventType(eventType)) return null
+  if (!isMacFocusEventSource(source)) return null
+  if (!isFocusEventConfidence(confidence)) return null
   if (schemaVersion !== FOCUS_EVENT_SCHEMA_VERSION) return null
   if (!isNullableString(raw.app_bundle_id)) return null
   if (!isNullableString(raw.app_name)) return null
@@ -109,30 +72,26 @@ function normalizeHelperEvent(raw: unknown): HelperEvent | null {
   if (!isNullableString(raw.page_title)) return null
   if (!isNullableString(raw.platform)) return null
 
-  const typedEventType = eventType as FocusEventType
-  const typedSource = source as FocusEventSource
-  const typedConfidence = confidence as FocusEventConfidence
   const url = raw.url ?? null
   const pageTitle = raw.page_title ?? null
 
-  if (typedSource === 'nsworkspace_event' && !WORKSPACE_EVENT_TYPES.has(typedEventType)) return null
-  if (typedSource === 'apple_events_tab' && !TAB_EVENT_TYPES.has(typedEventType)) return null
-  if (typedConfidence === 'unknown' && (url !== null || pageTitle !== null)) return null
-  if (typedSource === 'apple_events_tab' && typedConfidence === 'observed' && !url) return null
-  if (typedSource === 'nsworkspace_event' && (url !== null || pageTitle !== null)) return null
+  if (!sourceAcceptsFocusEventType(source, eventType)) return null
+  if (confidence === 'unknown' && (url !== null || pageTitle !== null)) return null
+  if (source === 'apple_events_tab' && confidence === 'observed' && !url) return null
+  if (source === 'nsworkspace_event' && (url !== null || pageTitle !== null)) return null
 
   return {
     ts_ms: raw.ts_ms,
     mono_ns: raw.mono_ns,
-    event_type: typedEventType,
+    event_type: eventType,
     app_bundle_id: raw.app_bundle_id ?? null,
     app_name: raw.app_name ?? null,
     pid: raw.pid ?? null,
     window_title: raw.window_title ?? null,
     url,
     page_title: pageTitle,
-    source: typedSource,
-    confidence: typedConfidence,
+    source,
+    confidence,
     platform: raw.platform ?? 'darwin',
     schema_ver: FOCUS_EVENT_SCHEMA_VERSION,
   }
@@ -147,7 +106,12 @@ const FOCUS_FLUSH_MAX_BATCH = 100
 let pendingEvents: HelperEvent[] = []
 let flushTimer: ReturnType<typeof setTimeout> | null = null
 
-function eventParams(ev: HelperEvent): Record<string, unknown> {
+function eventParams(ev: HelperEvent): FocusEvent<MacFocusEventSource> {
+  // A browser's window title/url is page content, and the focus helper cannot
+  // know whether the window is private. Browser page detail only enters the
+  // store through the corroborated visit pipeline; focus events for browsers
+  // keep app identity and timing only.
+  const isBrowser = resolveBrowserApplication({ bundleId: ev.app_bundle_id ?? null, appName: ev.app_name ?? null }) != null
   return {
     ts_ms: ev.ts_ms,
     mono_ns: ev.mono_ns,
@@ -155,13 +119,13 @@ function eventParams(ev: HelperEvent): Record<string, unknown> {
     app_bundle_id: ev.app_bundle_id ?? null,
     app_name: ev.app_name ?? null,
     pid: ev.pid ?? null,
-    window_title: ev.window_title ?? null,
-    url: ev.url ?? null,
-    page_title: ev.page_title ?? null,
+    window_title: isBrowser ? null : ev.window_title ?? null,
+    url: isBrowser ? null : ev.url ?? null,
+    page_title: isBrowser ? null : ev.page_title ?? null,
     source: ev.source,
     confidence: ev.confidence,
-    platform: ev.platform ?? 'darwin',
-    schema_ver: ev.schema_ver ?? 1,
+    platform: ev.platform,
+    schema_ver: ev.schema_ver,
   }
 }
 
@@ -174,16 +138,7 @@ function flushFocusEvents(): void {
   const batch = pendingEvents
   pendingEvents = []
   try {
-    const db = getDb()
-    const stmt = db.prepare(
-      `INSERT INTO focus_events
-         (ts_ms, mono_ns, event_type, app_bundle_id, app_name, pid, window_title, url, page_title, source, confidence, platform, schema_ver)
-       VALUES (@ts_ms, @mono_ns, @event_type, @app_bundle_id, @app_name, @pid, @window_title, @url, @page_title, @source, @confidence, @platform, @schema_ver)`
-    )
-    const insertAll = db.transaction((events: HelperEvent[]) => {
-      for (const ev of events) stmt.run(eventParams(ev))
-    })
-    insertAll(batch)
+    insertFocusEvents(getDb(), batch.map(eventParams))
   } catch (err) {
     console.warn('[focusCapture] batch insert failed:', err)
   }
@@ -198,10 +153,9 @@ export function shouldCaptureFocusEvent(
   ev: Pick<HelperEvent, 'app_bundle_id' | 'app_name' | 'window_title' | 'url'>,
   controls: TrackingControlsState,
 ): boolean {
-  // Private/incognito windows are never tracked, regardless of the Tracking
-  // Controls master switch (founder rule, 2026-07-06). decideApp/SiteCapture
-  // below are passthroughs while the switch is off, so the title check must
-  // run unconditionally here or private tab URLs land in focus_events.
+  // Private/incognito windows are never tracked, regardless of any setting.
+  // The gates below also check this, but the title check runs here first so
+  // a private tab URL never even reaches the event queue.
   if (detectIncognitoFromTitle(ev.window_title)) return false
   if (ev.app_bundle_id || ev.app_name) {
     if (isSystemNoiseApp({ bundleId: ev.app_bundle_id, appName: ev.app_name })) return false

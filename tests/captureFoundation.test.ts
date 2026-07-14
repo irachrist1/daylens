@@ -1,32 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { getAppSummariesForRange, getSessionsForRange } from '../src/main/db/queries.ts'
 import { localDayBounds } from '../src/main/lib/localDate.ts'
 import { getTimelineDayPayload } from '../src/main/services/workBlocks.ts'
 import { isSystemNoiseApp } from '../src/shared/systemNoise.ts'
-
-function ensureFocusEventsTable(db: Database.Database): void {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS focus_events (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      ts_ms INTEGER NOT NULL,
-      mono_ns INTEGER NOT NULL,
-      event_type TEXT NOT NULL,
-      app_bundle_id TEXT,
-      app_name TEXT,
-      pid INTEGER,
-      window_title TEXT,
-      url TEXT,
-      page_title TEXT,
-      source TEXT NOT NULL,
-      confidence TEXT NOT NULL,
-      platform TEXT,
-      schema_ver INTEGER
-    );
-  `)
-}
 
 function localMs(date: string, hour: number, minute = 0): number {
   const [year, month, day] = date.split('-').map(Number)
@@ -64,9 +43,7 @@ function insertAppSession(
 }
 
 test('system surfaces stay out of captured sessions even when legacy rows exist', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
-  ensureFocusEventsTable(db)
+  const db = createProductionTestDatabase()
   const date = '2026-06-18'
   const [from, to] = localDayBounds(date)
 
@@ -104,8 +81,7 @@ test('system surfaces stay out of captured sessions even when legacy rows exist'
 })
 
 test('legacy executable paths collapse into the same canonical app rows as bundle ids', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   const date = '2026-06-18'
   const [from, to] = localDayBounds(date)
 
@@ -131,8 +107,7 @@ test('legacy executable paths collapse into the same canonical app rows as bundl
 })
 
 test('legacy and current Zen identities collapse into one browsing row', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   const date = '2026-06-18'
   const [from, to] = localDayBounds(date)
 
@@ -163,8 +138,7 @@ test('legacy and current Zen identities collapse into one browsing row', () => {
 })
 
 test('browser app summaries stay browsing even when captured with stale focused categories', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   const date = '2026-06-18'
   const [from, to] = localDayBounds(date)
 
@@ -194,8 +168,7 @@ test('shared system-noise policy covers bundle and display-name variants', () =>
 })
 
 test('overlapping capture rows are coalesced before engagement totals are counted', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
+  const db = createProductionTestDatabase()
   const date = '2026-06-18'
   const start = localMs(date, 10)
   const end = localMs(date, 10, 30)
@@ -222,9 +195,7 @@ test('overlapping capture rows are coalesced before engagement totals are counte
 })
 
 test('a timeline block persists one rich evidence object with titles, sites, URLs, and files', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
-  ensureFocusEventsTable(db)
+  const db = createProductionTestDatabase()
   const date = '2026-06-18'
   const start = localMs(date, 10)
   const end = localMs(date, 11)
