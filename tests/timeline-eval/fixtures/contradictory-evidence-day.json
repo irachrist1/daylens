@@ -1,0 +1,115 @@
+{
+  "schemaVersion": 1,
+  "id": "contradictory-evidence-day",
+  "name": "Contradictory calendar and device evidence",
+  "date": "2026-05-27",
+  "timezone": "local",
+  "description": "The calendar says a one-hour Beacon kickoff at 10:00, but the device shows uninterrupted atlas-api coding with no meeting application. Both must stay visible: the calendar event in meetings, the coding in the timeline — and no surface may claim the meeting was attended.",
+  "context": {
+    "calendar": {
+      "events": [
+        {
+          "title": "Beacon kickoff",
+          "startClock": "10:00am",
+          "durationMinutes": 60,
+          "attendeeCount": 5
+        }
+      ]
+    }
+  },
+  "input": {
+    "kind": "normalized-evidence",
+    "sessions": [
+      {
+        "start": "09:30",
+        "end": "11:30",
+        "bundleId": "com.microsoft.VSCode",
+        "appName": "Code",
+        "category": "development",
+        "title": "retries.ts — atlas-api"
+      },
+      {
+        "start": "11:30",
+        "end": "12:00",
+        "bundleId": "com.tinyspeck.slackmacgap",
+        "appName": "Slack",
+        "category": "communication",
+        "title": "atlas-api — Slack"
+      }
+    ]
+  },
+  "expected": {
+    "episodes": [
+      {
+        "id": "atlas-api-coding",
+        "start": "09:30",
+        "end": "11:30",
+        "label": "atlas-api",
+        "labelIncludes": [
+          "atlas",
+          "retries"
+        ],
+        "kind": "work"
+      },
+      {
+        "id": "atlas-comms",
+        "start": "11:30",
+        "end": "12:00",
+        "label": "atlas-api — Slack",
+        "labelIncludes": [
+          "atlas",
+          "Slack",
+          "communication"
+        ],
+        "kind": "work"
+      }
+    ],
+    "apps": [
+      {
+        "appName": "Visual Studio Code",
+        "durationMinutes": 120,
+        "durationToleranceMinutes": 6
+      },
+      {
+        "appName": "Slack",
+        "durationMinutes": 30,
+        "durationToleranceMinutes": 6
+      }
+    ],
+    "meetings": [
+      {
+        "title": "Beacon kickoff",
+        "start": "10:00",
+        "durationMinutes": 60,
+        "durationToleranceMinutes": 5
+      }
+    ],
+    "totals": {
+      "meetingsSeconds": 0
+    },
+    "wrap": {
+      "isLeisureDay": false,
+      "workActivityIncludes": "atlas"
+    },
+    "answers": [
+      {
+        "question": "Did I attend the Beacon kickoff?",
+        "requiredFacts": [
+          "calendar shows Beacon kickoff",
+          "no meeting application was active"
+        ],
+        "acceptableInterpretations": [
+          "The calendar had a Beacon kickoff at 10:00, but the device shows coding the whole hour — the meeting may have been skipped or attended from another device."
+        ],
+        "prohibitedClaims": [
+          "you attended the Beacon kickoff",
+          "you were in the meeting"
+        ],
+        "requiredSources": [
+          "calendar",
+          "Timeline"
+        ]
+      }
+    ]
+  }
+}

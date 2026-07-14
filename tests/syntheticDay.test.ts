@@ -5,15 +5,8 @@ import { fileURLToPath } from 'node:url'
 import { isCaptureEventsDayFixture, loadDayFixture } from './support/dayFixture.ts'
 import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { setTestDb, clearTestDb } from './support/database-stub.mjs'
-import { __resetSettings, __setSettings, getSettings } from './support/settings-stub.mjs'
-import { __pollForTest, __setTrackingFsmTestHarness } from '../src/main/services/tracking.ts'
-import {
-  ActiveBrowserContextTracker,
-  __setActiveBrowserContextTrackerForTest,
-} from '../src/main/services/browserContext.ts'
-import { trackingControlsStateFromSettings } from '../src/shared/trackingControls.ts'
-import { shouldCaptureFocusEvent } from '../src/main/services/focusCapture.ts'
-import { insertFocusEvents } from '../src/main/db/focusEventRepository.ts'
+import { __resetSettings } from './support/settings-stub.mjs'
+import { driveCaptureDay } from './support/captureDay.ts'
 import { projectDay } from '../src/main/core/projections/chunk2.ts'
 import { writeTimelineBlockReview } from '../src/main/services/workBlocks.ts'
 import { materializeTimelineDayProjection } from '../src/main/core/query/projections.ts'
@@ -22,7 +15,6 @@ import { addWorkMemoryFact, chatMemoryPromptBlock } from '../src/main/services/w
 import { buildDaylensTools } from '../src/main/agent/daylensTools.ts'
 import { collectExternalSignals, getExternalSignal } from '../src/main/services/externalSignals.ts'
 import { syncNowForQuit } from '../src/main/services/syncUploader.ts'
-import type { FocusEvent } from '../src/main/core/evidence/focusEvent.ts'
 import type { CalendarSignal } from '../src/shared/types.ts'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -43,65 +35,10 @@ function atMs(clock: string): number {
 
 test('synthetic day agrees from source boundaries through every local fact surface', async () => {
   const db = createProductionTestDatabase()
-  const clock = { now: atMs(fixture.input.foregroundSamples[0].at) }
-  let foreground = fixture.input.foregroundSamples[0]
-  let rejectedFocusEvents = 0
-
   setTestDb(db)
-  __setSettings(fixture.input.settings)
-  __setActiveBrowserContextTrackerForTest(
-    new ActiveBrowserContextTracker(
-      () => foreground.tab ?? null,
-      (snapshot) => /chrome/i.test(snapshot.appName),
-    ),
-  )
-  __setTrackingFsmTestHarness({
-    now: () => clock.now,
-    idleSeconds: () => 0,
-    activeWindow: () => ({
-      title: foreground.title,
-      application: foreground.application,
-      path: foreground.path,
-      pid: 42,
-      icon: '',
-    }),
-  })
 
   try {
-    for (let index = 0; index < fixture.input.foregroundSamples.length; index += 1) {
-      const next = fixture.input.foregroundSamples[index]
-      const nextMs = atMs(next.at)
-      while (clock.now + 30_000 < nextMs) {
-        clock.now += 30_000
-        await __pollForTest()
-      }
-      foreground = next
-      clock.now = nextMs
-      await __pollForTest()
-    }
-
-    const controls = trackingControlsStateFromSettings(getSettings())
-    const accepted: FocusEvent[] = []
-    for (const [index, raw] of fixture.input.focusEvents.entries()) {
-      const event: FocusEvent = {
-        ts_ms: atMs(raw.at),
-        mono_ns: index + 1,
-        event_type: raw.eventType,
-        app_bundle_id: raw.appBundleId,
-        app_name: raw.appName,
-        pid: raw.appName ? 100 + index : null,
-        window_title: raw.windowTitle,
-        url: null,
-        page_title: null,
-        source: 'nsworkspace_event',
-        confidence: 'observed',
-        platform: 'darwin',
-        schema_ver: 1,
-      }
-      if (shouldCaptureFocusEvent(event, controls)) accepted.push(event)
-      else rejectedFocusEvents += 1
-    }
-    insertFocusEvents(db, accepted)
+    const { rejectedFocusEvents } = await driveCaptureDay(db, fixture)
 
     const projection = projectDay(db, fixture.date, {
       finalize: true,
@@ -243,8 +180,6 @@ test('synthetic day agrees from source boundaries through every local fact surfa
       'the accepted offline sync boundary must not mutate or upload local facts',
     )
   } finally {
-    __setTrackingFsmTestHarness(null)
-    __setActiveBrowserContextTrackerForTest(null)
     __resetSettings()
     clearTestDb()
     db.close()

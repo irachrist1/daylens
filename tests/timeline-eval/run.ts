@@ -11,8 +11,13 @@ import {
 } from '../support/dayFixture.ts'
 import {
   getTimelineDayPayload,
+  invalidateTimelineDayBlocks,
   userVisibleLabelForBlock,
+  writeTimelineBlockReview,
 } from '../../src/main/services/workBlocks.ts'
+import { getCorrectedAppSummariesForRange } from '../../src/main/services/activityFacts.ts'
+import { getExternalSignal, putExternalSignal } from '../../src/main/services/externalSignals.ts'
+import { searchAll } from '../../src/main/db/queries.ts'
 import { buildFallbackNarrative, computeFactsHash } from '../../src/main/lib/wrappedNarrative.ts'
 import {
   buildDayWrapFacts,
@@ -27,6 +32,8 @@ import { blockActiveSeconds } from '../../src/shared/blockDuration.ts'
 import { isTrustedTimelineBlock } from '../../src/shared/timelineReview.ts'
 import type {
   AppCategory,
+  AppUsageSummary,
+  CalendarSignal,
   DayTimelinePayload,
   WorkContextBlock,
   WorkIntentRole,
@@ -76,6 +83,9 @@ interface FixtureResult {
   wrapGroundingIssues: string[]
   boundaryIssues: string[]
   designIssues: string[]
+  factsIssues: string[]
+  privacyIssues: string[]
+  mutationIssues: string[]
   scores: {
     segmentationPassed: number
     segmentationTotal: number
@@ -85,6 +95,8 @@ interface FixtureResult {
     rolesTotal: number
     wrapsPassed: number
     wrapsTotal: number
+    factsPassed: number
+    factsTotal: number
   }
 }
 
@@ -230,6 +242,237 @@ function loadFixtures(): TimelineFixture[] {
   return loadDayFixtures(FIXTURE_DIR).filter(isNormalizedEvidenceDayFixture)
 }
 
+// The person's edits, replayed through the production review path. After the
+// edits the day is invalidated and re-derived, so automated inference runs
+// again — the review overlay must win over that fresh inference.
+function applyTimelineMutations(
+  db: Database.Database,
+  fixture: TimelineFixture,
+  payload: DayTimelinePayload,
+): string[] {
+  const issues: string[] = []
+  for (const mutation of fixture.mutations ?? []) {
+    if (mutation.kind !== 'correctBlock' && mutation.kind !== 'ignoreBlock') {
+      issues.push(
+        `mutation ${mutation.kind} needs source-boundary capture; use a capture-events fixture`,
+      )
+      continue
+    }
+    const block = payload.blocks.find((candidate) =>
+      containsAny(userVisibleLabelForBlock(candidate), mutation.matchLabelIncludes),
+    )
+    if (!block) {
+      issues.push(
+        `mutation ${mutation.kind}: no block label matches [${mutation.matchLabelIncludes.join(', ')}]`,
+      )
+      continue
+    }
+    if (mutation.kind === 'ignoreBlock') {
+      writeTimelineBlockReview(db, fixture.date, block, { state: 'ignored' })
+    } else {
+      writeTimelineBlockReview(db, fixture.date, block, {
+        state: mutation.state ?? 'corrected',
+        correctedLabel: mutation.correctedLabel,
+        correctedIntentRole: mutation.correctedIntentRole,
+        correctedIntentSubject: mutation.correctedIntentSubject,
+        correctedCategory: mutation.correctedCategory,
+      })
+    }
+  }
+  return issues
+}
+
+function clockToMinutes(clock: string): number {
+  const [hour, minute] = clock.split(':').map(Number)
+  return hour * 60 + minute
+}
+
+// Calendar signals carry human clocks ("10:00am"); expected meetings use HH:MM.
+function calendarClockToMinutes(value: string | null | undefined): number | null {
+  const match = /^(\d{1,2}):(\d{2})\s*(am|pm)?$/i.exec((value ?? '').trim())
+  if (!match) return null
+  let hour = Number(match[1])
+  const minute = Number(match[2])
+  const meridiem = match[3]?.toLowerCase()
+  if (meridiem === 'pm' && hour < 12) hour += 12
+  if (meridiem === 'am' && hour === 12) hour = 0
+  return hour * 60 + minute
+}
+
+function minutesSinceMidnight(fixture: TimelineFixture, ms: number): number {
+  return Math.round((ms - msForClock(fixture.date, '00:00')) / 60_000)
+}
+
+interface FactsResult {
+  issues: string[]
+  passed: number
+  total: number
+}
+
+// Data-driven checks for the richer expected-result model: Apps facts,
+// meetings, search results, and deterministic totals. Each expected item
+// counts once so a fixture failure names the exact fact that broke.
+function evaluateDayFacts(
+  fixture: TimelineFixture,
+  db: Database.Database,
+  payload: DayTimelinePayload,
+  facts: DayWrapFacts,
+  appSummaries: AppUsageSummary[],
+): FactsResult {
+  const issues: string[] = []
+  let passed = 0
+  let total = 0
+
+  for (const expectedApp of fixture.expected.apps ?? []) {
+    total += 1
+    const summary = appSummaries.find(
+      (candidate) => normalizeText(candidate.appName) === normalizeText(expectedApp.appName),
+    )
+    if (!summary) {
+      issues.push(
+        `apps: missing "${expectedApp.appName}" (got ${appSummaries.map((s) => s.appName).join(', ') || 'none'})`,
+      )
+      continue
+    }
+    if (expectedApp.durationMinutes != null) {
+      const tolerance = expectedApp.durationToleranceMinutes ?? 5
+      const actualMinutes = summary.totalSeconds / 60
+      if (Math.abs(actualMinutes - expectedApp.durationMinutes) > tolerance) {
+        issues.push(
+          `apps: "${expectedApp.appName}" ${Math.round(actualMinutes)}m, expected ${expectedApp.durationMinutes}m ±${tolerance}m`,
+        )
+        continue
+      }
+    }
+    passed += 1
+  }
+
+  const calendar = getExternalSignal<CalendarSignal>(db, fixture.date, 'calendar')?.payload
+  const actualMeetings = [
+    ...(calendar?.events ?? []).map((event) => ({
+      source: 'calendar',
+      title: event.title,
+      startMinutes: calendarClockToMinutes(event.startClock),
+      minutes: typeof event.durationMinutes === 'number' ? event.durationMinutes : null,
+    })),
+    ...payload.blocks
+      .filter((block) => block.dominantCategory === 'meetings')
+      .map((block) => ({
+        source: 'timeline',
+        title: userVisibleLabelForBlock(block),
+        startMinutes: minutesSinceMidnight(fixture, block.startTime),
+        minutes: Math.round(blockActiveSeconds(block) / 60),
+      })),
+  ]
+  for (const expectedMeeting of fixture.expected.meetings ?? []) {
+    total += 1
+    const tolerance = expectedMeeting.durationToleranceMinutes ?? 5
+    const match = actualMeetings.find(
+      (meeting) =>
+        containsAny(meeting.title, [expectedMeeting.title]) &&
+        (expectedMeeting.start == null ||
+          (meeting.startMinutes != null &&
+            Math.abs(meeting.startMinutes - clockToMinutes(expectedMeeting.start)) <= 5)) &&
+        (expectedMeeting.durationMinutes == null ||
+          (meeting.minutes != null &&
+            Math.abs(meeting.minutes - expectedMeeting.durationMinutes) <= tolerance)),
+    )
+    if (match) passed += 1
+    else {
+      const got =
+        actualMeetings.map((m) => `${m.source}:"${m.title}"`).join(', ') || 'none'
+      issues.push(`meetings: nothing matches "${expectedMeeting.title}" (got ${got})`)
+    }
+  }
+
+  for (const expectedSearch of fixture.expected.search ?? []) {
+    total += 1
+    const rows = searchAll(db, expectedSearch.query, {
+      startDate: fixture.date,
+      endDate: fixture.date,
+      limit: 50,
+    })
+    const haystack = normalizeText(JSON.stringify(rows))
+    const missing = (expectedSearch.requiredFacts ?? []).filter(
+      (fact) => !haystack.includes(normalizeText(fact)),
+    )
+    const leaked = (expectedSearch.prohibitedFacts ?? []).filter((fact) =>
+      haystack.includes(normalizeText(fact)),
+    )
+    if (missing.length === 0 && leaked.length === 0) passed += 1
+    if (missing.length > 0) {
+      issues.push(`search "${expectedSearch.query}": missing ${missing.join(', ')}`)
+    }
+    if (leaked.length > 0) {
+      issues.push(`search "${expectedSearch.query}": must not return ${leaked.join(', ')}`)
+    }
+  }
+
+  const TOTALS_TOLERANCE_SECONDS = 90
+  for (const [key, expectedSeconds] of Object.entries(fixture.expected.totals ?? {})) {
+    total += 1
+    const actual = (facts as unknown as Record<string, unknown>)[key]
+    if (typeof actual !== 'number') {
+      issues.push(`totals: "${key}" is not a numeric wrap fact`)
+      continue
+    }
+    if (Math.abs(actual - expectedSeconds) > TOTALS_TOLERANCE_SECONDS) {
+      issues.push(`totals: ${key} ${Math.round(actual)}s, expected ${expectedSeconds}s ±${TOTALS_TOLERANCE_SECONDS}s`)
+      continue
+    }
+    passed += 1
+  }
+
+  return { issues, passed, total }
+}
+
+// Privacy rules are absolute: a prohibited term may not reach any product
+// surface the eval can read — organized Timeline blocks, Apps summaries,
+// search, or the wrap. Raw evidence is intentionally not scanned here; an
+// ignored block keeps its capture while disappearing from every surface.
+function evaluateFixturePrivacy(
+  fixture: TimelineFixture,
+  db: Database.Database,
+  payload: DayTimelinePayload,
+  texts: string[],
+  appSummaries: AppUsageSummary[],
+): string[] {
+  const terms = fixture.expected.privacy?.prohibitedTerms ?? []
+  if (terms.length === 0) return []
+  const issues: string[] = []
+  const timelineHaystack = normalizeText(
+    JSON.stringify(
+      payload.blocks.map((block) => [
+        userVisibleLabelForBlock(block),
+        block.label.current,
+        block.topApps.map((app) => app.appName),
+        block.websites.map((site) => [site.domain, site.title]),
+        block.pageRefs.map((page) => page.displayTitle),
+      ]),
+    ),
+  )
+  const surfaces: Array<[string, string]> = [
+    ['Timeline', timelineHaystack],
+    ['Apps', normalizeText(appSummaries.map((summary) => summary.appName).join(' | '))],
+    ['wrap', normalizeText(texts.join(' | '))],
+  ]
+  for (const term of terms) {
+    const normalized = normalizeText(term)
+    for (const [surface, haystack] of surfaces) {
+      if (haystack.includes(normalized)) issues.push(`privacy: "${term}" leaked into ${surface}`)
+    }
+    const rows = searchAll(db, term, {
+      startDate: fixture.date,
+      endDate: fixture.date,
+      limit: 20,
+    })
+    if (rows.length > 0) {
+      issues.push(`privacy: search for "${term}" returns ${rows.length} rows`)
+    }
+  }
+  return issues
+}
+
 function actualBlocksFor(payload: DayTimelinePayload): ActualBlock[] {
   return payload.blocks.map((block, index) => {
     const intent = inferWorkIntent(block)
@@ -238,8 +481,8 @@ function actualBlocksFor(payload: DayTimelinePayload): ActualBlock[] {
       block,
       label: userVisibleLabelForBlock(block),
       kind: effectiveBlockKind(block),
-      role: intent.role,
-      subject: intent.subject,
+      role: block.review?.correctedIntentRole ?? intent.role,
+      subject: block.review?.correctedIntentSubject ?? intent.subject,
       startTime: block.startTime,
       endTime: block.endTime,
       startReasons: block.boundary?.startReasons ?? [],
@@ -701,7 +944,16 @@ function evaluateFixture(fixture: TimelineFixture): FixtureResult {
   const db = createDb()
   try {
     seedFixture(db, fixture)
-    const payload = getTimelineDayPayload(db, fixture.date, null, { materialize: false })
+    if (fixture.context?.calendar) {
+      putExternalSignal(db, fixture.date, 'calendar', fixture.context.calendar)
+    }
+    let payload = getTimelineDayPayload(db, fixture.date, null, { materialize: false })
+    let mutationIssues: string[] = []
+    if ((fixture.mutations ?? []).length > 0) {
+      mutationIssues = applyTimelineMutations(db, fixture, payload)
+      invalidateTimelineDayBlocks(db, fixture.date)
+      payload = getTimelineDayPayload(db, fixture.date, null, { materialize: false })
+    }
     const actualBlocks = actualBlocksFor(payload)
     const episodes = evaluateEpisodes(fixture, actualBlocks)
     const underSplits = findUnderSplits(fixture, actualBlocks)
@@ -711,6 +963,10 @@ function evaluateFixture(fixture: TimelineFixture): FixtureResult {
     const wrapIssues = evaluateWrap(fixture, facts)
     const unsupported = unsupportedWrapClaims(facts, texts, payload)
     const wrapGrounding = checkWrapGrounding(facts, payload)
+    const dayStartMs = msForClock(fixture.date, '00:00')
+    const appSummaries = getCorrectedAppSummariesForRange(db, dayStartMs, dayStartMs + 86_400_000)
+    const factsResult = evaluateDayFacts(fixture, db, payload, facts, appSummaries)
+    const privacyIssues = evaluateFixturePrivacy(fixture, db, payload, texts, appSummaries)
 
     // Every block must explain why it started and stopped — segmentation now
     // records a boundary reason on each edge, so an empty one is a hole in the
@@ -769,6 +1025,9 @@ function evaluateFixture(fixture: TimelineFixture): FixtureResult {
       wrapGroundingIssues: wrapGrounding,
       boundaryIssues,
       designIssues,
+      factsIssues: factsResult.issues,
+      privacyIssues,
+      mutationIssues,
       scores: {
         segmentationPassed,
         segmentationTotal,
@@ -778,6 +1037,8 @@ function evaluateFixture(fixture: TimelineFixture): FixtureResult {
         rolesTotal: roles.length,
         wrapsPassed,
         wrapsTotal,
+        factsPassed: factsResult.passed,
+        factsTotal: factsResult.total,
       },
     }
   } finally {
@@ -806,7 +1067,7 @@ function formatFixture(result: FixtureResult): string {
   if (fixture.description) lines.push(fixture.description)
   lines.push('')
   lines.push(
-    `Score: segmentation ${scores.segmentationPassed}/${scores.segmentationTotal} | labels ${scores.labelsPassed}/${scores.labelsTotal} | intent ${scores.rolesPassed}/${scores.rolesTotal} | wraps ${scores.wrapsPassed}/${scores.wrapsTotal}`,
+    `Score: segmentation ${scores.segmentationPassed}/${scores.segmentationTotal} | labels ${scores.labelsPassed}/${scores.labelsTotal} | intent ${scores.rolesPassed}/${scores.rolesTotal} | wraps ${scores.wrapsPassed}/${scores.wrapsTotal} | facts ${scores.factsPassed}/${scores.factsTotal}`,
   )
   lines.push('')
   lines.push('| Expected episode | Actual primary block | Strict result | Notes |')
@@ -898,6 +1159,15 @@ function formatFixture(result: FixtureResult): string {
   for (const issue of result.designIssues) {
     issueLines.push(`design: ${issue}`)
   }
+  for (const issue of result.factsIssues) {
+    issueLines.push(`facts: ${issue}`)
+  }
+  for (const issue of result.privacyIssues) {
+    issueLines.push(issue)
+  }
+  for (const issue of result.mutationIssues) {
+    issueLines.push(`mutation: ${issue}`)
+  }
   for (const extra of result.extras) {
     issueLines.push(`extra actual block: ${formatActualBlock(extra)}`)
   }
@@ -925,6 +1195,8 @@ function formatReport(results: FixtureResult[]): string {
       rolesTotal: sum.rolesTotal + result.scores.rolesTotal,
       wrapsPassed: sum.wrapsPassed + result.scores.wrapsPassed,
       wrapsTotal: sum.wrapsTotal + result.scores.wrapsTotal,
+      factsPassed: sum.factsPassed + result.scores.factsPassed,
+      factsTotal: sum.factsTotal + result.scores.factsTotal,
     }),
     {
       segmentationPassed: 0,
@@ -935,6 +1207,8 @@ function formatReport(results: FixtureResult[]): string {
       rolesTotal: 0,
       wrapsPassed: 0,
       wrapsTotal: 0,
+      factsPassed: 0,
+      factsTotal: 0,
     },
   )
 
@@ -944,7 +1218,7 @@ function formatReport(results: FixtureResult[]): string {
     'Command: `npm run timeline:eval`',
     '',
     `Fixtures: ${results.length}`,
-    `Overall score: segmentation ${total.segmentationPassed}/${total.segmentationTotal} | labels ${total.labelsPassed}/${total.labelsTotal} | intent ${total.rolesPassed}/${total.rolesTotal} | wraps ${total.wrapsPassed}/${total.wrapsTotal}`,
+    `Overall score: segmentation ${total.segmentationPassed}/${total.segmentationTotal} | labels ${total.labelsPassed}/${total.labelsTotal} | intent ${total.rolesPassed}/${total.rolesTotal} | wraps ${total.wrapsPassed}/${total.wrapsTotal} | facts ${total.factsPassed}/${total.factsTotal}`,
     '',
     'This report compares editable offline fixtures against the current Daylens timeline, intent, and deterministic wrap logic.',
     '',
@@ -995,13 +1269,27 @@ if (designDefects.length > 0) {
   process.exitCode = 1
 }
 
+// Privacy rules and fixture mutations are always enforced: a prohibited term
+// reaching a product surface, or a person's edit that could not be applied,
+// invalidates the run regardless of --strict.
+const privacyDefects = results.flatMap((result) =>
+  [...result.privacyIssues, ...result.mutationIssues].map(
+    (issue) => `${result.fixture.id}: ${issue}`,
+  ),
+)
+if (privacyDefects.length > 0) {
+  console.error(`\nPrivacy/mutation invariant violated:\n- ${privacyDefects.join('\n- ')}`)
+  process.exitCode = 1
+}
+
 if (strict) {
   const failed = results.some(
     (result) =>
       result.scores.segmentationPassed !== result.scores.segmentationTotal ||
       result.scores.labelsPassed !== result.scores.labelsTotal ||
       result.scores.rolesPassed !== result.scores.rolesTotal ||
-      result.scores.wrapsPassed !== result.scores.wrapsTotal,
+      result.scores.wrapsPassed !== result.scores.wrapsTotal ||
+      result.scores.factsPassed !== result.scores.factsTotal,
   )
   if (failed) process.exitCode = 1
 }

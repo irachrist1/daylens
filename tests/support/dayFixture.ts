@@ -4,6 +4,7 @@ import type { FocusEventType } from '../../src/main/core/evidence/focusEvent.ts'
 import type {
   AppCategory,
   CalendarSignal,
+  TimelineBlockReviewState,
   WorkIntentRole,
   WorkKind,
 } from '../../src/shared/types.ts'
@@ -113,6 +114,45 @@ export interface DayFixtureExpected {
   }
 }
 
+export interface CorrectBlockMutation {
+  kind: 'correctBlock'
+  matchLabelIncludes: string[]
+  state?: Extract<TimelineBlockReviewState, 'corrected' | 'approved'>
+  correctedLabel?: string
+  correctedIntentRole?: WorkIntentRole
+  correctedIntentSubject?: string
+  correctedCategory?: AppCategory
+}
+
+export interface IgnoreBlockMutation {
+  kind: 'ignoreBlock'
+  matchLabelIncludes: string[]
+}
+
+export interface ExcludeAndPurgeAppMutation {
+  kind: 'excludeAndPurgeApp'
+  appName?: string
+  bundleId?: string
+}
+
+export interface ExcludeAndPurgeSiteMutation {
+  kind: 'excludeAndPurgeSite'
+  domain: string
+}
+
+export type DayFixtureMutation =
+  | CorrectBlockMutation
+  | IgnoreBlockMutation
+  | ExcludeAndPurgeAppMutation
+  | ExcludeAndPurgeSiteMutation
+
+const MUTATION_KINDS = new Set<DayFixtureMutation['kind']>([
+  'correctBlock',
+  'ignoreBlock',
+  'excludeAndPurgeApp',
+  'excludeAndPurgeSite',
+])
+
 interface DayFixtureBase {
   schemaVersion: typeof DAY_FIXTURE_SCHEMA_VERSION
   id: string
@@ -127,7 +167,7 @@ interface DayFixtureBase {
     connectors?: Record<string, unknown>
     permissions?: Record<string, unknown>
   }
-  mutations?: Array<Record<string, unknown>>
+  mutations?: DayFixtureMutation[]
   expected?: DayFixtureExpected
   review?: {
     state: 'draft' | 'accepted'
@@ -255,6 +295,30 @@ export function normalizeDayFixture(value: unknown, filePath = '<memory>'): DayF
   }
   if (!isRecord(value.input) || typeof value.input.kind !== 'string') {
     throw fixtureError(filePath, 'missing input.kind')
+  }
+  if (value.mutations != null) {
+    if (!Array.isArray(value.mutations)) throw fixtureError(filePath, 'mutations must be an array')
+    for (const mutation of value.mutations) {
+      if (!isRecord(mutation) || !MUTATION_KINDS.has(mutation.kind as DayFixtureMutation['kind'])) {
+        throw fixtureError(filePath, `unsupported mutation ${JSON.stringify(mutation)}`)
+      }
+      if (
+        (mutation.kind === 'correctBlock' || mutation.kind === 'ignoreBlock') &&
+        (!Array.isArray(mutation.matchLabelIncludes) || mutation.matchLabelIncludes.length === 0)
+      ) {
+        throw fixtureError(filePath, `${mutation.kind} mutation requires matchLabelIncludes`)
+      }
+      if (
+        mutation.kind === 'excludeAndPurgeApp' &&
+        typeof mutation.appName !== 'string' &&
+        typeof mutation.bundleId !== 'string'
+      ) {
+        throw fixtureError(filePath, 'excludeAndPurgeApp mutation requires appName or bundleId')
+      }
+      if (mutation.kind === 'excludeAndPurgeSite' && typeof mutation.domain !== 'string') {
+        throw fixtureError(filePath, 'excludeAndPurgeSite mutation requires domain')
+      }
+    }
   }
 
   if (value.input.kind === 'normalized-evidence') {

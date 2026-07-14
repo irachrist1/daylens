@@ -1,0 +1,260 @@
+{
+  "schemaVersion": 1,
+  "id": "excluded-deleted-day",
+  "name": "Excluded and deleted evidence day",
+  "date": "2026-06-17",
+  "timezone": "local",
+  "description": "Excluded app, excluded site, and incognito activity must never be stored. RetroTool and old-forum.example are captured normally, then the person excludes them and purges their history — the app and the site's domain/URL evidence must be gone from every raw table and every product surface. Known gap (tracked separately): a site purge does not remove the browser window title the site left in app_sessions, so the page title is not asserted absent here.",
+  "input": {
+    "kind": "capture-events",
+    "settings": {
+      "trackingControlsEnabled": true,
+      "trackingExcludedApps": [
+        "LedgerPro"
+      ],
+      "trackingExcludedSites": [
+        "journal-private.example"
+      ],
+      "trackingSkipIncognito": true,
+      "workMemoryEnabled": true
+    },
+    "foregroundSamples": [
+      {
+        "at": "09:00",
+        "application": "Code",
+        "path": "/Applications/Visual Studio Code.app",
+        "title": "billing.ts — atlas-api"
+      },
+      {
+        "at": "09:40",
+        "application": "Google Chrome",
+        "path": "/Applications/Google Chrome.app",
+        "title": "Atlas deploy guide",
+        "tab": {
+          "url": "https://docs.example/atlas-deploy",
+          "title": "Atlas deploy guide",
+          "modeKnown": true
+        }
+      },
+      {
+        "at": "10:00",
+        "application": "LedgerPro",
+        "path": "/Applications/LedgerPro.app",
+        "title": "Q2 personal ledger"
+      },
+      {
+        "at": "10:10",
+        "application": "Google Chrome",
+        "path": "/Applications/Google Chrome.app",
+        "title": "Morning journal",
+        "tab": {
+          "url": "https://journal-private.example/entries/today",
+          "title": "Morning journal",
+          "modeKnown": true
+        }
+      },
+      {
+        "at": "10:15",
+        "application": "Google Chrome",
+        "path": "/Applications/Google Chrome.app",
+        "title": "Private browsing",
+        "tab": {
+          "url": "",
+          "title": null,
+          "isPrivate": true,
+          "modeKnown": true
+        }
+      },
+      {
+        "at": "10:20",
+        "application": "Code",
+        "path": "/Applications/Visual Studio Code.app",
+        "title": "billing.ts — atlas-api"
+      },
+      {
+        "at": "11:00",
+        "application": "RetroTool",
+        "path": "/Applications/RetroTool.app",
+        "title": "Sprint retro board — RetroTool"
+      },
+      {
+        "at": "11:45",
+        "application": "Google Chrome",
+        "path": "/Applications/Google Chrome.app",
+        "title": "Legacy forum thread",
+        "tab": {
+          "url": "https://old-forum.example/threads/1042",
+          "title": "Legacy forum thread",
+          "modeKnown": true
+        }
+      },
+      {
+        "at": "12:00",
+        "application": "Code",
+        "path": "/Applications/Visual Studio Code.app",
+        "title": "billing.ts — atlas-api"
+      },
+      {
+        "at": "12:40",
+        "application": "Slack",
+        "path": "/Applications/Slack.app",
+        "title": "atlas-api rollout — Slack"
+      }
+    ],
+    "focusEvents": [
+      {
+        "at": "09:00",
+        "eventType": "app_activated",
+        "appBundleId": "com.microsoft.VSCode",
+        "appName": "Code",
+        "windowTitle": "billing.ts — atlas-api"
+      },
+      {
+        "at": "10:00",
+        "eventType": "app_activated",
+        "appBundleId": "com.ledgerpro.app",
+        "appName": "LedgerPro",
+        "windowTitle": "Q2 personal ledger"
+      },
+      {
+        "at": "10:15",
+        "eventType": "app_activated",
+        "appBundleId": "com.google.Chrome",
+        "appName": "Google Chrome",
+        "windowTitle": "Private browsing (Incognito)"
+      },
+      {
+        "at": "10:20",
+        "eventType": "app_activated",
+        "appBundleId": "com.microsoft.VSCode",
+        "appName": "Code",
+        "windowTitle": "billing.ts — atlas-api"
+      },
+      {
+        "at": "11:00",
+        "eventType": "app_activated",
+        "appBundleId": "com.retrotool.app",
+        "appName": "RetroTool",
+        "windowTitle": "Sprint retro board — RetroTool"
+      },
+      {
+        "at": "12:00",
+        "eventType": "app_activated",
+        "appBundleId": "com.microsoft.VSCode",
+        "appName": "Code",
+        "windowTitle": "billing.ts — atlas-api"
+      },
+      {
+        "at": "12:40",
+        "eventType": "app_activated",
+        "appBundleId": "com.tinyspeck.slackmacgap",
+        "appName": "Slack",
+        "windowTitle": "atlas-api rollout — Slack"
+      }
+    ]
+  },
+  "mutations": [
+    {
+      "kind": "excludeAndPurgeApp",
+      "appName": "RetroTool"
+    },
+    {
+      "kind": "excludeAndPurgeSite",
+      "domain": "old-forum.example"
+    }
+  ],
+  "expected": {
+    "episodes": [
+      {
+        "id": "atlas-billing-morning",
+        "start": "09:00",
+        "end": "10:00",
+        "label": "atlas-api",
+        "labelIncludes": [
+          "atlas",
+          "billing"
+        ],
+        "kind": "work"
+      },
+      {
+        "id": "atlas-billing-midday",
+        "start": "10:20",
+        "end": "11:00",
+        "label": "atlas-api",
+        "labelIncludes": [
+          "atlas",
+          "billing"
+        ],
+        "kind": "work"
+      },
+      {
+        "id": "atlas-billing-afternoon",
+        "start": "12:00",
+        "end": "12:40",
+        "label": "atlas-api",
+        "labelIncludes": [
+          "atlas",
+          "billing"
+        ],
+        "kind": "work"
+      }
+    ],
+    "apps": [
+      {
+        "appName": "Code",
+        "durationMinutes": 120,
+        "durationToleranceMinutes": 10
+      },
+      {
+        "appName": "Google Chrome",
+        "durationMinutes": 35,
+        "durationToleranceMinutes": 10
+      }
+    ],
+    "search": [
+      {
+        "query": "atlas",
+        "requiredFacts": [
+          "atlas"
+        ]
+      }
+    ],
+    "answers": [
+      {
+        "question": "What did I work on this morning?",
+        "requiredFacts": [
+          "atlas-api"
+        ],
+        "prohibitedClaims": [
+          "LedgerPro",
+          "RetroTool",
+          "journal"
+        ],
+        "requiredSources": [
+          "Timeline"
+        ]
+      }
+    ],
+    "privacy": {
+      "prohibitedTerms": [
+        "LedgerPro",
+        "personal ledger",
+        "journal-private",
+        "Morning journal",
+        "Incognito",
+        "RetroTool",
+        "Sprint retro",
+        "old-forum"
+      ],
+      "prohibitedSurfaces": [
+        "sessions",
+        "pending evidence",
+        "canonical evidence",
+        "Timeline",
+        "Apps",
+        "search",
+        "AI context"
+      ]
+    }
+  }
+}
