@@ -1,5 +1,4 @@
-// The corrected-activity read model (v2-ship-plan W1-A, invariant 7: one
-// truth, three views).
+// The corrected-activity read model (invariant 7: one truth, three views).
 //
 // Raw capture (app_sessions, website_visits) is append-only ground truth and
 // is NEVER mutated by a correction. But the Timeline is the user's curated
