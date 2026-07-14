@@ -133,6 +133,7 @@ import { stopProcessMonitor } from './services/processMonitor'
 import { reconcileOnboardingState } from './services/onboarding'
 import { shouldStartTrackingForSettings } from './lib/onboardingState'
 import { assertIsolatedRealDayUserData, isRealDayHarness } from './lib/realDayHarness'
+import { resolvePreloadPath } from './lib/preloadPath'
 import { IPC } from '@shared/types'
 import {
   APP_DISPLAY_NAME,
@@ -723,7 +724,7 @@ function createWindow(): BrowserWindow {
     // so there is no colour mismatch on light-mode systems.
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#0b0e14' : '#ffffff',
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: resolvePreloadPath(__dirname),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
