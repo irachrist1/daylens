@@ -8,3 +8,6 @@
 
 3. **Write like a normal teammate.**
    Never address me or describe my acceptance role as "founder." Write public documentation in a direct, professional voice; when it expresses my intentions, write in the first person. Do not leave placeholders for me to complete, narrate the documentation process, or refer to private conversations and agents in public documents. Put concrete unfinished work in `docs/TO-DO.md`.
+
+4. **Keep the Linear board truthful.**
+   Implementation work is claimed from the Todo column of the Daylens Version 2 project in Linear and follows the delivery loop in that project's description. Before starting, confirm the issue is in Todo — Backlog means an open blocker or an unaccepted specification, and Backlog issues are never worked. Whenever you notice an issue reached Done, promote every issue it was blocking that now has zero open blockers and an accepted specification from Backlog to Todo. If you cannot reach Linear, say so and stop rather than proceeding untracked.
