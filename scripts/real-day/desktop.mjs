@@ -352,11 +352,22 @@ async function main() {
     : [`--remote-debugging-port=${port}`]
 
   fs.mkdirSync(path.dirname(output), { recursive: true, mode: 0o700 })
+  const replayUserData = path.join(
+    path.dirname(userData),
+    'desktop-runs',
+    `run-${Date.now()}-${process.pid}`,
+  )
+  fs.mkdirSync(replayUserData, { recursive: true, mode: 0o700 })
+  fs.copyFileSync(path.join(userData, 'daylens.sqlite'), path.join(replayUserData, 'daylens.sqlite'))
+  const sourceConfig = path.join(userData, 'config.json')
+  if (fs.existsSync(sourceConfig)) {
+    fs.copyFileSync(sourceConfig, path.join(replayUserData, 'config.json'))
+  }
   const child = spawn(executable, appArguments, {
     cwd: process.cwd(),
     env: {
       ...process.env,
-      DAYLENS_DEV_USERDATA: userData,
+      DAYLENS_DEV_USERDATA: replayUserData,
       DAYLENS_REAL_DAY_HARNESS: '1',
       DAYLENS_REAL_DAY_DATE: date,
       DAYLENS_REAL_DAY_ALLOW_MODEL_NETWORK: hasFlag('with-ai') ? '1' : '0',
@@ -399,6 +410,7 @@ async function main() {
     child.kill('SIGTERM')
     await Promise.race([new Promise((resolve) => child.once('exit', resolve)), wait(5_000)])
     if (!child.killed) child.kill('SIGKILL')
+    fs.rmSync(replayUserData, { recursive: true, force: true })
   }
 }
 
