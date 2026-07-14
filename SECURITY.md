@@ -10,10 +10,10 @@ files. We take the security of that data seriously.
 Security fixes are released against the latest published version. Please update
 to the most recent release before reporting an issue.
 
-| Version                     | Supported |
-| --------------------------- | --------- |
-| Latest release (1.0.x)      | Yes       |
-| Older releases              | No        |
+| Version                | Supported |
+| ---------------------- | --------- |
+| Latest release (1.0.x) | Yes       |
+| Older releases         | No        |
 
 ## Reporting a vulnerability
 

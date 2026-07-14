@@ -1,205 +1,147 @@
-# Apps — build spec
+# Apps
 
-## 1. What the Apps view is
+**Status:** Ready for review.
 
-Pick one app and see what you actually did in it. Same intelligence as the Timeline,
-filtered to a single app. The left side is a list of every app you used in the chosen
-period, named and ordered honestly. Click one and the right side shows that app's story:
-how long you were in it, the sites it hosted, the pages you visited, and a short recap.
+This specification defines Apps as an explanation of what happened inside each application and how that activity connected to pages, files, meetings, projects, clients, and Timeline blocks.
 
-It reads from the **same blocks** as the Timeline and the AI. If the Timeline says you
-spent 2 hours in Ghostty, the Apps view says the same.
+Apps is not a leaderboard of software usage and does not judge whether time was productive.
 
-## 2. What's broken now and how it should work
+## Product behavior
 
-- **The bold title is not the app name.** On 7-day, Safari shows as **"Development"** —
-  the category is being used as the title. The user can't tell which app they're looking
-  at; "Development" could be anything. The bold title must always be the real app name:
-  **Safari**.
-- **30-day uses a content title.** Safari shows as **"Divided States of America Part 1
-  (full documentary)"** — a video title pretending to be an app identity. Same bug as
-  7-day, worse. Two different wrong naming schemes across two periods.
-- **Today is basically empty.** No useful detail without clicking Generate, and the
-  Generate button doesn't work. Every other period shows domains and pages.
-- **Domains are attributed to the focused app, not the browser that hosted them.**
-  Netflix and YouTube show up under **Dia** because Dia happened to be in focus. Those
-  domains belong to the browser that actually loaded them.
-- **Pages visited has duplicates.** Netflix appears twice in the same list. Each page
-  should appear once.
-- **"Often used with" shows system noise.** UniFi's panel lists Siri, Finder, and
-  UserNotificationCenter as co-used apps. This section is removed entirely.
-- **Generate summary produces duplicates and usually fails.** The Safari recap reads
-  "Key artifacts include Netflix, Netflix, …". When it does run it repeats itself; most
-  of the time it doesn't run at all.
-- **Category filter pills are unverified.** The pills render. Nobody has confirmed they
-  filter anything.
-- **Leisure dominates a work view.** YouTube and Netflix take over Safari's 119h
-  breakdown for a developer. Work should surface first.
+Apps supports day, week, and month ranges in the first V2 release.
 
-## 3. How apps are displayed
+The overview answers:
 
-### 3.1 The app list (naming)
+- Which applications were involved?
+- How much canonical active time belonged to each one?
+- What was done inside each application?
+- Which projects, clients, meetings, pages, and files were connected to that time?
+- How did the selected period differ from the preceding comparable period?
 
-Each row is one real app. The **bold title is always the app's real name** — Safari,
-Dia, Ghostty, Cursor, Claude — in every period, with no exceptions.
+The same filters and facts used by Timeline and the AI agent apply here.
 
-- **Never** the category. Not "Development", not "Browsing".
-- **Never** a page, video, or document title. Not "Divided States of America Part 1".
-- The category is a **quiet badge**, not the headline. Safari's badge reads *Browsing*;
-  it sits next to or under the name, never replaces it.
-- The subtitle carries the supporting facts: time in that app and a session count —
-  e.g. *Safari · 29h 26m*. Session counts must be sane; thousands of micro-sessions
-  (5,977 for one week) are an artifact of bad capture, not real switches.
+## Overview
 
-The list is ordered by time spent, most-used first, so the apps that actually filled
-your period sit at the top.
+Each application row shows:
 
-### 3.2 Periods (Today / Day / 7d / 30d)
+- canonical application name and local icon
+- total active time
+- direct explanation of the main activity
+- main projects, clients, meetings, pages, or files
+- change from the preceding comparable range when available
+- capture, correction, or missing-context state when it materially affects the result
 
-Four periods: **Today**, a specific **Day**, the **last 7 days**, the **last 30 days**.
+Rows are ordered by active time by default. Search and filters can narrow by application, category, project, client, person, meeting, and work or personal activity.
 
-- **Same app, same name, same category in every period.** Safari is "Safari · Browsing"
-  on Today, on 7d, and on 30d. The naming scheme never changes between periods.
-- **Every period shows real detail with no AI.** Time, domains, and deduped pages are
-  computed straight from your activity — they appear the moment you open the app, on
-  Today exactly like on 7d and 30d. Today is never empty.
-- **Generate only adds the written recap.** The button produces the short summary
-  paragraph (section 4.3) and nothing else. It is optional polish on top of detail that
-  is already there — never the thing that makes the panel non-empty. It works every time
-  and uses the model picked in Settings.
+The overview does not show focus scores, distraction labels, or rankings of personal value.
 
-### 3.3 Domain attribution
+## Application identity
 
-Domains belong to the **browser that actually loaded them**, never to whichever app was
-in focus at the moment.
+- Platform bundle, executable, profile, and normalized identities resolve to one canonical application.
+- Browser profiles retain distinct source identity but roll up to one browser by default.
+- Renamed or rebranded applications preserve historical continuity.
+- Two applications are never merged from display-name similarity alone.
+- A person can correct an application identity or keep two instances separate.
+- Icons come from the installed application or approved local cache; icon lookup never sends activity to a third party.
 
-- If you watched Netflix in Safari, `netflix.com` lives under **Safari** — even if Dia
-  was briefly the focused window. Netflix and YouTube never appear under Dia just because
-  Dia was on top.
-- **Non-browser apps have no "Time by domain" section.** Ghostty, Cursor, and Slack don't
-  host web pages, so they show no domain breakdown at all.
+## Active time
 
-### 3.4 What counts as a browser — discovered, not hardcoded
+Apps consumes canonical corrected intervals.
 
-Browsers are special: they host the URLs and page titles that carry a block's intent. Today
-Daylens decides "is this a browser?" with a hardcoded name regex
-(`looksLikeBrowserApp` in `tracking.ts`) — and **Zen isn't on the list**, so 44 minutes of
-real browsing vanished (`docs/findings.md` §2.2). A name list is a guess that breaks on every
-browser we didn't predict. We stop guessing.
+- One second belongs to no more than one foreground application.
+- Idle, sleep, lock, pause, capture failure, and unobserved gaps contribute no application time.
+- A browser page explains browser time but does not add to it.
+- Meetings running inside an application may explain that interval without becoming additive time.
+- Corrections and permanent deletion change Apps and Timeline together.
+- The range total equals the union of visible corrected application intervals under the selected filters.
 
-A browser is **any app the operating system registers as an `http`/`https` handler** — read
-from LaunchServices or the app's own Info.plist (`CFBundleURLSchemes`; Zen declares `http`
-and `https`, verified). That is the truth macOS already holds, and it catches Zen and the next
-unknown browser with no code change.
+## Browser behavior
 
-Reading a browser's sites is **family-specific**, and there is no single API for all of them
-(`docs/research/prior-art.md` §1):
+A browser is a container application.
 
-- **Chromium and WebKit family** (Chrome, Brave, Edge, Arc, Dia, Safari, …): live tab URL is
-  readable, and their history lives in a Chromium `History` DB.
-- **Firefox family** (Firefox, Waterfox, LibreWolf, **Zen**): exposes nothing live — its sites
-  must be read from `places.sqlite`. Daylens already reads Firefox's `places.sqlite`; Zen uses
-  the same format at `~/Library/Application Support/Zen/Profiles/<profile>/`. The reader just
-  has to be pointed there.
-- A **Daylens browser extension** is the eventual gold standard — exact, live, per-tab,
-  incognito-aware, and identical across every browser.
+The browser detail view groups its owned time by:
 
-This is **one source of truth**, consulted by both the history reader and the foreground
-tagger (today those are two lists that disagree). Detection runs **when an app first appears**,
-so a newly installed browser is categorized correctly on day one — not left in "Other" (the
-"categorize apps correctly on install" gap). A user override still wins over detection (§5).
+- website and page
+- project and client
+- category
+- related Timeline block
+- browser profile when requested
 
-## 4. The detail panel
+Website duration is clipped to foreground browser intervals. Browser history with no foreground overlap may support retrieval but contributes no active time.
 
-When you click an app, the right side shows its story. The header is the **app name** in
-bold with a quiet category badge and the period (e.g. *Safari · Browsing · last 7 days*),
-plus the Generate button. Below that, in order:
+Page and website totals cannot sum to more than the browser’s total for the same range. Unattributed browser time is shown explicitly as browser time without verified page context.
 
-### 4.1 Time by domain (browsers only)
+## Application detail
 
-The sites that app hosted, each with time spent and a visit count. **Work surfaces
-first.** Productive domains — code, docs, work tools — are the main breakdown at the top.
-Streaming and social — YouTube, Netflix, X — are collected in a quieter section below it
-(e.g. *Off to the side*), still honest and still counted, but not crowding out the work.
-A developer scanning Safari sees `github.com` and `colab.google.com` before they see
-28 hours of YouTube.
+An application detail view contains:
 
-Only browsers show this section. Each row has a delete control — see section 4.4.
+- total active time and range comparison
+- day-by-day trend within week or month ranges
+- plain-language account of the main work
+- projects and clients
+- pages, files, documents, meetings, people, and repositories
+- related Timeline blocks
+- corrected and unattributed time
+- representative questions for the AI agent
 
-### 4.2 Pages visited
+The explanation should say “You developed the Daylens Wrapped feature” or “You reviewed ACME’s financial report,” not merely “Cursor was active” or “You used Chrome.”
 
-The specific pages, **deduped — each page appears exactly once.** If you opened a page
-five times, it's one row: its total time and its real visit count, not five duplicate
-rows. Netflix shows up once, not twice. Like domains, work pages surface first and
-leisure sits in the quieter section. Each row has a delete control (section 4.4).
+## Projects and clients
 
-### 4.3 The generated recap
+Projects and clients remain reusable filters and entity links rather than top-level tabs.
 
-A short paragraph the AI writes when you press Generate. It names what you did in that
-app, grounded in the real domains and pages.
+- An application interval may relate to several supporting entities but has one non-additive duration.
+- Project and client totals use attributed interval overlap, not a sum of application totals.
+- An uncertain relationship is shown as suggested and does not silently change totals.
+- Explicit attribution corrections outrank inference everywhere.
 
-- **No duplicates.** Never "Netflix, Netflix". Each artifact is named once.
-- Grounded, calm, specific — the Daylens voice. It narrates the real numbers; it never
-  invents an artifact that isn't in the evidence.
-- Uses the Settings model. Runs reliably, not "most of the time".
+## Range behavior
 
-When an app genuinely has too little signal to describe (a system surface like
-Loginwindow), the panel still shows its time honestly and says so plainly — it does not
-beg for "more context".
+### Day
 
-### 4.4 Deleting a page or domain
+Shows applications and their activity for one local calendar day, matching Timeline exactly.
 
-Each domain and page row can be deleted. Deletion is **permanent and asks for
-confirmation first** — it removes the captured records for that page or domain everywhere
-they appear, and any generated recap built on them is regenerated so nothing stale
-survives. It's for clearing genuine garbage out of your history, so the confirmation
-states plainly that it can't be undone.
+### Week
 
-### 4.5 Removed: "Often used with"
+Shows seven local calendar days ending on the selected date. The comparison range is the preceding seven days.
 
-The "Often used with" section is **gone**. It listed system noise — Siri, Finder,
-UserNotificationCenter — as if they were apps you chose to use, and it added no value.
-Remove it entirely.
+### Month
 
-## 5. Corrections (label overrides)
+Shows one local calendar month. The comparison range is the preceding calendar month and is labeled with its actual length.
 
-The category badge on an app is yours to correct. In Settings you can relabel an app —
-say Dia from *AI tools* to *Browsing* — and that override is the truth from then on.
+Custom ranges are outside the first V2 release.
 
-- **Your override wins.** Once you set an app's label, Daylens uses it in the Apps list,
-  the badge, and every category grouping, and it survives rebuilds and re-analysis.
-- **The override propagates.** A relabel takes effect across the Apps view, the Timeline,
-  and the AI after recompute — the same label everywhere, never one view disagreeing with
-  another.
-- Until you override it, the badge is Daylens's honest read of what the app is. Browsers
-  read *Browsing*, terminals and editors read by what you did in them. It's a quiet badge
-  either way.
+Partial current periods are compared with the equivalent elapsed portion of the preceding period rather than a complete period.
 
-The **category filter pills** at the top filter the list by that corrected category — and
-they must actually filter. Tapping *Development* shows only your development apps; tapping
-*All* shows everything. A pill that renders but does nothing is a bug.
+## Corrections and evidence
 
-## 6. Invariants (rules this view must always obey)
+Apps links to the same correction commands as Timeline. A person can correct application identity, category, project, client, page ownership, or exclude and delete evidence.
 
-1. The bold title of every app row is the app's real name — never a category, never a
-   page, video, or document title.
-2. An app has the same name and the same category badge in every period.
-3. Every period shows real detail (time, domains, deduped pages) with no AI; Generate
-   only adds the written recap, and Today is never empty.
-4. A domain belongs to the browser that loaded it, never to whichever app was in focus.
-5. A browser is detected from the OS (`http`/`https` handler), never a hardcoded name list;
-   a newly installed browser is recognized and categorized on first appearance.
-6. Non-browser apps show no domain breakdown.
-7. Every page in "Pages visited" appears exactly once, with its real total time and
-   visit count.
-8. Work surfaces before leisure in both domains and pages; streaming and social are
-   counted honestly but kept to the side.
-9. System noise — Loginwindow, Siri, Finder, UserNotificationCenter — is never shown as
-   an app you used or a co-used app.
-10. A generated recap never repeats an artifact and never names one that isn't in the
-    evidence.
-11. Deleting a page or domain is permanent, confirmed first, and regenerates any recap
-    built on it.
-12. Your category override always wins, propagates to every view, and survives a rebuild.
-13. The Apps view reads from the same blocks as the Timeline and AI — its totals never
-    disagree with theirs.
+Opening an explanation reveals supporting intervals and evidence. The interface does not expose duplicate raw rows or internal confidence numbers.
+
+## Failure behavior
+
+- Missing page context appears as unattributed browser time.
+- Missing application identity uses a stable unknown identity rather than dropping time.
+- A failed explanation keeps deterministic totals and relationships visible.
+- A failed icon lookup uses a local fallback without affecting identity.
+- A partial period states that it is partial.
+- A corrected or deleted interval invalidates every cached range containing it.
+- An unavailable model does not disable Apps.
+
+## Acceptance criteria
+
+- Day totals reconcile exactly with Timeline under identical filters.
+- Week and month totals equal the union of their corrected daily intervals.
+- Browser pages never create additive time or exceed browser totals.
+- Personal, entertainment, work, meeting, idle, and unattributed cases have representative fixtures.
+- Application identity is stable across profiles, renames, restart, and platform-specific source labels.
+- Explanations name the understood activity when evidence supports it.
+- Corrections and deletion update overview, detail, Timeline, search, and the AI agent.
+- Apps remains fully useful without a model provider.
+- With a representative year stored locally, day and month totals compute within 100 ms and year-scope aggregates within 500 ms at the 95th percentile (`npm run bench:queries` documents the basis), and each range view is interactive within 1 second of navigation.
+- Day, week, and month views are reviewed in the running application on supported desktop platforms.
+
+## Implementation starting point
+
+The first ticket should route the Apps overview and detail totals through the same corrected activity-fact query used by Timeline. It should add reconciliation tests before changing the visible design or generated explanations.

@@ -1,64 +1,113 @@
 # Daylens
 
-A local-first desktop app that turns your laptop activity into a searchable timeline you can ask questions about — or plug into Cursor and Claude.
+> **Remember everything you did.**
 
-This is the Daylens monorepo. The Electron desktop app lives at the repository root, the Next.js web companion and public site live in `apps/web`, and shared contracts live in `packages`.
+Daylens turns everything you do on your computer into a private, organized memory of your work—and gives you an agent that understands that memory.
 
-## The problem
+Daily work is scattered across apps, websites, meetings, clients, and projects. You cannot reliably retrieve information such as how much time you spent on a project, remember what you did at the end of a month, recall which meetings you had during a week, find information you know you saw, or simply explain where your time went.
 
-You read docs, watch videos, and jump between apps all day. None of it stays easy to find later.
+Right now, your own memory is the only thing connecting all of this. You either reconstruct the day yourself, install another narrow app that remembers only your meetings, or explain the same context to an AI before it can be useful. Daylens creates that missing memory automatically.
 
-You need that article from last Friday, or what you worked on Tuesday morning. Browser history and your own memory fall short. Web-based AI starts from zero every session — it wasn't there when you learned it.
+## What Daylens is
 
-You shouldn't lose your own digital past because nothing was keeping track.
+- **Timeline** turns everything Daylens understands about a day into a calendar-like account of what actually happened.
+- **Apps** explains what you did inside each application and how that activity connected to pages, files, meetings, projects, and clients.
+- **AI agent** answers questions using the same evidence and memory as the rest of Daylens. It can also connect to tools such as GitHub, Linear, and Granola, giving it enough context to go beyond answers like “you spent two hours in Chrome” or “you spent two hours in Cursor.”
 
-## What it does
+With Daylens, you can finally get answers to questions such as:
 
-Daylens runs quietly in your menu bar, logs what you actually did, and lets you ask grounded questions:
+- “How much time did I spend on Project X last month?”
+- “What did I work on last week besides meetings?”
+- “Which meetings did I have with Client X in June?”
+- “Remind me which page had the best discount when I was researching that TV upgrade last week.”
+- “Where did my time go this month?”
+- “How much time did I spend on social media this week, and how much of that time was spent listening to podcasts or watching movie clips?”
 
-> *"What did I study about neural networks this week?"*
+Daylens is more than a time tracker. Time is one part of the memory it builds. The larger goal is to make your work understandable and retrievable to both you and the agents working with you.
 
-You get synthesized answers backed by exact times, domains, and page titles — not generic web knowledge.
+Daylens should speak as if it understands what happened. It should say that you developed a feature, read a specific article, or reviewed a report with a client—not lead with the applications and telemetry used to reach that conclusion. Supporting evidence remains available, and uncertainty is stated naturally when the record is incomplete.
 
-```
-09:20–10:15 (55m) Warp Agents: AI Coding Agents in Your Terminal
-pages: Warp Agents | Codex use cases
-```
+## Project status
 
-## Install
+Daylens is a working cross-platform desktop application undergoing an incremental V2 transition. V2 is the biggest update yet. Existing data remains intact while the core product becomes more accurate, useful, and coherent.
 
-**Mac (Apple Silicon) — Homebrew:**
+## Documentation
+
+| Document                                           | Purpose                                                          |
+| -------------------------------------------------- | ---------------------------------------------------------------- |
+| [Product direction](docs/product/product.md)       | The product promise, problem, principles, and boundaries         |
+| [V2 direction](docs/product/v2.md)                 | Accepted V2 scope, sequencing, and technical boundaries          |
+| [Vocabulary](docs/product/vocabulary.md)           | Shared meanings for product and architecture terms               |
+| [Architecture](docs/codebase/architecture.md)      | How the current application works and how data flows             |
+| [Repository structure](docs/codebase/structure.md) | Where the major parts of the codebase live                       |
+| [Development](docs/development.md)                 | How specifications, tickets, implementation, and acceptance work |
+| [Testing](docs/hygiene/testing.md)                 | Normal verification and release confidence                       |
+| [Benchmarks](docs/hygiene/benchmarks.md)           | Evaluation harnesses, cost, and when to run them                 |
+| [Web companion](docs/codebase/web.md)              | What the web application currently implements and what remains   |
+| [Billing operations](docs/operations/billing.md)   | Managed AI billing architecture and deployment runbook           |
+| [Boop lessons](docs/research/boop-agent/README.md) | Agent, product, desktop, and developer-experience reference work |
+| [To-do list](docs/TO-DO.md)                        | Specification reviews, validation, and operational follow-up     |
+
+Contributors should also read [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and [AGENTS.md](AGENTS.md).
+
+### V2 specifications
+
+| Specification                                                            | Purpose                                                                         |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------- |
+| [Capture and evidence](docs/specs/capture-and-evidence.md)               | Canonical capture, browser privacy, evidence, corrections, and migration        |
+| [Onboarding and consent](docs/specs/onboarding-and-consent.md)           | First run, capture consent, platform permissions, and the proof step            |
+| [Screen context](docs/specs/screen-context.md)                           | Opt-in sampled-frame experiment, extraction, deletion, and evaluation           |
+| [Memory and entities](docs/specs/memory-and-entities.md)                 | Search, memory types, entity identity, relationships, and conversational memory |
+| [Timeline](docs/specs/timeline.md)                                       | Calendar-like day reconstruction, meetings, evidence, and corrections           |
+| [Apps](docs/specs/apps.md)                                               | Day, week, and month application explanations and canonical totals              |
+| [AI agent](docs/specs/ai-agent.md)                                       | Voice, retrieval tools, sources, model choice, and Daylens actions              |
+| [Agent runtime and context](docs/specs/agent-runtime-and-context.md)     | Context assembly, file disclosure, scoped tools, and provider runtimes          |
+| [Connectors](docs/specs/connectors.md)                                   | Authorization, read-only synchronization, normalization, and disconnection      |
+| [Privacy, retention, and sync](docs/specs/privacy-retention-and-sync.md) | Local retention, export, model context, encryption, sync, and deletion          |
+| [Billing and entitlements](docs/specs/billing-and-entitlements.md)       | Free local access, trials, managed usage, subscriptions, and billing failures   |
+| [Web companion](docs/specs/web-companion.md)                             | Post-desktop remote recall, encrypted search, and cross-device AI threads       |
+| [Organizational sharing](docs/specs/organization-sharing.md)             | Deferred: reviewed project and client summaries without personal monitoring     |
+
+## Run from source
+
+Install Node.js 20 or newer and the native build tools for your platform, then run:
+
 ```bash
-brew tap irachrist1/daylens && brew install --cask daylens
-```
-
-**Mac / Windows / Linux — download:**
-Get the latest installer from [GitHub Releases](https://github.com/irachrist1/daylens/releases/latest).
-
-**From source (developers):**
-```bash
-git clone https://github.com/irachrist1/daylens.git && cd daylens
-npm install && npm start
-```
-
-Run the web app:
-
-```bash
-cd apps/web
 npm install
-npm run dev
+npm start
 ```
 
-From the repository root, `npm run web:dev`, `npm run web:typecheck`, and `npm run web:build` provide the same common entry points.
+Normal verification:
 
-## How it works
+```bash
+npm run typecheck
+npm test
+npm run contract:check
+```
 
-- **Foreground polling, not screenshots.** Captures your active app and window every few seconds via OS APIs; sub-10-second noise is discarded before it hits SQLite.
-- **Browser history ingestion.** Safely reads Chrome, Edge, Brave, Arc, Dia, Comet, Safari, and Firefox history into the same timeline — no cloud upload. Browser detection uses the OS app registry, so new browsers work without a code change.
-- **Blocks, not raw sessions.** Groups fragmented app switches and tab hops into named work blocks you can scan at a glance.
-- **Resolver-first AI.** Every question resolves deterministically from the database first; the model phrases the answer in Daylens's voice. No agentic tool-loop, no hallucinated numbers.
-- **Verified updates.** macOS ad-hoc updates verify the download's SHA-256 against the published release digest before swapping the app bundle; unverified releases fall back to manual download.
-- **Opt-in MCP server.** Exposes your local timeline to Cursor and Claude Desktop when you toggle it on — off by default.
-- **Zero-cloud by design.** Everything lives in `daylens.sqlite` on your machine; API keys sit in the OS keychain.
+Some AI evaluations call paid providers. Read [Benchmarks](docs/hygiene/benchmarks.md) before running them.
 
-MIT License · Built by [Christian Tonny](https://github.com/irachrist1)
+Run the web companion with:
+
+```bash
+npm run web:dev
+```
+
+Platform prerequisites and packaging notes are in [Installation and releases](docs/operations/install.md).
+
+## Install a release
+
+On Apple Silicon macOS:
+
+```bash
+brew tap irachrist1/daylens
+brew install --cask daylens
+```
+
+Installers for macOS, Windows, and Linux are available from [GitHub Releases](https://github.com/irachrist1/daylens/releases/latest).
+
+## Privacy
+
+Daylens is local-first and metadata-first. Activity remains in the local SQLite database unless you explicitly use a feature that sends selected context to a configured model, enable sync, or choose to share information. Incognito activity, exclusions, pauses, retention, model access, and sharing are product boundaries that must remain visible and testable.
+
+Daylens is released under the MIT License.
