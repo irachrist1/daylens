@@ -11,6 +11,7 @@ import { getLatestAppIdentity, type AppIdentityRecord } from '../core/inference/
 import { resolveCanonicalApp } from '../lib/appIdentity'
 import { getDb } from './database'
 import { getSettings } from './settings'
+import { assertRealDayExternalAccessAllowed } from '../lib/realDayHarness'
 
 const execAsync = promisify(execFile)
 
@@ -647,7 +648,9 @@ function candidateSiteOrigins(domain: string, pageUrl?: string | null): string[]
   if (pageUrl) {
     try {
       const parsed = new URL(pageUrl)
-      origins.add(parsed.origin)
+      if ((parsed.protocol === 'https:' || parsed.protocol === 'http:') && parsed.origin !== 'null') {
+        origins.add(parsed.origin)
+      }
     } catch {
       // Ignore malformed page URLs and fall back to the host.
     }
@@ -661,6 +664,7 @@ function candidateSiteOrigins(domain: string, pageUrl?: string | null): string[]
 }
 
 async function fetchWithTimeout(url: string): Promise<Response> {
+  assertRealDayExternalAccessAllowed('icon')
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), ICON_FETCH_TIMEOUT_MS)
 

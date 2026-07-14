@@ -1,22 +1,24 @@
 // ─── Global error handlers — must be first, before any imports' side effects ──
 process.on('uncaughtException', (err) => {
   console.error('[fatal] uncaughtException:', err)
-  try {
-    const {
-      capture: analyticsCapture,
-      captureException: analyticsCaptureException,
-    } = require('./services/analytics') as typeof import('./services/analytics') // eslint-disable-line @typescript-eslint/no-require-imports
-    analyticsCapture('app_crashed', {
-      process_type: 'main',
-      reason: 'uncaught_exception',
-    })
-    analyticsCaptureException(err, {
-      tags: {
+  if (process.env.DAYLENS_REAL_DAY_HARNESS !== '1') {
+    try {
+      const {
+        capture: analyticsCapture,
+        captureException: analyticsCaptureException,
+      } = require('./services/analytics') as typeof import('./services/analytics') // eslint-disable-line @typescript-eslint/no-require-imports
+      analyticsCapture('app_crashed', {
         process_type: 'main',
         reason: 'uncaught_exception',
-      },
-    })
-  } catch { /* analytics may not be ready */ }
+      })
+      analyticsCaptureException(err, {
+        tags: {
+          process_type: 'main',
+          reason: 'uncaught_exception',
+        },
+      })
+    } catch { /* analytics may not be ready */ }
+  }
   // A crashed main process owns tracking, so staying dead means the user's day
   // silently stops being captured until they notice and reopen. Auto-relaunch
   // instead — but guard against a crash LOOP (relaunch → crash → relaunch): if
@@ -25,7 +27,7 @@ process.on('uncaughtException', (err) => {
   // surface, not respawn.
   try {
     const { app: a, dialog: d } = require('electron') as typeof import('electron') // eslint-disable-line @typescript-eslint/no-require-imports
-    if (a.isPackaged && !recentCrashLoop()) {
+    if (process.env.DAYLENS_REAL_DAY_HARNESS !== '1' && a.isPackaged && !recentCrashLoop()) {
       a.relaunch()
       a.exit(1)
       return
@@ -66,25 +68,27 @@ function recentCrashLoop(): boolean {
 
 process.on('unhandledRejection', (reason) => {
   console.error('[fatal] unhandledRejection:', reason)
-  try {
-    const {
-      capture: analyticsCapture,
-      captureException: analyticsCaptureException,
-    } = require('./services/analytics') as typeof import('./services/analytics') // eslint-disable-line @typescript-eslint/no-require-imports
-    analyticsCapture('app_crashed', {
-      process_type: 'main',
-      reason: 'unhandled_rejection',
-    })
-    analyticsCaptureException(reason, {
-      tags: {
+  if (process.env.DAYLENS_REAL_DAY_HARNESS !== '1') {
+    try {
+      const {
+        capture: analyticsCapture,
+        captureException: analyticsCaptureException,
+      } = require('./services/analytics') as typeof import('./services/analytics') // eslint-disable-line @typescript-eslint/no-require-imports
+      analyticsCapture('app_crashed', {
         process_type: 'main',
         reason: 'unhandled_rejection',
-      },
-    })
-  } catch { /* analytics may not be ready */ }
+      })
+      analyticsCaptureException(reason, {
+        tags: {
+          process_type: 'main',
+          reason: 'unhandled_rejection',
+        },
+      })
+    } catch { /* analytics may not be ready */ }
+  }
 })
 
-import { BrowserWindow, Menu, app, dialog, ipcMain, nativeImage, nativeTheme, powerMonitor, shell } from 'electron'
+import { BrowserWindow, Menu, app, dialog, ipcMain, nativeImage, nativeTheme, powerMonitor, session, shell } from 'electron'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -107,7 +111,7 @@ import { initDb, closeDb, getDb } from './services/database'
 import { startAIUsageRetentionSchedule, stopAIUsageRetentionSchedule } from './services/aiUsageRetention'
 import { runPendingDerivedStateReset } from './core/projections/metadata'
 import { hasApiKey, initSettings, getSettings, setSettings } from './services/settings'
-import { getLinuxTrackingDiagnostics, startTracking, stopTracking, trackingStatus } from './services/tracking'
+import { getCurrentSession, getLinuxTrackingDiagnostics, startTracking, stopTracking, trackingStatus } from './services/tracking'
 import { startFocusCapture, stopFocusCapture } from './services/focusCapture'
 import { startWindowsFocusCapture, stopWindowsFocusCapture } from './services/windowsFocusCapture'
 import { ensureProcessMonitor } from './services/processMonitor'
@@ -128,6 +132,7 @@ import { detectCLITools } from './jobs/aiService'
 import { stopProcessMonitor } from './services/processMonitor'
 import { reconcileOnboardingState } from './services/onboarding'
 import { shouldStartTrackingForSettings } from './lib/onboardingState'
+import { assertIsolatedRealDayUserData, isRealDayHarness } from './lib/realDayHarness'
 import { IPC } from '@shared/types'
 import {
   APP_DISPLAY_NAME,
@@ -139,12 +144,24 @@ import {
 
 const APP_USER_MODEL_ID = 'com.daylens.desktop'
 const SMOKE_TEST = process.env.DAYLENS_SMOKE_TEST === '1'
+const REAL_DAY_HARNESS = isRealDayHarness()
 const SMOKE_REPORT_PATH = process.env.DAYLENS_SMOKE_REPORT_PATH?.trim() || path.join(os.tmpdir(), 'daylens-smoke-report.json')
+const SMOKE_FOREGROUND_TITLE = process.env.DAYLENS_SMOKE_EXPECT_FOREGROUND_TITLE?.trim() || null
+const SMOKE_FULLSCREEN_TITLE = process.env.DAYLENS_SMOKE_EXPECT_FULLSCREEN_TITLE?.trim() || null
 
 function configureUserDataPath(): void {
-  if (process.env.DAYLENS_DEV_USERDATA) {
-    app.setPath('userData', process.env.DAYLENS_DEV_USERDATA)
-    console.log('[app] using DEV userData path', process.env.DAYLENS_DEV_USERDATA)
+  const devUserDataPath = process.env.DAYLENS_DEV_USERDATA?.trim()
+  if (REAL_DAY_HARNESS) {
+    const appDataPath = app.getPath('appData')
+    const liveUserDataPath = chooseUserDataPath(appDataPath, process.platform)
+    const isolatedPath = assertIsolatedRealDayUserData(devUserDataPath, liveUserDataPath)
+    app.setPath('userData', isolatedPath)
+    console.log('[app] using isolated real-day userData path', isolatedPath)
+    return
+  }
+  if (devUserDataPath) {
+    app.setPath('userData', devUserDataPath)
+    console.log('[app] using DEV userData path', devUserDataPath)
     return
   }
   const appDataPath = app.getPath('appData')
@@ -280,6 +297,19 @@ function writeSmokeReport(report: Record<string, unknown>): void {
   fs.writeFileSync(SMOKE_REPORT_PATH, `${JSON.stringify(report, null, 2)}\n`, 'utf8')
 }
 
+function smokeBrowserStatus(): ReturnType<typeof getBrowserStatus> | {
+  skipped: true
+  reason: string
+  discoveredBrowsers: []
+} {
+  if (!SMOKE_TEST) return getBrowserStatus()
+  return {
+    skipped: true,
+    reason: 'offline-packaged-smoke',
+    discoveredBrowsers: [],
+  }
+}
+
 async function waitForRendererLoad(win: BrowserWindow): Promise<void> {
   if (!win.webContents.isLoadingMainFrame()) return
 
@@ -312,12 +342,78 @@ async function waitForRendererLoad(win: BrowserWindow): Promise<void> {
 
 type SmokeValidationTrigger = 'ready-to-show' | 'did-finish-load' | 'watchdog'
 
+interface SmokeCaptureSession {
+  id: number
+  appName: string
+  windowTitle: string | null
+  durationSec: number
+  captureSource: string
+  endedReason: string | null
+}
+
+function readSmokeCaptureSessions(): SmokeCaptureSession[] {
+  if (!SMOKE_FOREGROUND_TITLE || !SMOKE_FULLSCREEN_TITLE) return []
+  return getDb().prepare(`
+    SELECT
+      id,
+      app_name AS appName,
+      window_title AS windowTitle,
+      duration_sec AS durationSec,
+      capture_source AS captureSource,
+      ended_reason AS endedReason
+    FROM app_sessions
+    WHERE window_title IN (?, ?)
+    ORDER BY start_time ASC
+  `).all(SMOKE_FOREGROUND_TITLE, SMOKE_FULLSCREEN_TITLE) as SmokeCaptureSession[]
+}
+
+async function waitForSmokeCapture(): Promise<{
+  required: boolean
+  foregroundTitle: string | null
+  fullscreenTitle: string | null
+  sessions: SmokeCaptureSession[]
+}> {
+  if (!SMOKE_FOREGROUND_TITLE || !SMOKE_FULLSCREEN_TITLE) {
+    await new Promise((resolve) => setTimeout(resolve, 2_500))
+    return {
+      required: false,
+      foregroundTitle: SMOKE_FOREGROUND_TITLE,
+      fullscreenTitle: SMOKE_FULLSCREEN_TITLE,
+      sessions: [],
+    }
+  }
+
+  const deadline = Date.now() + 70_000
+  while (Date.now() < deadline) {
+    const sessions = readSmokeCaptureSessions()
+    const foreground = sessions.find((session) => session.windowTitle === SMOKE_FOREGROUND_TITLE)
+    const fullscreen = sessions.find((session) => session.windowTitle === SMOKE_FULLSCREEN_TITLE)
+    if (foreground && fullscreen) {
+      return {
+        required: true,
+        foregroundTitle: SMOKE_FOREGROUND_TITLE,
+        fullscreenTitle: SMOKE_FULLSCREEN_TITLE,
+        sessions,
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_000))
+  }
+
+  const sessions = readSmokeCaptureSessions()
+  throw new Error(
+    `Timed out waiting for packaged foreground/fullscreen capture. `
+    + `Expected titles ${JSON.stringify([SMOKE_FOREGROUND_TITLE, SMOKE_FULLSCREEN_TITLE])}; `
+    + `captured ${JSON.stringify(sessions)}; tracker ${JSON.stringify(trackingStatus)}; `
+    + `live ${JSON.stringify(getCurrentSession())}.`,
+  )
+}
+
 async function runSmokeValidation(win: BrowserWindow, trigger: SmokeValidationTrigger): Promise<void> {
   try {
     if (trigger === 'watchdog') {
       await waitForRendererLoad(win)
     }
-    await new Promise((resolve) => setTimeout(resolve, 2_500))
+    const captureProbe = await waitForSmokeCapture()
 
     writeSmokeReport({
       ok: true,
@@ -328,11 +424,12 @@ async function runSmokeValidation(win: BrowserWindow, trigger: SmokeValidationTr
       version: app.getVersion(),
       isPackaged: app.isPackaged,
       windowVisible: win.isVisible(),
-      currentSession: null,
+      currentSession: getCurrentSession(),
+      captureProbe,
       trackingStatus: { ...trackingStatus },
       linuxTracking: getLinuxTrackingDiagnostics(),
       linuxDesktop: getLinuxDesktopDiagnostics(),
-      browserStatus: getBrowserStatus(),
+      browserStatus: smokeBrowserStatus(),
       tray: getTrayDiagnostics(),
       updater: getUpdaterState(),
     })
@@ -352,10 +449,17 @@ async function runSmokeValidation(win: BrowserWindow, trigger: SmokeValidationTr
       isPackaged: app.isPackaged,
       error: err instanceof Error ? `${err.name}: ${err.message}` : String(err),
       stack: err instanceof Error ? err.stack ?? null : null,
+      currentSession: getCurrentSession(),
+      captureProbe: {
+        required: Boolean(SMOKE_FOREGROUND_TITLE && SMOKE_FULLSCREEN_TITLE),
+        foregroundTitle: SMOKE_FOREGROUND_TITLE,
+        fullscreenTitle: SMOKE_FULLSCREEN_TITLE,
+        sessions: readSmokeCaptureSessions(),
+      },
       trackingStatus: { ...trackingStatus },
       linuxTracking: getLinuxTrackingDiagnostics(),
       linuxDesktop: getLinuxDesktopDiagnostics(),
-      browserStatus: getBrowserStatus(),
+      browserStatus: smokeBrowserStatus(),
       tray: getTrayDiagnostics(),
       updater: getUpdaterState(),
     })
@@ -385,7 +489,11 @@ function ensureTray(): void {
 
 function startBackgroundServices(): void {
   if (backgroundServicesStarted) return
-  if (!shouldStartTrackingForSettings(getSettings())) return
+  if (REAL_DAY_HARNESS) {
+    backgroundServicesStarted = true
+    return
+  }
+  if (!SMOKE_TEST && !shouldStartTrackingForSettings(getSettings())) return
 
   startTracking()
   if (process.platform === 'darwin') startFocusCapture()
@@ -393,7 +501,7 @@ function startBackgroundServices(): void {
   // Background-process evidence (long-running apps that never come to the
   // foreground) feeds block naming on both Windows and Linux. macOS uses
   // focus events instead, so the monitor is a no-op there.
-  if (process.platform === 'win32' || process.platform === 'linux') ensureProcessMonitor()
+  if (!SMOKE_TEST && (process.platform === 'win32' || process.platform === 'linux')) ensureProcessMonitor()
   if (!SMOKE_TEST) {
     startSync()
     startDailySummaryNotifier(mainWindow)
@@ -405,12 +513,14 @@ function startBackgroundServices(): void {
   }
   backgroundServicesStarted = true
 
-  setTimeout(() => {
-    startBrowserTracking()
-    setImmediate(() => {
-      try { backfillWindowsHistory() } catch (err) { console.warn('[init] win history:', err) }
-    })
-  }, 5_000)
+  if (!SMOKE_TEST) {
+    setTimeout(() => {
+      startBrowserTracking()
+      setImmediate(() => {
+        try { backfillWindowsHistory() } catch (err) { console.warn('[init] win history:', err) }
+      })
+    }, 5_000)
+  }
 
   setTimeout(() => {
     capture(ANALYTICS_EVENT.TRACKING_ENGINE_HEALTH, {
@@ -529,7 +639,7 @@ async function shutdownApp(options?: { awaitFinalSync?: boolean; backupBeforeExi
   stopAIUsageRetentionSchedule()
   unregisterCommandPaletteShortcut()
 
-  if (options?.awaitFinalSync) {
+  if (options?.awaitFinalSync && !REAL_DAY_HARNESS) {
     await Promise.race([
       syncNowForQuit(),
       new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
@@ -540,12 +650,12 @@ async function shutdownApp(options?: { awaitFinalSync?: boolean; backupBeforeExi
 
   // Back up userData if explicitly requested, OR if an update has been downloaded
   // and will run automatically on quit via autoInstallOnAppQuit.
-  if (options?.backupBeforeExit || getUpdateAvailable() !== null) {
+  if (!REAL_DAY_HARNESS && (options?.backupBeforeExit || getUpdateAvailable() !== null)) {
     await backupUserDataForUpdate()
   }
 
   destroyTray()
-  await shutdown()
+  if (!REAL_DAY_HARNESS) await shutdown()
 }
 
 function showFatalStartupError(title: string, err: unknown): void {
@@ -567,16 +677,18 @@ function showFatalStartupError(title: string, err: unknown): void {
     }
     return
   }
-  capture(ANALYTICS_EVENT.APP_CRASHED, {
-    process_type: 'main',
-    reason: 'startup_failure',
-  })
-  captureException(err, {
-    tags: {
+  if (!REAL_DAY_HARNESS) {
+    capture(ANALYTICS_EVENT.APP_CRASHED, {
       process_type: 'main',
       reason: 'startup_failure',
-    },
-  })
+    })
+    captureException(err, {
+      tags: {
+        process_type: 'main',
+        reason: 'startup_failure',
+      },
+    })
+  }
   try {
     dialog.showErrorBox(title, message)
   } catch {
@@ -621,7 +733,7 @@ function createWindow(): BrowserWindow {
 
   let smokeValidationStarted = false
   const maybeRunSmokeValidation = (trigger: SmokeValidationTrigger) => {
-    if (!SMOKE_TEST || (process.platform !== 'linux' && process.platform !== 'win32')) return
+    if (!SMOKE_TEST) return
     if (smokeValidationStarted) return
     smokeValidationStarted = true
     void runSmokeValidation(win, trigger)
@@ -632,7 +744,7 @@ function createWindow(): BrowserWindow {
     maybeRunSmokeValidation('ready-to-show')
   })
   win.webContents.once('did-finish-load', () => maybeRunSmokeValidation('did-finish-load'))
-  if (SMOKE_TEST && (process.platform === 'linux' || process.platform === 'win32')) {
+  if (SMOKE_TEST) {
     setTimeout(() => maybeRunSmokeValidation('watchdog'), 20_000)
   }
 
@@ -662,7 +774,7 @@ function createWindow(): BrowserWindow {
       event.preventDefault()
       try {
         const parsed = new URL(url)
-        if (parsed.protocol === 'https:' || parsed.protocol === 'http:') void shell.openExternal(url)
+        if (!REAL_DAY_HARNESS && (parsed.protocol === 'https:' || parsed.protocol === 'http:')) void shell.openExternal(url)
       } catch { /* ignore malformed URLs */ }
     }
   })
@@ -684,7 +796,7 @@ function createWindow(): BrowserWindow {
   win.webContents.setWindowOpenHandler(({ url }) => {
     try {
       const parsed = new URL(url)
-      if (parsed.protocol === 'https:' || parsed.protocol === 'http:') void shell.openExternal(url)
+      if (!REAL_DAY_HARNESS && (parsed.protocol === 'https:' || parsed.protocol === 'http:')) void shell.openExternal(url)
     } catch { /* ignore */ }
     return { action: 'deny' }
   })
@@ -696,27 +808,29 @@ function createWindow(): BrowserWindow {
     }
 
     console.error('[renderer] process gone:', details.reason, details.exitCode)
-    capture(ANALYTICS_EVENT.RENDERER_PROCESS_GONE, {
-      process_type: 'renderer',
-      reason: details.reason,
-      status: 'error',
-      surface: 'renderer',
-    })
-    capture(ANALYTICS_EVENT.APP_CRASHED, {
-      process_type: 'renderer',
-      reason: 'render_process_gone',
-      status: 'error',
-    })
-    captureException(new Error(`Renderer process exited: ${details.reason}`), {
-      extra: {
-        exitCode: details.exitCode,
+    if (!REAL_DAY_HARNESS) {
+      capture(ANALYTICS_EVENT.RENDERER_PROCESS_GONE, {
+        process_type: 'renderer',
         reason: details.reason,
-      },
-      tags: {
+        status: 'error',
+        surface: 'renderer',
+      })
+      capture(ANALYTICS_EVENT.APP_CRASHED, {
         process_type: 'renderer',
         reason: 'render_process_gone',
-      },
-    })
+        status: 'error',
+      })
+      captureException(new Error(`Renderer process exited: ${details.reason}`), {
+        extra: {
+          exitCode: details.exitCode,
+          reason: details.reason,
+        },
+        tags: {
+          process_type: 'renderer',
+          reason: 'render_process_gone',
+        },
+      })
+    }
     dialog.showErrorBox(
       'Daylens renderer crashed',
       `The app display process exited unexpectedly (${details.reason}). Restarting...`,
@@ -751,7 +865,7 @@ function createWindow(): BrowserWindow {
 ipcMain.on('shell:open-external', (_e, url: string) => {
   try {
     const parsed = new URL(url)
-    if (parsed.protocol === 'https:') {
+    if (!REAL_DAY_HARNESS && parsed.protocol === 'https:') {
       void shell.openExternal(url)
     }
   } catch {
@@ -835,6 +949,7 @@ app.on('before-quit', (event) => {
 // doesn't know that — it must not forward an arbitrary string as an event
 // name to PostHog just because something called ipcRenderer.send.
 ipcMain.on('analytics:capture', (_e, event: string, properties: Record<string, unknown>) => {
+  if (REAL_DAY_HARNESS) return
   if (!isKnownAnalyticsEvent(event)) {
     console.warn('[analytics] ignored unknown event name from renderer:', event)
     return
@@ -844,6 +959,18 @@ ipcMain.on('analytics:capture', (_e, event: string, properties: Record<string, u
 
 app.whenReady()
   .then(async () => {
+    if (REAL_DAY_HARNESS) {
+      session.defaultSession.webRequest.onBeforeRequest(
+        { urls: ['http://*/*', 'https://*/*'] },
+        (details, callback) => {
+          const devRendererAllowed = Boolean(
+            MAIN_WINDOW_VITE_DEV_SERVER_URL
+            && details.url.startsWith(MAIN_WINDOW_VITE_DEV_SERVER_URL),
+          )
+          callback({ cancel: !devRendererAllowed })
+        },
+      )
+    }
     // App identity is set ONCE at module load (APP_USER_MODEL_ID =
     // 'com.daylens.desktop', line ~133) and must stay consistent with the
     // electron-builder appId and the notification bundle id. A previous win32
@@ -851,57 +978,67 @@ app.whenReady()
     // toasts (keyed to the installer shortcut's AUMID) silently failed, and
     // every upgrade risked duplicate login items + re-granted permissions.
     // One identity, all platforms.
-    powerMonitor.on('resume', () => {
-      resetDistractionStateOnResume()
-      triggerDailySummaryChecks()
-    })
+    if (!REAL_DAY_HARNESS) {
+      powerMonitor.on('resume', () => {
+        resetDistractionStateOnResume()
+        triggerDailySummaryChecks()
+      })
+    }
     // Must run before initSettings() — restores electron-store config.json from
     // backup if NSIS wiped userData during the update, before electron-store reads it.
-    await recoverFromUpdateIfNeeded()
+    if (!REAL_DAY_HARNESS) await recoverFromUpdateIfNeeded()
     await initSettings()
-    initNotificationPermissions()
-    void detectCLITools().catch(() => undefined)
+    if (!REAL_DAY_HARNESS && !SMOKE_TEST) {
+      initNotificationPermissions()
+      void detectCLITools().catch(() => undefined)
+    }
     const reconciledSettings = await reconcileOnboardingState()
-    await initAnalytics()
+    if (!REAL_DAY_HARNESS) {
+      if (!SMOKE_TEST) await initAnalytics()
+    }
     installApplicationMenu()
-    if (app.isPackaged) {
+    if (!REAL_DAY_HARNESS && app.isPackaged && !SMOKE_TEST) {
       app.setLoginItemSettings({ openAtLogin: reconciledSettings.launchOnLogin })
       await syncLinuxLaunchOnLogin(reconciledSettings.launchOnLogin)
     }
 
     // Set firstLaunchDate on first run (used for day-7 feedback prompt)
     const s = getSettings()
-    if (!s.firstLaunchDate) {
+    if (!REAL_DAY_HARNESS && !s.firstLaunchDate) {
       await setSettings({ firstLaunchDate: Date.now() })
     }
 
     const launchSettings = getSettings()
     const launchProvider = launchSettings.aiProvider
-    const hasAiProvider = launchProvider === 'claude-cli' || launchProvider === 'chatgpt-cli' || launchProvider === 'gemini-cli' || launchProvider === 'codex-cli'
-      ? true
-      : await hasApiKey(launchProvider)
+    const hasAiProvider = SMOKE_TEST
+      ? false
+      : launchProvider === 'claude-cli' || launchProvider === 'chatgpt-cli' || launchProvider === 'gemini-cli' || launchProvider === 'codex-cli'
+        ? true
+        : await hasApiKey(launchProvider)
 
     // getBillingAccess resolves locally (own key / no API URL) without network.
-    const billingAccess = await getBillingAccess().catch(() => null)
+    const billingAccess = SMOKE_TEST || REAL_DAY_HARNESS ? null : await getBillingAccess().catch(() => null)
     const daysSinceInstall = launchSettings.firstLaunchDate > 0
       ? Math.floor((Date.now() - launchSettings.firstLaunchDate) / 86_400_000)
       : 0
 
-    capture(ANALYTICS_EVENT.APP_LAUNCHED, {
-      version: app.getVersion(),
-      days_since_install: daysSinceInstall,
-      has_completed_onboarding: reconciledSettings.onboardingComplete,
-      subscription_status: billingAccess?.mode ?? 'unavailable',
-      has_ai_provider: hasAiProvider,
-      os_version: os.release(),
-    })
+    if (!REAL_DAY_HARNESS) {
+      capture(ANALYTICS_EVENT.APP_LAUNCHED, {
+        version: app.getVersion(),
+        days_since_install: daysSinceInstall,
+        has_completed_onboarding: reconciledSettings.onboardingComplete,
+        subscription_status: billingAccess?.mode ?? 'unavailable',
+        has_ai_provider: hasAiProvider,
+        os_version: os.release(),
+      })
+    }
 
     initDb()
 
-    // AI-telemetry retention (W1-B): deferred first pass after launch, then
+    // AI-telemetry retention: deferred first pass after launch, then
     // daily. Wired here — not in startBackgroundServices — because the DB
     // needs pruning even when tracking is disabled or paused.
-    if (!SMOKE_TEST) startAIUsageRetentionSchedule()
+    if (!REAL_DAY_HARNESS && !SMOKE_TEST) startAIUsageRetentionSchedule()
 
     // The process monitor (Windows + Linux) is started in startBackgroundServices
     // once tracking is enabled; diagnostics requests reuse the same instance.
@@ -922,13 +1059,15 @@ app.whenReady()
     // queued before the renderer's listener was attached.
     ipcMain.handle('navigation:consume-pending', () => consumePendingNavigationRoute())
     // IPC: dev shortcut fires a real main-process daily-summary notification.
-    ipcMain.handle('dev:fire-test-daily-notification', () => fireTestDailyNotification())
+    ipcMain.handle('dev:fire-test-daily-notification', () => (
+      REAL_DAY_HARNESS ? null : fireTestDailyNotification()
+    ))
 
     mainWindow = createWindow()
     setDailySummaryNotificationWindow(mainWindow)
     setDistractionAlertWindow(mainWindow)
-    ensureTray()
-    initUpdater(mainWindow)
+    if (!REAL_DAY_HARNESS) ensureTray()
+    if (REAL_DAY_HARNESS || !SMOKE_TEST) initUpdater(mainWindow)
 
     // Push OS appearance changes to all renderer windows so the theme updates
     // in real time when the user switches dark/light mode in System Settings.
@@ -942,12 +1081,16 @@ app.whenReady()
         }
       }
     })
-    registerUpdaterShutdown(async () => {
-      isQuitting = true
-      await shutdownApp({ awaitFinalSync: true, backupBeforeExit: true })
-    })
+    if (!REAL_DAY_HARNESS) {
+      registerUpdaterShutdown(async () => {
+        isQuitting = true
+        await shutdownApp({ awaitFinalSync: true, backupBeforeExit: true })
+      })
+    }
 
-    registerCommandPaletteShortcut(() => mainWindow)
+    if (!REAL_DAY_HARNESS) {
+      if (!SMOKE_TEST) registerCommandPaletteShortcut(() => mainWindow)
+    }
 
     startBackgroundServices()
 
@@ -955,36 +1098,39 @@ app.whenReady()
     // first Apps/Timeline click. Its synchronous fallback (`lsregister -dump`)
     // is a ~5s blocking subprocess; pre-warming asynchronously keeps that cost
     // off every interaction path. Fire-and-forget — failures self-heal lazily.
-    void prewarmBrowserRegistry()
+    if (!REAL_DAY_HARNESS) {
+      if (!SMOKE_TEST) void prewarmBrowserRegistry()
+    }
 
     // A reset-triggering derived-state version bump defers its destructive wipe
     // off the startup path (F21); run it now that the window is up. No-op unless
     // a reset is actually pending.
-    setImmediate(() => {
-      try {
-        if (runPendingDerivedStateReset(getDb())) {
-          console.log('[derived-state] performed deferred reset after version change')
+    if (!REAL_DAY_HARNESS) {
+      setImmediate(() => {
+        try {
+          if (runPendingDerivedStateReset(getDb())) {
+            console.log('[derived-state] performed deferred reset after version change')
+          }
+        } catch (err) {
+          console.warn('[derived-state] deferred reset failed:', err)
         }
-      } catch (err) {
-        console.warn('[derived-state] deferred reset failed:', err)
-      }
-    })
+      })
+    }
 
     // Optional integrations spawn subprocesses / open large stores, so start
     // them after the window is up rather than on the pre-paint critical path.
     // Tracked + isQuitting-guarded so a quit/update inside this 3s window can't
     // start services during teardown.
-    deferredIntegrationStartup = setTimeout(() => {
-      deferredIntegrationStartup = null
-      if (isQuitting) return
-      if (getSettings().mcpServerEnabled) {
-        startMcpServer()
-      }
-    }, 3_000)
-
-    if (SMOKE_TEST && process.platform === 'linux') {
-      startBrowserTracking()
+    if (!REAL_DAY_HARNESS) {
+      deferredIntegrationStartup = setTimeout(() => {
+        deferredIntegrationStartup = null
+        if (isQuitting) return
+        if (getSettings().mcpServerEnabled) {
+          startMcpServer()
+        }
+      }, 3_000)
     }
+
   })
   .catch((err) => {
     showFatalStartupError('Daylens failed to start', err)
@@ -992,6 +1138,11 @@ app.whenReady()
   })
 
 app.on('window-all-closed', () => {
+  if (REAL_DAY_HARNESS) {
+    isQuitting = true
+    void shutdownApp({ awaitFinalSync: false }).finally(() => app.quit())
+    return
+  }
   // Keep the background process (and tracking) alive whenever tracking is meant
   // to be running. This closes a Windows-specific silent-stop path: if the tray
   // icon fails to create (hasTray() === false), closing the window used to quit

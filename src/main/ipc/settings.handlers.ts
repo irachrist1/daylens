@@ -18,18 +18,22 @@ import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { getDb } from '../services/database'
 import { recordActivityStateEvent } from '../db/queries'
 import { resetProviderBreaker } from '../services/providerCircuitBreaker'
+import { assertRealDayExternalAccessAllowed, isRealDayHarness } from '../lib/realDayHarness'
 
 export function registerSettingsHandlers(): void {
   ipcMain.handle(IPC.SETTINGS.GET, async () => {
     return getSettingsAsync()
   })
 
-  // Discovered optional enrichment sources (wrapped Stage 0.2): MCP servers
+  // Discovered optional enrichment sources: MCP servers
   // from the Claude Desktop config plus focus tools on this machine. Discovery
   // only — nothing is launched or called from here.
   ipcMain.handle(IPC.SETTINGS.GET_ENRICHMENT_SOURCES, async (): Promise<EnrichmentSourcesState> => {
     const settings = await getSettingsAsync()
     const enabled = settings.enrichmentSources ?? {}
+    if (isRealDayHarness()) {
+      return { mcpServers: [], focusApps: [] }
+    }
     return {
       mcpServers: discoverMcpServers().map((server) => ({
         name: server.name,
@@ -70,7 +74,7 @@ export function registerSettingsHandlers(): void {
       captureTrackingPauseTransition(Boolean(partial.trackingPaused), 'user')
     }
 
-    if ('launchOnLogin' in partial && app.isPackaged) {
+    if (!isRealDayHarness() && 'launchOnLogin' in partial && app.isPackaged) {
       app.setLoginItemSettings({ openAtLogin: Boolean(partial.launchOnLogin) })
       await syncLinuxLaunchOnLogin(Boolean(partial.launchOnLogin))
     }
@@ -83,7 +87,7 @@ export function registerSettingsHandlers(): void {
       invalidateProjectionScope('insights', 'ai_settings_changed')
     }
 
-    // Provider circuit breaker (W1-B): picking a provider in Settings is the
+    // Provider circuit breaker: picking a provider in Settings is the
     // user saying "try this one now" — never make them wait out a cooldown
     // that a background job tripped on a DIFFERENT provider selection, and
     // never make a fresh pick of the SAME provider wait either (they may
@@ -95,13 +99,13 @@ export function registerSettingsHandlers(): void {
       resetProviderBreaker(getDb(), partial.aiChatProvider, 'provider_changed')
     }
 
-    if ('mcpServerEnabled' in partial) {
+    if (!isRealDayHarness() && 'mcpServerEnabled' in partial) {
       if (partial.mcpServerEnabled) {
         startMcpServer()
       } else {
         stopMcpServer()
       }
-    } else if (isMcpServerRunning()) {
+    } else if (!isRealDayHarness() && isMcpServerRunning()) {
       // The MCP subprocess reads the exclusion set from env at spawn time. If a
       // privacy-relevant setting changes while it's running, respawn it so the
       // new exclusions take effect immediately instead of at the next launch —
@@ -128,6 +132,7 @@ export function registerSettingsHandlers(): void {
   })
 
   ipcMain.handle(IPC.SETTINGS.SET_API_KEY, async (_e, key: string, provider?: AIProviderMode) => {
+    assertRealDayExternalAccessAllowed('credential-store')
     const resolvedProvider = provider ?? (await getSettingsAsync()).aiProvider ?? 'anthropic'
     if (key.trim()) {
       await setApiKey(resolvedProvider, key.trim())
@@ -141,6 +146,7 @@ export function registerSettingsHandlers(): void {
   })
 
   ipcMain.handle(IPC.SETTINGS.CLEAR_API_KEY, async (_e, provider?: AIProviderMode) => {
+    assertRealDayExternalAccessAllowed('credential-store')
     const resolvedProvider = provider ?? (await getSettingsAsync()).aiProvider ?? 'anthropic'
     await clearApiKey(resolvedProvider)
     invalidateProjectionScope('insights', 'ai_credentials_changed')

@@ -1,6 +1,7 @@
 import { Notification, app, shell } from 'electron'
 import type { NotificationPermissionState } from '@shared/types'
 import { getSettings, setSettings } from './settings'
+import { isRealDayHarness } from '../lib/realDayHarness'
 
 function systemSettingsBundleId(): string {
   // In packaged builds the bundle ID matches the app's user model ID.
@@ -51,6 +52,7 @@ async function persistNotificationPermissionState(state: NotificationPermissionS
 }
 
 export async function openNotificationSettings(): Promise<void> {
+  if (isRealDayHarness()) return
   if (process.platform !== 'darwin') return
   try {
     await shell.openExternal(MAC_NOTIFICATION_SETTINGS_URL)
@@ -60,6 +62,7 @@ export async function openNotificationSettings(): Promise<void> {
 }
 
 export async function requestNotificationPermission(): Promise<NotificationPermissionState> {
+  if (isRealDayHarness()) return getNotificationPermissionState()
   if (!Notification.isSupported()) {
     await persistNotificationPermissionState('unsupported')
     return 'unsupported'

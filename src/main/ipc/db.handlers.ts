@@ -85,6 +85,7 @@ import type {
   WorkMemorySettingsSummary,
 } from '@shared/types'
 import { FOCUSED_CATEGORIES, ALL_TIME_DAYS } from '@shared/types'
+import { isRealDayHarness } from '../lib/realDayHarness'
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
 
@@ -536,7 +537,7 @@ export function registerDbHandlers(): void {
     return backfillMemoryFromHistory(getDb())
   })
 
-  // Editable work-memory profile (ChatGPT-style) — docs/specs/work-memory.md.
+  // Editable work-memory profile (ChatGPT-style).
   ipcMain.handle(IPC.DB.GET_WORK_MEMORY_PROFILE, () => {
     return getWorkMemoryProfile(getDb())
   })
@@ -677,9 +678,11 @@ export function registerDbHandlers(): void {
       defaultId: 0,
       cancelId: 1,
     }
-    const { response } = window
-      ? await dialog.showMessageBox(window, options)
-      : await dialog.showMessageBox(options)
+    const { response } = isRealDayHarness()
+      ? { response: 0 }
+      : window
+        ? await dialog.showMessageBox(window, options)
+        : await dialog.showMessageBox(options)
     if (response !== 0) return { deleted: false }
 
     writeTimelineBlockReview(db, dateStr, block, { state: 'ignored' })
@@ -729,8 +732,7 @@ export function registerDbHandlers(): void {
   // focus events, matching artifacts — inside the given span, so the record
   // is gone from every surface (timeline, apps, AI, wraps), not hidden. The
   // native confirm makes the irreversibility explicit. Raw data deletion is
-  // the point here, by explicit founder decision (Jul 2, 2026): sensitive
-  // records must be fully removable.
+  // the point here: sensitive records must be fully removable.
   ipcMain.handle(IPC.DB.PURGE_TRACKED_EVIDENCE, async (event, payload: PurgeTrackedEvidencePayload): Promise<{ purged: boolean }> => {
     const db = getDb()
     const subject = payload.kind === 'site' ? (payload.domain ?? '').trim() : (payload.appName ?? payload.bundleId ?? '').trim()
@@ -747,9 +749,11 @@ export function registerDbHandlers(): void {
       defaultId: 1,
       cancelId: 1,
     }
-    const { response } = window
-      ? await dialog.showMessageBox(window, options)
-      : await dialog.showMessageBox(options)
+    const { response } = isRealDayHarness()
+      ? { response: 0 }
+      : window
+        ? await dialog.showMessageBox(window, options)
+        : await dialog.showMessageBox(options)
     if (response !== 0) return { purged: false }
 
     const { fromMs, toMs } = payload
@@ -793,8 +797,8 @@ export function registerDbHandlers(): void {
   // and keeps the raw capture), this deletes every tracked row inside the
   // block's span — app sessions, website visits, focus events, derived
   // sessions, artifact mentions — so a sensitive stretch is gone from every
-  // surface and can never resurface on a rebuild. Same founder decision as
-  // the per-record purge (Jul 2, 2026): full erasure of sensitive records
+  // surface and can never resurface on a rebuild. Same policy as
+  // the per-record purge: full erasure of sensitive records
   // outranks retention. The 'ignored' review is still written as a backstop
   // for edge-overlapping sessions the span delete can't reach.
   ipcMain.handle(IPC.DB.PURGE_TIMELINE_BLOCK, async (event, payload: { blockId: string; date?: string | null }): Promise<{ purged: boolean }> => {
@@ -819,9 +823,11 @@ export function registerDbHandlers(): void {
       defaultId: 1,
       cancelId: 1,
     }
-    const { response } = window
-      ? await dialog.showMessageBox(window, options)
-      : await dialog.showMessageBox(options)
+    const { response } = isRealDayHarness()
+      ? { response: 0 }
+      : window
+        ? await dialog.showMessageBox(window, options)
+        : await dialog.showMessageBox(options)
     if (response !== 0) return { purged: false }
 
     const fromMs = block.startTime

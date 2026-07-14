@@ -14,6 +14,7 @@ import {
   type AnalyticsPropertyValue,
 } from '@shared/analytics'
 import { getSettings } from './settings'
+import { isRealDayExternalAccessAllowed } from '../lib/realDayHarness'
 
 declare const __POSTHOG_KEY__: string
 declare const __POSTHOG_HOST__: string
@@ -154,10 +155,10 @@ async function persistAnalyticsState(): Promise<void> {
 }
 
 function isTelemetryEnabled(): boolean {
-  // Telemetry ships on by default (founder decision, 2026-07-07). Events are
-  // anonymous and allowlist-sanitized; the only kill switch is building
-  // without a PostHog key.
-  return true
+  // Telemetry ships on by default. Events are anonymous and
+  // allowlist-sanitized; the only kill switch is building without a
+  // PostHog key.
+  return isRealDayExternalAccessAllowed('analytics')
 }
 
 function isPosthogEnabled(): boolean {
@@ -490,6 +491,7 @@ function identifyAnonymousIdentity(): void {
 }
 
 export function capture(event: AnalyticsEventName, properties?: Record<string, unknown>): void {
+  if (!isRealDayExternalAccessAllowed('analytics')) return
   const sanitized = sanitizeAnalyticsProperties(properties)
   captureInternal(event, sanitized)
   maybeRecordDerivedEvents(event, sanitized)

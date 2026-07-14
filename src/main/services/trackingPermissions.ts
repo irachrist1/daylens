@@ -9,6 +9,7 @@ import { capture, captureException } from './analytics'
 import { getSettings, setSettings } from './settings'
 import { requestTrackingPermission, getLinuxTrackingDiagnostics } from './tracking'
 import { isWindowsFocusCaptureRunning } from './windowsFocusCapture'
+import { isRealDayHarness } from '../lib/realDayHarness'
 
 const MAC_SCREEN_RECORDING_SETTINGS_URL = 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'
 const MAC_ACCESSIBILITY_SETTINGS_URL = 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility'
@@ -119,6 +120,7 @@ async function openTrackingPermissionSettings(
 }
 
 export async function requestScreenTrackingPermission(): Promise<TrackingPermissionState> {
+  if (isRealDayHarness()) return getTrackingPermissionState()
   if (process.platform !== 'darwin') return 'granted'
 
   try {

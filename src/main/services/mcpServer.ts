@@ -8,6 +8,7 @@ import { app } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs'
 import { getSettings } from './settings'
+import { isRealDayHarness } from '../lib/realDayHarness'
 
 export interface McpServerConfig {
   command: string
@@ -75,6 +76,7 @@ export function getMcpServerConfig(): McpServerConfig | null {
 }
 
 export function startMcpServer(): void {
+  if (isRealDayHarness()) return
   if (_proc && !_proc.killed) return
 
   const config = getMcpServerConfig()

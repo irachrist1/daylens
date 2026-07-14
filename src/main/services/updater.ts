@@ -19,6 +19,7 @@ import {
 } from '@shared/updaterReleaseFeed'
 import { capture, captureException } from './analytics'
 import { getLinuxPackageDiagnostics, type LinuxPackageType } from './linuxDesktop'
+import { isRealDayHarness } from '../lib/realDayHarness'
 
 const MANUAL_DOWNLOAD_URL = 'https://christian-tonny.dev/daylens'
 const REMOTE_UPDATE_FEED_URL = process.env.DAYLENS_UPDATE_FEED_URL?.trim() || 'https://christian-tonny.dev/daylens/api/update-feed'
@@ -824,6 +825,13 @@ export function initUpdater(win: BrowserWindow): void {
   ipcMain.removeHandler('update:get-status')
   ipcMain.removeHandler('update:check')
   ipcMain.removeHandler('update:install')
+
+  if (isRealDayHarness()) {
+    ipcMain.handle('update:get-status', () => getUpdaterState())
+    ipcMain.handle('update:check', () => getUpdaterState())
+    ipcMain.handle('update:install', () => false)
+    return
+  }
 
   ipcMain.handle('update:get-status', () => {
     return getUpdaterState()

@@ -20,6 +20,7 @@ import { getDb } from './database'
 import { estimateUsageCostUsd, lookupModelPricing } from './modelPricing'
 import { getSecureStore } from './secureStore'
 import { getSettingsAsync, hasApiKey, setSettings } from './settings'
+import { assertRealDayExternalAccessAllowed, isRealDayHarness } from '../lib/realDayHarness'
 
 declare const __DAYLENS_BILLING_API_URL__: string
 
@@ -70,6 +71,7 @@ export interface ManagedAIConfig {
 }
 
 function apiUrl(): string {
+  if (isRealDayHarness()) return ''
   return (__DAYLENS_BILLING_API_URL__ || '').trim().replace(/\/+$/, '')
 }
 
@@ -117,6 +119,7 @@ async function writeToken(token: string): Promise<void> {
 }
 
 async function request<T>(path: string, init: RequestInit = {}, retryBootstrap = true): Promise<T> {
+  assertRealDayExternalAccessAllowed('billing')
   const base = apiUrl()
   if (!base) throw new Error('Managed AI is not configured for this build.')
   let token = await readToken()
@@ -151,8 +154,8 @@ async function request<T>(path: string, init: RequestInit = {}, retryBootstrap =
 // and the secret lives only in services/billing/.env — never in this bundle, since
 // anything shipped in the client is extractable. Resolves null whenever the hash
 // can't be fetched; the Messenger then boots without identity verification.
-// TODO(intercom): inert until the founder pastes INTERCOM_IDENTITY_VERIFICATION_SECRET
-// into services/billing/.env and the billing service is deployed with
+// TODO(intercom): inert until INTERCOM_IDENTITY_VERIFICATION_SECRET is set
+// in services/billing/.env and the billing service is deployed with
 // DAYLENS_BILLING_API_URL wired into the build.
 export async function getIntercomIdentity(): Promise<{ userId: string; userHash: string } | null> {
   if (!apiUrl()) return null

@@ -1,4 +1,5 @@
 import type { AIProvider, ProviderConnectionResult } from '@shared/types'
+import { isRealDayExternalAccessAllowed } from '../lib/realDayHarness'
 
 function detectProviderFromApiKey(key: string): AIProvider | null {
   const trimmed = key.trim()
@@ -79,6 +80,16 @@ export async function validateProviderConnection(provider: AIProvider, key: stri
 
   if (detectedProvider && detectedProvider !== provider) {
     return unsupportedFormat(provider, detectedProvider)
+  }
+
+  if (!isRealDayExternalAccessAllowed('provider-validation')) {
+    return {
+      status: 'provider_unreachable',
+      provider,
+      detectedProvider,
+      message: 'Provider validation is disabled during a private real-day replay.',
+      canSaveAnyway: false,
+    }
   }
 
   const endpoint = endpointForProvider(provider)
