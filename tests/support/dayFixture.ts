@@ -100,7 +100,12 @@ export interface DayFixtureExpected {
   }>
   meetings?: Array<{
     title: string
+    /** Restrict the match to one evidence source. 'timeline' proves a real
+     *  meeting block was derived; 'calendar' asserts the stored record stays
+     *  visible even when the device shows no attendance. Omit to accept either. */
+    source?: 'calendar' | 'timeline'
     start?: string
+    startToleranceMinutes?: number
     durationMinutes?: number
     durationToleranceMinutes?: number
   }>
@@ -112,6 +117,10 @@ export interface DayFixtureExpected {
     prohibitedTerms?: string[]
     prohibitedSurfaces?: string[]
   }
+  /** Tracked defects this fixture is allowed to exhibit, one issue reference
+   *  each (e.g. "DEV-215: …"). Downgrades the always-on wrap-groundedness
+   *  invariants to reported-but-passing for this fixture only. */
+  knownIssues?: string[]
 }
 
 export interface CorrectBlockMutation {
@@ -307,6 +316,21 @@ export function normalizeDayFixture(value: unknown, filePath = '<memory>'): DayF
         (!Array.isArray(mutation.matchLabelIncludes) || mutation.matchLabelIncludes.length === 0)
       ) {
         throw fixtureError(filePath, `${mutation.kind} mutation requires matchLabelIncludes`)
+      }
+      if (mutation.kind === 'correctBlock') {
+        if (mutation.state != null && mutation.state !== 'corrected' && mutation.state !== 'approved') {
+          throw fixtureError(filePath, `correctBlock state must be corrected or approved`)
+        }
+        for (const field of [
+          'correctedLabel',
+          'correctedIntentRole',
+          'correctedIntentSubject',
+          'correctedCategory',
+        ] as const) {
+          if (mutation[field] != null && typeof mutation[field] !== 'string') {
+            throw fixtureError(filePath, `correctBlock ${field} must be a string`)
+          }
+        }
       }
       if (
         mutation.kind === 'excludeAndPurgeApp' &&

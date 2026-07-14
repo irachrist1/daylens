@@ -211,7 +211,8 @@ async function runFixture(fixture: CaptureEventsDayFixture): Promise<void> {
             userVisibleLabelForBlock(block),
             block.label.current,
             block.topApps.map((app) => app.appName),
-            block.websites.map((site) => site.domain),
+            block.websites.map((site) => [site.domain, site.title]),
+            block.pageRefs.map((page) => page.displayTitle),
           ]),
         )
         assert.ok(

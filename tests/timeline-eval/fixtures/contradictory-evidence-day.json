@@ -81,7 +81,8 @@
         "title": "Beacon kickoff",
         "start": "10:00",
         "durationMinutes": 60,
-        "durationToleranceMinutes": 5
+        "durationToleranceMinutes": 5,
+        "source": "calendar"
       }
     ],
     "totals": {

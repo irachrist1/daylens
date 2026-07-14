@@ -366,22 +366,27 @@ function evaluateDayFacts(
   ]
   for (const expectedMeeting of fixture.expected.meetings ?? []) {
     total += 1
-    const tolerance = expectedMeeting.durationToleranceMinutes ?? 5
+    const durationTolerance = expectedMeeting.durationToleranceMinutes ?? 5
+    const startTolerance = expectedMeeting.startToleranceMinutes ?? 5
     const match = actualMeetings.find(
       (meeting) =>
+        (expectedMeeting.source == null || meeting.source === expectedMeeting.source) &&
         containsAny(meeting.title, [expectedMeeting.title]) &&
         (expectedMeeting.start == null ||
           (meeting.startMinutes != null &&
-            Math.abs(meeting.startMinutes - clockToMinutes(expectedMeeting.start)) <= 5)) &&
+            Math.abs(meeting.startMinutes - clockToMinutes(expectedMeeting.start)) <=
+              startTolerance)) &&
         (expectedMeeting.durationMinutes == null ||
           (meeting.minutes != null &&
-            Math.abs(meeting.minutes - expectedMeeting.durationMinutes) <= tolerance)),
+            Math.abs(meeting.minutes - expectedMeeting.durationMinutes) <= durationTolerance)),
     )
     if (match) passed += 1
     else {
       const got =
         actualMeetings.map((m) => `${m.source}:"${m.title}"`).join(', ') || 'none'
-      issues.push(`meetings: nothing matches "${expectedMeeting.title}" (got ${got})`)
+      issues.push(
+        `meetings: nothing matches "${expectedMeeting.title}"${expectedMeeting.source ? ` from ${expectedMeeting.source}` : ''} (got ${got})`,
+      )
     }
   }
 
@@ -1266,6 +1271,28 @@ const designDefects = results.flatMap((result) =>
 )
 if (designDefects.length > 0) {
   console.error(`\nTarget-Design invariant violated:\n- ${designDefects.join('\n- ')}`)
+  process.exitCode = 1
+}
+
+// Wrap groundedness is an invariant of the one reconciled facts object, not an
+// opt-in expectation: unsupported claims and grounding failures fail the run
+// even when a fixture declares no wrap expectations. A fixture may defer a
+// tracked defect by naming it in expected.knownIssues; the defect is then
+// reported without failing the run.
+const wrapDefects = results.flatMap((result) => {
+  const defects = [...result.unsupportedWrapClaims, ...result.wrapGroundingIssues]
+  if (defects.length === 0) return []
+  const knownIssues = result.fixture.expected.knownIssues ?? []
+  if (knownIssues.length > 0) {
+    console.error(
+      `\n${result.fixture.id}: wrap defects deferred to ${knownIssues.join('; ')}:\n- ${defects.join('\n- ')}`,
+    )
+    return []
+  }
+  return defects.map((issue) => `${result.fixture.id}: ${issue}`)
+})
+if (wrapDefects.length > 0) {
+  console.error(`\nWrap-groundedness invariant violated:\n- ${wrapDefects.join('\n- ')}`)
   process.exitCode = 1
 }
 

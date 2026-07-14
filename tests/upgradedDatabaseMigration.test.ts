@@ -129,7 +129,9 @@ test('a representative v25 database upgrades through every migration and keeps i
   db.pragma('foreign_keys = ON')
   db.exec(fs.readFileSync(BASELINE_SCHEMA_PATH, 'utf8'))
   // A real v25 install also carried the search schema (its definition has not
-  // changed since), created by the migration that introduced it.
+  // changed since), created by the migration that introduced it. Tables that
+  // migrations <= 25 created outside SCHEMA_SQL are absent here; if a future
+  // migration alters one of those, this fixture must gain its v25 shape too.
   ensureSearchSchema(db)
   db.exec(`
     CREATE TABLE IF NOT EXISTS schema_version (
@@ -149,8 +151,8 @@ test('a representative v25 database upgrades through every migration and keeps i
   try {
     // Production startup order for an existing database: current SCHEMA_SQL
     // (all IF NOT EXISTS), then the versioned ladder, then schema repair.
-    assert.doesNotThrow(() => db.exec(SCHEMA_SQL))
-    assert.doesNotThrow(() => runMigrations())
+    db.exec(SCHEMA_SQL)
+    runMigrations()
     console.log = log
 
     const version = (

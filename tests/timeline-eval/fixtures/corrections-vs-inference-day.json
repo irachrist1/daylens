@@ -156,6 +156,9 @@
         "search",
         "wrap"
       ]
-    }
+    },
+    "knownIssues": [
+      "DEV-215: wrap facts name activities from inferred subjects, ignoring the person's corrections"
+    ]
   }
 }

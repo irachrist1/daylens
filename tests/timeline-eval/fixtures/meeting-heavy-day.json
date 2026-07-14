@@ -211,19 +211,22 @@
         "title": "Design critique",
         "start": "09:00",
         "durationMinutes": 35,
-        "durationToleranceMinutes": 6
+        "durationToleranceMinutes": 6,
+        "source": "timeline"
       },
       {
         "title": "Product planning",
         "start": "10:00",
         "durationMinutes": 50,
-        "durationToleranceMinutes": 6
+        "durationToleranceMinutes": 6,
+        "source": "calendar"
       },
       {
         "title": "Customer interview",
         "start": "11:15",
         "durationMinutes": 35,
-        "durationToleranceMinutes": 6
+        "durationToleranceMinutes": 6,
+        "source": "timeline"
       }
     ],
     "search": [
