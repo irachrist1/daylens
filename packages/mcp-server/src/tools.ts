@@ -1,4 +1,4 @@
-// MCP tool manifest (ADR 0002). The Daylens MCP server exposes the resolver
+// MCP tool manifest. The Daylens MCP server exposes the resolver
 // bodies in src/main/services/aiTools.ts to external MCP clients (e.g. Claude
 // Desktop). The AI tab itself no longer uses these schemas — it goes through
 // the planner + resolver layer (ai/resolvers.ts). These declarations live here,
@@ -205,7 +205,7 @@ export const anthropicTools: AnthropicTool[] = [
 ]
 
 // ---------------------------------------------------------------------------
-// Wrapped data-layer tools (wrapped.md Stage 0.3) — the deeper per-day reads
+// Wrapped data-layer tools — the deeper per-day reads
 // behind Wrapped: title semantics, git/calendar signals, baselines,
 // distraction split, and the computed surprise. Executed asynchronously via
 // executeWrappedTool in src/main/services/wrappedTools.ts.

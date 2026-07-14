@@ -143,7 +143,7 @@ export function verifyTimestamps(answer: string, toolResults: string[]): Timesta
   // Match HH:MM in 24h or 12h with am/pm. Capture both shapes so we can
   // compare against tool output (which always emits 24h HH:MM).
   const pattern = /\b(\d{1,2}):(\d{2})\s*(am|pm)?\b/gi
-  const found = new Set<string>()
+  const found = new Map<string, string[]>()
   let match: RegExpExecArray | null
   while ((match = pattern.exec(answer)) !== null) {
     let hour = Number(match[1])
@@ -152,15 +152,21 @@ export function verifyTimestamps(answer: string, toolResults: string[]): Timesta
     if (meridiem === 'pm' && hour < 12) hour += 12
     if (meridiem === 'am' && hour === 12) hour = 0
     if (hour > 23 || minute > 59) continue
-    found.add(`${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`)
+    const primary = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
+    const candidates = [primary]
+    if (!meridiem && hour <= 12) {
+      const alternateHour = hour === 12 ? 0 : hour + 12
+      candidates.push(`${String(alternateHour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`)
+    }
+    found.set(primary, candidates)
   }
   if (found.size === 0 || toolResults.length === 0) {
     return { ok: true, suspect: [] }
   }
   const evidence = toolResults.join('\n')
   const suspect: string[] = []
-  for (const ts of found) {
-    if (!evidence.includes(ts)) suspect.push(ts)
+  for (const [ts, candidates] of found) {
+    if (!candidates.some((candidate) => evidence.includes(candidate))) suspect.push(ts)
   }
   return { ok: suspect.length === 0, suspect }
 }

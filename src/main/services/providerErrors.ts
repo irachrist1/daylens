@@ -93,7 +93,7 @@ export function classifyProviderError(error: unknown): AIProviderErrorMeta {
 }
 
 // Short, single-line extract of the provider's own words, safe to show inside
-// parentheses. The point (founder report, 2026-07-05): a failure the app can't
+// parentheses. The point: a failure the app can't
 // classify must still tell the user WHAT the provider said, not just "couldn't
 // complete that".
 export function providerErrorDetail(error: unknown): string | null {

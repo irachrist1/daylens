@@ -1,4 +1,4 @@
-// Wrap pre-flight (Stage 0.4) — the data quality gate that runs BEFORE a wrap
+// Wrap pre-flight — the data quality gate that runs BEFORE a wrap
 // generates. It never blocks: it tells the user honestly and specifically what
 // is thin about the day's data ("We're missing window titles for 60% of your
 // sessions today"), and they proceed with one tap. A wrap built on thin data
@@ -115,8 +115,8 @@ export function getWrapPreflight(
   const firstCaptureClock = firstRow?.first ? formatClock(firstRow.first) : null
 
   // PROVABLE partial capture: a calendar event that started before Daylens's
-  // first captured activity is something the tracker demonstrably missed (the
-  // founder's exact case: a 9am meeting but capture began at noon). Calendar is
+  // first captured activity is something the tracker demonstrably missed
+  // (e.g. a 9am meeting but capture began at noon). Calendar is
   // independent of tracker uptime, so it is honest evidence, not a guess. No
   // event-before-first-capture means no false positive.
   if (firstRow?.first) {

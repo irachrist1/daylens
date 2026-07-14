@@ -1,5 +1,5 @@
-// Resolve the day's external signals into the shape the wrap WRITER sees
-// (Stage 0 Gap 1). The connectors stored raw-ish signals in external_signals;
+// Resolve the day's external signals into the shape the wrap WRITER sees.
+// The connectors stored raw-ish signals in external_signals;
 // this reads them back, sanitizes and humanizes, pre-formats every duration,
 // and drops anything the model must never echo (raw paths, branches, clock
 // times it cannot ground on a slide). Pure read: never collects, never blocks.
@@ -54,7 +54,7 @@ function lowerFirst(s: string): string {
 
 /** Sanitize a calendar event title for the prompt: strip paths/branches and any
  *  embedded clock time, keep the rest (the user's own words, names and all —
- *  founder decision: show the real title). Null when nothing usable remains. */
+ *  show the real title). Null when nothing usable remains. */
 function sanitizeMeetingTitle(raw: unknown): string | null {
   if (typeof raw !== 'string') return null
   const stripped = stripPathsAndBranches(raw).replace(CLOCK_IN_TEXT, ' ').replace(/\s+/g, ' ').trim()

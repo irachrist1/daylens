@@ -1,4 +1,4 @@
-// Git connector (wrapped Stage 0.2) — what the user actually SHIPPED today.
+// Git connector — what the user actually SHIPPED today.
 //
 // Scans the usual development roots for git repositories, reads each repo's
 // commit log for the target date (authored by the repo's configured user), and
@@ -110,7 +110,7 @@ function clock(ms: number): string {
 }
 
 /** Path-like and branch-like tokens that must never reach a wrap or a tool
- *  result (Stage 0.3 promise, voice.md: name the work, never the plumbing).
+ *  result — name the work, never the plumbing.
  *  Each matches a WHOLE risky token so ordinary slashes in prose ("CI/CD",
  *  "and/or", "TCP/IP") survive; only things that read as a file path or a git
  *  ref are stripped. Applied before storage AND before tool output. */
@@ -152,7 +152,7 @@ export function stripPathsAndBranches(input: string): string {
 }
 
 /** One line of defense on commit subjects and PR titles: strip control chars,
- *  strip file paths and branch names (Stage 0.3), collapse whitespace, truncate.
+ *  strip file paths and branch names, collapse whitespace, truncate.
  *  The tool boundary (sanitizeToolResult) is a second, secrets-focused pass. */
 export function cleanSubject(subject: string): string {
   // eslint-disable-next-line no-control-regex

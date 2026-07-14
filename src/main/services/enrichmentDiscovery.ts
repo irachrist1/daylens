@@ -1,4 +1,4 @@
-// Enrichment discovery (wrapped Stage 0.2) — optional local sources beyond
+// Enrichment discovery — optional local sources beyond
 // Daylens' own tracking: MCP servers configured for Claude Desktop, and known
 // focus-timer apps installed on this machine.
 //
@@ -241,7 +241,7 @@ function parseSessionsForDate(jsonPath: string, date: string): ParsedSession[] {
  *  documented, so these are best guesses — parsing is a bonus, not a
  *  requirement (see parseSessionsForDate's silent fallbacks).
  *
- *  Investigated on a real install 2026-07-08: Raycast keeps its activity
+ *  Investigated on a real install: Raycast keeps its activity
  *  history (including Focus sessions) in raycast-activities-enc.sqlite,
  *  which is SQLCipher-ENCRYPTED — no SQLite magic header, unreadable without
  *  Raycast's own key. Its defaults hold only the last-used session settings,

@@ -1,6 +1,6 @@
 // Parser/validator for genuinely model-written chat reports.
 //
-// NOTE (W1-C, no fake AI): this module used to also export
+// NOTE (no fake AI): this module used to also export
 // fallbackGeneratedReportContent — a templated report presented as if the AI
 // wrote it whenever the model call failed or returned unparseable output. That
 // violated the no-fake-AI rule ("when Daylens doesn't know, it says so"), so

@@ -453,14 +453,16 @@ function searchBounds(opts: SearchOptions): { fromMs: number; toMs: number; limi
   }
 }
 
-function toFtsQuery(query: string): string {
-  const tokens = query
+function searchQueryTokens(query: string): string[] {
+  return query
     .trim()
     .match(/"[^"]+"|\S+/g)
     ?.map((token) => token.replace(/^"|"$/g, '').replace(/"/g, '""').trim())
     .filter(Boolean) ?? []
+}
 
-  return tokens.map((token) => `"${token}"`).join(' AND ')
+function toFtsQuery(query: string): string {
+  return searchQueryTokens(query).map((token) => `"${token}"`).join(' AND ')
 }
 
 function mapAIThreadMessage(
@@ -505,10 +507,21 @@ function mapAIThreadMessage(
 // App sessions
 // ---------------------------------------------------------------------------
 
+// A browser's window title is the page title, and no capture path at this
+// layer can prove the window was not private. Browser page detail is only
+// stored through the corroborated visit pipeline (browserContext), so app
+// sessions for browsers keep timing and identity but never a title.
+function stripBrowserTitle(session: Omit<AppSession, 'id'>): Omit<AppSession, 'id'> {
+  if (!session.windowTitle) return session
+  const isBrowser = resolveBrowserApplication({ bundleId: session.bundleId, appName: session.appName }) != null
+  return isBrowser ? { ...session, windowTitle: null } : session
+}
+
 export function insertAppSession(
   db: Database.Database,
-  session: Omit<AppSession, 'id'>,
+  rawSession: Omit<AppSession, 'id'>,
 ): number | null {
+  const session = stripBrowserTitle(rawSession)
   const stmt = db.prepare(`
     INSERT OR IGNORE INTO app_sessions (
       bundle_id,
@@ -605,7 +618,9 @@ export function upsertLiveAppSessionSnapshot(
       last_seen_at = excluded.last_seen_at
   `).run({
     ...snapshot,
-    windowTitle: snapshot.windowTitle ?? null,
+    windowTitle: snapshot.windowTitle && resolveBrowserApplication({ bundleId: snapshot.bundleId, appName: snapshot.appName }) != null
+      ? null
+      : snapshot.windowTitle ?? null,
     canonicalAppId: snapshot.canonicalAppId ?? null,
     appInstanceId: snapshot.appInstanceId ?? null,
   })
@@ -793,6 +808,13 @@ export function searchSessions(
     WHERE app_sessions_fts MATCH ?
       AND app_sessions.start_time >= ?
       AND app_sessions.start_time < ?
+      AND NOT EXISTS (
+        SELECT 1
+        FROM timeline_block_reviews review
+        WHERE review.review_state = 'ignored'
+          AND app_sessions.start_time >= json_extract(review.original_block_json, '$.startTime')
+          AND app_sessions.start_time < json_extract(review.original_block_json, '$.endTime')
+      )
     ORDER BY app_sessions.start_time DESC
     LIMIT ?
   `).all(SEARCH_HIGHLIGHT_START, SEARCH_HIGHLIGHT_END, ftsQuery, fromMs, toMs, limit) as {
@@ -826,7 +848,7 @@ export function searchBlocks(
   if (!ftsQuery) return []
   const { fromMs, toMs, limit } = searchBounds(opts)
 
-  const rows = db.prepare(`
+  const indexedRows = db.prepare(`
     SELECT
       timeline_blocks.id,
       timeline_blocks.label_current,
@@ -844,6 +866,13 @@ export function searchBlocks(
         SELECT 1 FROM timeline_block_reviews r
         WHERE r.block_id = timeline_blocks.id AND r.review_state = 'ignored'
       )
+      AND NOT EXISTS (
+        SELECT 1 FROM timeline_block_reviews r
+        WHERE r.block_id = timeline_blocks.id
+          AND r.review_state = 'corrected'
+          AND json_type(r.correction_json, '$.label') = 'text'
+          AND trim(json_extract(r.correction_json, '$.label')) != ''
+      )
     ORDER BY timeline_blocks.start_time DESC
     LIMIT ?
   `).all(SEARCH_HIGHLIGHT_START, SEARCH_HIGHLIGHT_END, ftsQuery, fromMs, toMs, limit) as {
@@ -854,6 +883,40 @@ export function searchBlocks(
     date: string
     excerpt: string | null
   }[]
+
+  const tokens = searchQueryTokens(query)
+  const labelExpression = `LOWER(json_extract(reviews.correction_json, '$.label'))`
+  const tokenClauses = tokens.map(() => `${labelExpression} LIKE ? ESCAPE '!'`).join(' AND ')
+  const tokenParams = tokens.map((token) => {
+    const escaped = token.toLowerCase().replace(/[!%_]/g, (character) => `!${character}`)
+    return `%${escaped}%`
+  })
+  const correctedRows = tokens.length === 0
+    ? []
+    : db.prepare(`
+      SELECT
+        timeline_blocks.id,
+        json_extract(reviews.correction_json, '$.label') AS label_current,
+        timeline_blocks.start_time,
+        timeline_blocks.end_time,
+        timeline_blocks.date,
+        json_extract(reviews.correction_json, '$.label') AS excerpt
+      FROM timeline_block_reviews reviews
+      JOIN timeline_blocks ON timeline_blocks.id = reviews.block_id
+      WHERE reviews.review_state = 'corrected'
+        AND json_type(reviews.correction_json, '$.label') = 'text'
+        AND timeline_blocks.start_time >= ?
+        AND timeline_blocks.start_time < ?
+        AND timeline_blocks.invalidated_at IS NULL
+        AND ${tokenClauses}
+      ORDER BY timeline_blocks.start_time DESC
+      LIMIT ?
+    `).all(fromMs, toMs, ...tokenParams, limit) as typeof indexedRows
+
+  const rows = [...indexedRows, ...correctedRows]
+    .sort((left, right) => right.start_time - left.start_time)
+    .filter((row, index, all) => all.findIndex((candidate) => candidate.id === row.id) === index)
+    .slice(0, limit)
 
   return rows.map((row) => ({
     type: 'block',
@@ -889,6 +952,13 @@ export function searchBrowser(
     WHERE website_visits_fts MATCH ?
       AND website_visits.visit_time >= ?
       AND website_visits.visit_time < ?
+      AND NOT EXISTS (
+        SELECT 1
+        FROM timeline_block_reviews review
+        WHERE review.review_state = 'ignored'
+          AND website_visits.visit_time >= json_extract(review.original_block_json, '$.startTime')
+          AND website_visits.visit_time < json_extract(review.original_block_json, '$.endTime')
+      )
     ORDER BY website_visits.visit_time DESC
     LIMIT ?
   `).all(SEARCH_HIGHLIGHT_START, SEARCH_HIGHLIGHT_END, ftsQuery, fromMs, toMs, limit) as {
@@ -2084,14 +2154,93 @@ export function insertWebsiteVisit(
   return result.changes > 0
 }
 
+// Live tab reads from browsers that cannot report their window mode land here
+// instead of website_visits. The history poll promotes rows the browser's own
+// history corroborates and deletes the rest — private windows never write
+// browser history, so uncorroborated rows are private-window visits.
+
+export interface PendingWebsiteVisit extends WebsiteVisitInsert {
+  id: number
+  observedAt: number
+}
+
+export function insertPendingWebsiteVisit(
+  db: Database.Database,
+  visit: WebsiteVisitInsert,
+  observedAt = Date.now(),
+): void {
+  db.prepare(`
+    INSERT INTO website_visits_pending
+      (domain, page_title, url, normalized_url, page_key, visit_time,
+       visit_time_us, duration_sec, browser_bundle_id, canonical_browser_id,
+       browser_profile_id, observed_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    visit.domain,
+    visit.pageTitle,
+    visit.url,
+    visit.normalizedUrl,
+    visit.pageKey,
+    visit.visitTime,
+    visit.visitTimeUs,
+    visit.durationSec,
+    visit.browserBundleId,
+    visit.canonicalBrowserId,
+    visit.browserProfileId,
+    observedAt,
+  )
+}
+
+export function listPendingWebsiteVisits(
+  db: Database.Database,
+  canonicalBrowserId: string | null,
+  limit = 200,
+): PendingWebsiteVisit[] {
+  const rows = db.prepare(`
+    SELECT id, domain, page_title, url, normalized_url, page_key, visit_time,
+           visit_time_us, duration_sec, browser_bundle_id, canonical_browser_id,
+           browser_profile_id, observed_at
+    FROM website_visits_pending
+    WHERE canonical_browser_id IS ?
+    ORDER BY observed_at ASC
+    LIMIT ?
+  `).all(canonicalBrowserId, limit) as Array<Record<string, unknown>>
+  return rows.map((row) => ({
+    id: Number(row.id),
+    domain: String(row.domain),
+    pageTitle: (row.page_title as string | null) ?? null,
+    url: String(row.url),
+    normalizedUrl: (row.normalized_url as string | null) ?? null,
+    pageKey: (row.page_key as string | null) ?? null,
+    visitTime: Number(row.visit_time),
+    visitTimeUs: BigInt(row.visit_time_us as number | bigint),
+    durationSec: Number(row.duration_sec),
+    browserBundleId: String(row.browser_bundle_id),
+    canonicalBrowserId: (row.canonical_browser_id as string | null) ?? null,
+    browserProfileId: (row.browser_profile_id as string | null) ?? null,
+    source: 'active_browser_context',
+    observedAt: Number(row.observed_at),
+  }))
+}
+
+export function deletePendingWebsiteVisits(db: Database.Database, ids: number[]): void {
+  if (ids.length === 0) return
+  const placeholders = ids.map(() => '?').join(',')
+  db.prepare(`DELETE FROM website_visits_pending WHERE id IN (${placeholders})`).run(...ids)
+}
+
+export function deleteExpiredPendingWebsiteVisits(db: Database.Database, olderThanMs: number): number {
+  return db.prepare('DELETE FROM website_visits_pending WHERE observed_at < ?').run(olderThanMs).changes
+}
+
 
 // App Detail's browser breakdown: per-domain, per-page reconciled time for one
 // canonical browser identity (all Chrome profiles under one number). This is
 // the App Detail replacement for the old raw-SUM getDomainSummariesForBrowser /
-// getPageSummariesForBrowser pair (2026-07-05, docs/issues-2026-07-05.md #4):
-// raw SUM(duration_sec) kept accruing while the browser sat in the background
-// and double-counted the two capture paths, so the domain and page sections
-// could never add up to the app's own foreground total.
+// getPageSummariesForBrowser pair: raw SUM(duration_sec) kept accruing while
+// the browser sat in the background and double-counted the two capture paths,
+// so the domain and page sections could never add up to the app's own
+// foreground total.
 //
 // Built on reconcileWebsiteVisits — the SAME per-visit ledger every other
 // website number reads — with one extra clip: credit is intersected with THIS
@@ -2636,9 +2785,7 @@ export function getWebsiteSummariesForRange(
     canonicalBrowserId: string | null
   }
   // A domain belongs to the browser that actually loaded it, never to
-  // whichever visit happened to be inserted (and read back) first (spec:
-  // docs/specs/apps.md S3.3 "Domain attribution" and invariant 4; see also
-  // timeline.md S3.0 - "every browser's sites must reach the evidence"). So
+  // whichever visit happened to be inserted (and read back) first. So
   // the same domain visited from two different browsers must produce two
   // summary rows, each carrying only that browser's own time.
   const byDomainAndBrowser = new Map<string, DomainAccumulator>()

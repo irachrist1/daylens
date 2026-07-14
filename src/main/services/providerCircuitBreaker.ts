@@ -1,7 +1,7 @@
-// Provider circuit breaker for background AI jobs (V2 ship plan W1-B).
+// Provider circuit breaker for background AI jobs.
 //
-// The founder's real install logged ~850,000 block_cleanup_relabel /
-// block_label_finalize calls in May-June 2026, ~740,000 of them FAILING on
+// One real-world install logged ~850,000 block_cleanup_relabel /
+// block_label_finalize calls, ~740,000 of them FAILING on
 // quota_exhausted ("You've hit Google Gemini's request limit") or
 // credit_exhausted ("Anthropic Claude credit balance is too low") — errors
 // that retrying can never fix. aiRateLimiter.ts already backs off transient

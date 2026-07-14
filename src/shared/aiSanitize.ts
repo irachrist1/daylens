@@ -64,13 +64,20 @@ function applyPatterns(input: string, replacement: string | ((name: string) => s
     // Reset in case any caller passed a stateful regex by accident; ours are
     // module-local so this is defensive.
     regex.lastIndex = 0
-    text = text.replace(regex, (_match, ...args) => {
+    text = text.replace(regex, (match, ...args) => {
       // For url_query the first capture group is the URL prefix we want to keep.
       const groupOne = typeof args[0] === 'string' ? args[0] : null
       redactionCount++
       patternsHit.push(name)
       const value = typeof replacement === 'function' ? replacement(name) : replacement
       if (name === 'url_query' && groupOne) {
+        try {
+          const url = new URL(match)
+          const publicId = url.searchParams.get('v')
+          if (publicId && /^[A-Za-z0-9_-]{6,20}$/.test(publicId)) return `${groupOne}?v=${publicId}`
+        } catch {
+          // Fall through to query stripping.
+        }
         // For sanitizeForModel (replacement === '') we want the URL to keep
         // its host+path and lose the query. For sanitizeForRender we want
         // host+path then a redaction marker. Branch on whether the

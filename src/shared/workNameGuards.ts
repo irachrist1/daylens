@@ -1,7 +1,7 @@
 // Shared guards for what may be NAMED as work — one vocabulary for the day
-// facts, the frozen snapshots, and every wrap surface (Stage 0.1 period
-// audit, 2026-07-08). A tool brand is the instrument of the work, never its
-// subject; a terminal command or a joined tab title is a capture artifact,
+// facts, the frozen snapshots, and every wrap surface. A tool brand is the
+// instrument of the work, never its subject; a terminal command or a joined
+// tab title is a capture artifact,
 // never a thread. These leaked into real period wraps as "what the week was
 // really about": "✳ Claude Code", "npx @agent-native/core@latest skills add
 // visual-plans", "Branch · Branch · Space Visualization Prep".

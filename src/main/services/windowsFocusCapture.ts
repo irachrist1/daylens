@@ -7,60 +7,21 @@ import path from 'node:path'
 import { app } from 'electron'
 import { shouldCaptureFocusEvent } from './focusCapture'
 import { getDb } from './database'
+import { insertFocusEvents } from '../db/focusEventRepository'
 import { getSettings } from './settings'
+import { resolveBrowserApplication } from './browserRegistry'
 import { trackingControlsStateFromSettings } from '@shared/trackingControls'
+import {
+  FOCUS_EVENT_SCHEMA_VERSION,
+  isFocusEventConfidence,
+  isFocusEventType,
+  isWindowsFocusEventSource,
+  sourceAcceptsFocusEventType,
+  type FocusEvent,
+  type WindowsFocusEventSource,
+} from '../core/evidence/focusEvent'
 
-const FOCUS_EVENT_SCHEMA_VERSION = 1
-const FOCUS_EVENT_TYPES = [
-  'app_activated',
-  'app_deactivated',
-  'window_changed',
-  'space_changed',
-  'sleep',
-  'wake',
-  'lock',
-  'unlock',
-  'tab_changed',
-  'tab_sampled',
-] as const
-const FOCUS_EVENT_SOURCES = ['uia_foreground', 'uia_tab'] as const
-const FOCUS_EVENT_CONFIDENCES = ['observed', 'unknown'] as const
-
-type FocusEventType = typeof FOCUS_EVENT_TYPES[number]
-type FocusEventSource = typeof FOCUS_EVENT_SOURCES[number]
-type FocusEventConfidence = typeof FOCUS_EVENT_CONFIDENCES[number]
-
-const FOCUS_EVENT_TYPE_SET = new Set<string>(FOCUS_EVENT_TYPES)
-const FOCUS_EVENT_SOURCE_SET = new Set<string>(FOCUS_EVENT_SOURCES)
-const FOCUS_EVENT_CONFIDENCE_SET = new Set<string>(FOCUS_EVENT_CONFIDENCES)
-const FOREGROUND_EVENT_TYPES = new Set<FocusEventType>([
-  'app_activated',
-  'app_deactivated',
-  'window_changed',
-  'space_changed',
-  'sleep',
-  'wake',
-  'lock',
-  'unlock',
-])
-const TAB_EVENT_TYPES = new Set<FocusEventType>(['tab_changed', 'tab_sampled'])
-
-interface HelperEvent {
-  ts_ms: number
-  mono_ns: number
-  event_type: FocusEventType
-  app_bundle_id?: string | null
-  app_name?: string | null
-  pid?: number | null
-  window_title?: string | null
-  url?: string | null
-  page_title?: string | null
-  source: FocusEventSource
-  confidence: FocusEventConfidence
-  is_private?: boolean | null
-  platform?: string | null
-  schema_ver?: number | null
-}
+type HelperEvent = FocusEvent<WindowsFocusEventSource> & { is_private: boolean }
 
 let child: ChildProcessWithoutNullStreams | null = null
 let stopping = false
@@ -161,9 +122,9 @@ export function normalizeWindowsHelperEvent(raw: unknown): HelperEvent | null {
   const schemaVersion = raw.schema_ver ?? FOCUS_EVENT_SCHEMA_VERSION
   if (typeof raw.ts_ms !== 'number' || !Number.isFinite(raw.ts_ms)) return null
   if (typeof raw.mono_ns !== 'number' || !Number.isFinite(raw.mono_ns)) return null
-  if (typeof eventType !== 'string' || !FOCUS_EVENT_TYPE_SET.has(eventType)) return null
-  if (typeof source !== 'string' || !FOCUS_EVENT_SOURCE_SET.has(source)) return null
-  if (typeof confidence !== 'string' || !FOCUS_EVENT_CONFIDENCE_SET.has(confidence)) return null
+  if (!isFocusEventType(eventType)) return null
+  if (!isWindowsFocusEventSource(source)) return null
+  if (!isFocusEventConfidence(confidence)) return null
   if (schemaVersion !== FOCUS_EVENT_SCHEMA_VERSION) return null
   if (!isNullableString(raw.app_bundle_id)) return null
   if (!isNullableString(raw.app_name)) return null
@@ -174,31 +135,27 @@ export function normalizeWindowsHelperEvent(raw: unknown): HelperEvent | null {
   if (!isNullableBoolean(raw.is_private)) return null
   if (!isNullableString(raw.platform)) return null
 
-  const typedEventType = eventType as FocusEventType
-  const typedSource = source as FocusEventSource
-  const typedConfidence = confidence as FocusEventConfidence
   const url = raw.url ?? null
   const pageTitle = raw.page_title ?? null
   const isPrivate = raw.is_private ?? false
 
-  if (typedSource === 'uia_foreground' && !FOREGROUND_EVENT_TYPES.has(typedEventType)) return null
-  if (typedSource === 'uia_tab' && !TAB_EVENT_TYPES.has(typedEventType)) return null
-  if (typedConfidence === 'unknown' && (url !== null || pageTitle !== null)) return null
-  if (typedSource === 'uia_tab' && typedConfidence === 'observed' && !url) return null
-  if (typedSource === 'uia_foreground' && (url !== null || pageTitle !== null)) return null
+  if (!sourceAcceptsFocusEventType(source, eventType)) return null
+  if (confidence === 'unknown' && (url !== null || pageTitle !== null)) return null
+  if (source === 'uia_tab' && confidence === 'observed' && !url) return null
+  if (source === 'uia_foreground' && (url !== null || pageTitle !== null)) return null
 
   return {
     ts_ms: raw.ts_ms,
     mono_ns: raw.mono_ns,
-    event_type: typedEventType,
+    event_type: eventType,
     app_bundle_id: raw.app_bundle_id ?? null,
     app_name: raw.app_name ?? null,
     pid: raw.pid ?? null,
     window_title: raw.window_title ?? null,
     url,
     page_title: pageTitle,
-    source: typedSource,
-    confidence: typedConfidence,
+    source,
+    confidence,
     is_private: isPrivate,
     platform: raw.platform ?? 'win32',
     schema_ver: FOCUS_EVENT_SCHEMA_VERSION,
@@ -210,7 +167,11 @@ const FOCUS_FLUSH_MAX_BATCH = 100
 let pendingEvents: HelperEvent[] = []
 let flushTimer: ReturnType<typeof setTimeout> | null = null
 
-function eventParams(ev: HelperEvent): Record<string, unknown> {
+function eventParams(ev: HelperEvent): FocusEvent<WindowsFocusEventSource> {
+  // Browser window titles/urls are page content and the helper cannot know
+  // whether the window is private; page detail only enters the store through
+  // the corroborated visit pipeline.
+  const isBrowser = resolveBrowserApplication({ bundleId: ev.app_bundle_id ?? null, appName: ev.app_name ?? null }) != null
   return {
     ts_ms: ev.ts_ms,
     mono_ns: ev.mono_ns,
@@ -218,13 +179,13 @@ function eventParams(ev: HelperEvent): Record<string, unknown> {
     app_bundle_id: ev.app_bundle_id ?? null,
     app_name: ev.app_name ?? null,
     pid: ev.pid ?? null,
-    window_title: ev.window_title ?? null,
-    url: ev.url ?? null,
-    page_title: ev.page_title ?? null,
+    window_title: isBrowser ? null : ev.window_title ?? null,
+    url: isBrowser ? null : ev.url ?? null,
+    page_title: isBrowser ? null : ev.page_title ?? null,
     source: ev.source,
     confidence: ev.confidence,
-    platform: ev.platform ?? 'win32',
-    schema_ver: ev.schema_ver ?? 1,
+    platform: ev.platform,
+    schema_ver: ev.schema_ver,
   }
 }
 
@@ -237,16 +198,7 @@ function flushFocusEvents(): void {
   const batch = pendingEvents
   pendingEvents = []
   try {
-    const db = getDb()
-    const stmt = db.prepare(
-      `INSERT INTO focus_events
-         (ts_ms, mono_ns, event_type, app_bundle_id, app_name, pid, window_title, url, page_title, source, confidence, platform, schema_ver)
-       VALUES (@ts_ms, @mono_ns, @event_type, @app_bundle_id, @app_name, @pid, @window_title, @url, @page_title, @source, @confidence, @platform, @schema_ver)`
-    )
-    const insertAll = db.transaction((events: HelperEvent[]) => {
-      for (const ev of events) stmt.run(eventParams(ev))
-    })
-    insertAll(batch)
+    insertFocusEvents(getDb(), batch.map(eventParams))
   } catch (err) {
     console.warn('[windowsFocusCapture] batch insert failed:', err)
   }

@@ -258,8 +258,7 @@ svg text {
   background: var(--color-text-tertiary);
 }
 
-/* The timeline grid scrolls with no visible scrollbar — the day itself is the
-   scroll indicator (founder ask, Jul 2026). */
+/* The timeline grid uses the day itself as the scroll-position indicator. */
 .timeline-scroller::-webkit-scrollbar {
   width: 0;
   height: 0;

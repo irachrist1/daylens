@@ -324,7 +324,7 @@ function projectFromFileActivity(evidence: ConcurrentEvidence): string | null {
 
 function isDistractionDomain(domain: string): boolean {
   const policy = policyForHost(domain)
-  if (policy === 'adult' || policy === 'entertainment' || policy === 'social_feed') return true
+  if (policy === 'entertainment' || policy === 'social_feed') return true
   return DISTRACTION_DOMAINS.some((blocked) => domain === blocked || domain.endsWith(`.${blocked}`))
 }
 

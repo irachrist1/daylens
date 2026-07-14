@@ -1,11 +1,11 @@
-// The conversation write path for memory (memory.md §2.1). When the user tells
+// The conversation write path for memory. When the user tells
 // Daylens to remember, forget, or correct something in plain chat, this turns
 // that instruction into mem0-style ops (ADD / UPDATE / DELETE / NOOP) against
 // the current memory. The service (workMemoryProfile.applyMemoryWriteOps) then
 // writes them durably and records the audit.
 //
 // This is the AI taking an ACTION, not answering a data question — allowed, and
-// distinct from the read-only resolvers (ai.md ADR 0002). The model only emits
+// distinct from the read-only resolvers. The model only emits
 // a constrained JSON of ops; it never touches the database.
 import {
   executeTextAIJob,

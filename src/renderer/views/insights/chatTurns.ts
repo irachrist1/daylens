@@ -1,4 +1,4 @@
-// Pure state transitions for a chat turn's lifecycle (W1-C).
+// Pure state transitions for a chat turn's lifecycle.
 //
 // A turn in flight lives in renderer state as a synthetic pair —
 // `user:<requestId>` + `assistant:<requestId>` — and is reconciled when the

@@ -87,7 +87,7 @@ export function getDaySnapshotsForRange(startDate: string, endDate: string): Day
       const cached = frozen.get(cursor)
       // Serve a frozen row only when the CURRENT builder made it. A row from
       // an older builder is stale by construction (kind resolution, meeting
-      // truth, and subject guards all changed 2026-07-08) and would otherwise
+      // truth, and subject guards can all change) and would otherwise
       // be served forever — the hash check below never runs on this fast path.
       if (cached && cached.totalActiveSeconds > 0 && cached.finalizedAt > 0 && isCurrentSnapshot(cached)) {
         out.push(cached)

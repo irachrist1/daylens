@@ -1,8 +1,8 @@
-// DEV-109 — AI action layer (ai-actions.md).
+// AI action layer.
 //
 // Turns a chat instruction into an action *proposal* (a preview), and — only
 // when the user confirms — commits it through the same manual-edit pipeline.
-// This is deliberately separate from the read-only resolvers (ADR 0002): the
+// This is deliberately separate from the read-only resolvers: the
 // resolvers READ data to answer; these tools ACT, explicitly, and never mutate
 // until confirmed. Detection is deterministic-first (cheap) — a model call is
 // only for the long tail and lives in the caller (memory extraction).

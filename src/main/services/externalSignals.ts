@@ -1,4 +1,4 @@
-// External signals — the Wrapped data layer's optional connectors (Stage 0.2).
+// External signals — the Wrapped data layer's optional connectors.
 //
 // The wrap has always known how long the user stared at apps; these connectors
 // tell it what was actually produced: git commits and PR activity, calendar

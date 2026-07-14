@@ -30,6 +30,18 @@ cases:
     mustNotContain:
       - page titles didn't come through
 
+  - id: monday_30_minute_breakdown
+    dataDependent: true
+    turns:
+      - Break my Monday into 30-minute chunks.
+    incrementMinutes: 30
+    mustContain:
+      - July 6
+      - locked
+    mustNotContain:
+      - get_moment
+      - get_day_overview
+
   - id: sunday_1445_run_faster
     turns:
       - What was I watching on Sunday, July 12 at 2:45pm? Exact video title.
@@ -66,7 +78,7 @@ cases:
         link.
     mustContain:
       - Uganda
-      - http
+      - "?v="
 
   # ── Excel export (a real file, not a wall of rows) ───────────────────────
   - id: youtube_month_excel

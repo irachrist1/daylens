@@ -42,7 +42,7 @@ import {
   resolveDayContext,
 } from '../core/query/attributionResolvers'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
-import { deriveTitleFromMessage, isWeakThreadTitle, type ThreadTitleContext } from '../lib/threadTitles'
+import { deriveTitleFromMessage, isWeakThreadTitle, parseGeneratedThreadTitle, type ThreadTitleContext } from '../lib/threadTitles'
 import { abortError, isAbortError, registerAICancellation, runWithAbortSignal, unregisterAICancellation } from '../lib/aiCancellation'
 import { getDb } from '../services/database'
 import { workMemoryPromptBlock, chatMemoryPromptBlock, getWorkMemoryProfile, getClientMemory, findClientScopeForWrite, clientScope as clientScopeId } from '../services/workMemoryProfile'
@@ -120,6 +120,8 @@ import { providerSupportsAgentTools } from '../agent/providerModel'
 import type { AgentQuestion } from '../agent/interactionTools'
 import { getAmbientAbortSignal } from '../lib/aiCancellation'
 import { app } from 'electron'
+import type { LanguageModel } from 'ai'
+import { assertRealDayExternalAccessAllowed } from '../lib/realDayHarness'
 
 const GOOGLE_CLIENT_HEADER = 'daylens-windows/1.0.0'
 // Block labeling now runs on the user's chosen model (e.g. Sonnet), not a fixed
@@ -147,13 +149,17 @@ interface AnswerEnvelope {
 
 interface SendMessageOptions {
   onStreamEvent?: (event: AIChatStreamEvent) => void
-  /** Resolves the agent's one clarifying question (ADR 0003). The IPC handler
+  /** Resolves the agent's one clarifying question. The IPC handler
    *  wires this to the renderer's question card; the bench scripts it. When
    *  absent the agent is told to answer with its most defensible reading. */
   onAgentQuestion?: (question: AgentQuestion) => Promise<string>
   /** When set and DAYLENS_AI_TRACE_DIR is configured, the trace file is
    *  written as <scenarioId>.json so the behavioural harness can match it. */
   traceScenarioId?: string | null
+  /** Injects the model-provider boundary for deterministic verification. All
+   * context assembly, tools, persistence, streaming, and grounding remain on
+   * the production path. */
+  model?: LanguageModel
 }
 
 
@@ -1013,7 +1019,7 @@ async function sendWithGoogle(
     config: {
       systemInstruction: systemPrompt,
       maxOutputTokens: options?.maxOutputTokens ?? 1024,
-      // Real cancel (W1-C): the chat-level config applies to sendMessageStream,
+      // The chat-level config applies to sendMessageStream,
       // so Stop aborts the in-flight Gemini request.
       abortSignal: options?.signal,
     },
@@ -1053,6 +1059,7 @@ async function runCLIProvider(
   model?: string,
   signal?: AbortSignal,
 ): Promise<string> {
+  assertRealDayExternalAccessAllowed('model-provider')
   if (signal?.aborted) throw abortError()
   const resolvedTool = await resolveCLITool(tool)
   if (!resolvedTool) {
@@ -1118,7 +1125,7 @@ async function runCLIProvider(
         reject(new CLIProviderError('timeout', `${tool} CLI timed out after ${CLI_TIMEOUT_MS / 1000}s`))
       }, CLI_TIMEOUT_MS)
 
-      // Real cancel (W1-C): Stop kills the CLI child process outright.
+      // Stop kills the CLI child process outright.
       const onAbort = () => {
         if (finished) return
         finished = true
@@ -1176,6 +1183,7 @@ async function sendWithProvider(
   userMessage: string,
   options?: AITextJobExecutionOptions,
 ): Promise<ProviderTextResponse> {
+  assertRealDayExternalAccessAllowed('model-provider')
   if (config.transport === 'managed') {
     return sendWithManagedProxy(config, systemPrompt, prior, userMessage, options)
   }
@@ -1278,8 +1286,8 @@ function localDateBoundsFromString(dateStr: string): [number, number] {
   return [from, from + 86_400_000]
 }
 
-// Work memory handed to the AI as context: the editable, human-readable profile
-// (docs/specs/work-memory.md). Replaces the old opaque "65% pattern" block. The
+// Work memory handed to the AI as context: the editable, human-readable profile.
+// Replaces the old opaque "65% pattern" block. The
 // range/limit params are kept for caller compatibility but the profile is
 // range-independent — it's who you are, not what happened in a window.
 function buildDaylensMemoryPromptBlock(_range: { fromMs: number; toMs: number }, _limit = 10): string {
@@ -1325,7 +1333,7 @@ function sanitizeConversationHistory(history: AIThreadMessage[]): { role: 'user'
   }))
 }
 
-// ── Provider history bound (W1-C) ───────────────────────────────────────────
+// ── Provider history bound ───────────────────────────────────────────
 // The SCREEN may hold a whole thread (message paging), but what each turn
 // SENDS to the provider must not grow with thread length. The bound is
 // recent-N messages: the newest MAX_PROVIDER_HISTORY_MESSAGES entries
@@ -1661,7 +1669,7 @@ async function persistChatTurn(
   }
   if (threadId != null) {
     touchThreadLastMessage(db, threadId, Date.now())
-    queueWeakThreadTitleUpgrade(threadId, userMessage, envelope)
+    await queueWeakThreadTitleUpgrade(threadId, userMessage, envelope)
     // Also persist AIMessageArtifact entries into the durable ai_artifacts table.
     if (envelope.artifacts && envelope.artifacts.length > 0) {
       await persistMessageArtifacts(threadId, assistantEntry.id, envelope.artifacts)
@@ -1688,17 +1696,45 @@ function maybeRenameWeakThread(
   currentTitle: string | null | undefined,
   userMessage: string,
   context?: ThreadTitleContext,
-): void {
-  if (!isWeakThreadTitle(currentTitle)) return
+): boolean {
+  if (!isWeakThreadTitle(currentTitle)) return false
   const candidate = deriveTitleFromMessage(userMessage, context)
-  if (candidate === currentTitle || isWeakThreadTitle(candidate)) return
+  if (candidate === currentTitle || isWeakThreadTitle(candidate)) return false
   renameThread(threadId, candidate)
+  return true
 }
 
-function queueWeakThreadTitleUpgrade(threadId: number, userMessage: string, envelope: AnswerEnvelope): void {
+async function generateThreadTitle(userMessage: string, answerText: string): Promise<string | null> {
+  try {
+    const { text } = await withTimeout(
+      executeTextAIJob(
+        {
+          jobType: 'chat_thread_title',
+          screen: 'ai_chat',
+          triggerSource: 'system',
+          systemPrompt: 'Write a specific 2–5 word chat title. Use the user’s topic, not generic words. Return only the title with no quotes, punctuation, or explanation.',
+          userMessage: JSON.stringify({ question: userMessage, answerPreview: answerText.slice(0, 600) }),
+          prior: [],
+        },
+        sendWithProvider,
+      ),
+      9_000,
+      'Thread title generation timed out',
+    )
+    return parseGeneratedThreadTitle(text)
+  } catch {
+    return null
+  }
+}
+
+async function queueWeakThreadTitleUpgrade(threadId: number, userMessage: string, envelope: AnswerEnvelope): Promise<void> {
   const context = threadTitleContextFromEnvelope(envelope)
   const currentTitle = getThread(threadId)?.title ?? null
-  maybeRenameWeakThread(threadId, currentTitle, userMessage, context)
+  if (maybeRenameWeakThread(threadId, currentTitle, userMessage, context)) return
+  const remainingTitle = getThread(threadId)?.title ?? null
+  if (!isWeakThreadTitle(remainingTitle)) return
+  const generated = await generateThreadTitle(userMessage, envelope.assistantText)
+  if (generated) renameThread(threadId, generated)
 }
 
 function mapMessageArtifactKind(
@@ -1818,7 +1854,7 @@ function daySummaryCacheKey(payload: DayTimelinePayload): string {
   })
 }
 
-// Context-trim audit 2026-07-07: the old scaffold sent the top-4 blocks TWICE
+// The old scaffold sent the top-4 blocks TWICE
 // (once as `dominantBlocks`, again inside `blocks`) and pretty-printed the JSON
 // (2-space indent ≈ +20% tokens for pure whitespace). Now each block is sent
 // once — the 10 longest, in chronological order, ranked so the model still
@@ -2762,7 +2798,7 @@ function workBlockPrompt(block: WorkContextBlock): string {
 
   // Native window titles (non-browser) — document/file context. keyPages often
   // repeats what the window-title and website evidence already carries; each
-  // fact is sent once (context-trim audit 2026-07-07) and titles cap at 100 chars.
+  // fact is sent once and titles cap at 100 chars.
   const alreadyShownTitles = new Set<string>([
     ...(block.evidenceSummary.windowTitles ?? []).map((w) => (w.title ?? '').trim().toLowerCase()),
     ...block.websites.map((site) => (site.topTitle ?? '').trim().toLowerCase()),
@@ -2773,9 +2809,9 @@ function workBlockPrompt(block: WorkContextBlock): string {
     .slice(0, 5)
     .map((page) => page.slice(0, 100))
 
-  // DEV-87 evidence object: real captured window titles and the files touched.
+  // Evidence object: real captured window titles and the files touched.
   // These carry the intent that app names alone never could (the "blindfolded
-  // namer" failure in docs/findings.md) — feed them to the model explicitly.
+  // namer" failure) — feed them to the model explicitly.
   const windowTitleLines = (block.evidenceSummary.windowTitles ?? [])
     .filter((w) => w.title?.trim())
     .slice(0, 6)
@@ -3158,7 +3194,7 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
     scenarioId: options.traceScenarioId ?? null,
     tag: 'sendMessage',
   })
-  // Real cancel (W1-C): register this turn's AbortController under the
+  // Register this turn's AbortController under the
   // renderer's clientRequestId so ai:cancel-message can abort the in-flight
   // provider request. The signal rides an AsyncLocalStorage context down to
   // every executeTextAIJob call this turn makes.
@@ -3272,7 +3308,7 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
     return persistTurn(mergeEnvelope)
   }
 
-  // ── The agent turn (ADR 0003). Everything that is not a confirm-gated
+  // ── The agent turn. Everything that is not a confirm-gated
   //    mutation goes through ONE loop: the model reads the conversation,
   //    calls read-only tools against the same store the Timeline reads,
   //    optionally asks the user one clarifying question, and streams the
@@ -3356,6 +3392,7 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
     agentResult = await runChatAgentTurn(question, prior, {
       db,
       config: agentConfig,
+      model: options.model,
       onStreamEvent: requestId && options.onStreamEvent
         ? (event) => options.onStreamEvent?.({ requestId, delta: event.delta, snapshot: event.snapshot, status: event.status })
         : undefined,

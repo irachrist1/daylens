@@ -162,16 +162,21 @@ function loadIdlePeriods(db: Database.Database, fromMs: number, toMs: number): I
   // dropped — see db/migrations.ts v42. activity_state_events is the only
   // source of idle spans.
   const events = db.prepare(`
-    SELECT event_ts AS ts, event_type AS type
+    SELECT event_ts AS ts, event_type AS type, metadata_json AS metadataJson
     FROM activity_state_events
     WHERE event_ts >= ? AND event_ts < ?
     ORDER BY event_ts ASC
-  `).all(fromMs, toMs) as { ts: number; type: string }[]
+  `).all(fromMs, toMs) as { ts: number; type: string; metadataJson: string }[]
 
   const periods: IdlePeriod[] = []
   let openStart: number | null = null
   for (const event of events) {
     const lower = event.type.toLowerCase()
+    if (lower === 'idle_start') {
+      try {
+        if (JSON.parse(event.metadataJson || '{}').heldForMediaPlayback) continue
+      } catch { /* malformed metadata remains ordinary idle */ }
+    }
     if (lower === 'idle_start' || lower === 'lock_screen' || lower === 'suspend' || lower === 'away_start') {
       if (openStart === null) openStart = event.ts
     } else if (lower === 'idle_end' || lower === 'unlock_screen' || lower === 'resume' || lower === 'away_end') {

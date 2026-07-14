@@ -120,7 +120,7 @@ function lateNightCarryEnd(
   // break); while it is still running, the carry boundary would advance with
   // every session flush — "today" would never begin, its payload would hold
   // only the in-memory live session, and the tracked counter would reset to
-  // seconds on every app switch (the resetting-tracked-time bug, 2026-07-02).
+  // seconds on every app switch.
   const sittingEndsAt = liveSessionStartMs != null && liveSessionStartMs - carryEnd < SITTING_BREAK_MS
     ? nowMs // the live session continues the chain — the sitting is still running
     : carryEnd

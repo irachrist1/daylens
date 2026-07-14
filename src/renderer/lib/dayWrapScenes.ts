@@ -147,7 +147,7 @@ export interface DayWrapFacts {
   mainStartClock: string | null
   /** Per-app semantic context distilled from window titles — what the titles
    *  suggest was being done in each app ("SPCS Build Proposal CCI, 9 sessions"),
-   *  never the raw strings (Stage 0.1). */
+   *  never the raw strings. */
   titleContext: AppTitleContext[]
 }
 
@@ -485,7 +485,7 @@ interface PartAllocation {
  *  actually covers, proportional to span overlap. Before this, a block was
  *  assigned wholly to the bucket of its start time, so a real 11:25am-midnight
  *  work block became "Morning · 11:25am to 12am" — nine hours of afternoon and
- *  evening narrated as morning (2026-07-08 audit, Jul 5). */
+ *  evening narrated as morning. */
 function allocateBlockAcrossParts(block: WorkContextBlock, dayStartMs: number): PartAllocation[] {
   const active = blockActiveSeconds(block)
   const spanStart = Math.max(block.startTime, dayStartMs)

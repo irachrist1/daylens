@@ -1,4 +1,4 @@
-// Chat bench — the terminal IS the UI (ai.md §4.3, ADR 0003).
+// Chat bench — the terminal IS the UI.
 //
 // Drives the exact same `sendMessage` entrypoint the AI tab's IPC handler
 // calls, against a read-only copy of the live DB, with the real Settings
@@ -25,6 +25,8 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import yaml from 'js-yaml'
 import { stageReadOnlyCopyOfRealDb, cleanupRealDbCopy, type RealDbContext } from '../ai-behaviour/realDb'
+import { validateIncrementRanges } from './guards'
+import { resolveBenchModel } from './modelSelection'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 
@@ -44,6 +46,7 @@ interface BenchCase {
   expectArtifactFormat?: string
   userAnswer?: string
   dataDependent?: boolean
+  incrementMinutes?: number
 }
 
 // Phrases the voice contract bans outright — any of these in ANY answer is an
@@ -92,10 +95,19 @@ interface TurnOutcome {
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2)
-  const askIdx = args.indexOf('--ask')
+  const modelIdx = args.indexOf('--model')
+  const modelSelection = resolveBenchModel(modelIdx >= 0 ? args[modelIdx + 1] ?? '' : null)
+  const effectiveArgs = modelIdx >= 0 ? args.filter((_, index) => index !== modelIdx && index !== modelIdx + 1) : args
+  const askIdx = effectiveArgs.indexOf('--ask')
 
   console.log(c('cyan', 'Chat bench · live-DB copy · REAL provider calls (same path as the UI)'))
-  const ctx: RealDbContext = stageReadOnlyCopyOfRealDb()
+  const ctx: RealDbContext = await stageReadOnlyCopyOfRealDb({
+    settingsOverride: modelSelection ? {
+      aiProvider: modelSelection.provider,
+      aiChatProvider: modelSelection.provider,
+      anthropicModel: modelSelection.model,
+    } : undefined,
+  })
   console.log(c('dim', `DB copy: ${ctx.copiedDbPath}`))
 
   // Import AFTER staging so getDb() opens the copy, never the live file.
@@ -104,6 +116,20 @@ async function main(): Promise<void> {
   const { sendMessage } = await import('../../src/main/jobs/aiService')
   const { getThread } = await import('../../src/main/services/artifacts')
   const { isWeakThreadTitle } = await import('../../src/main/lib/threadTitles')
+  const { getSettingsAsync } = await import('../../src/main/services/settings')
+  const settings = await getSettingsAsync()
+  const activeProvider = settings.aiChatProvider ?? settings.aiProvider
+  const activeModel = activeProvider === 'openai' || activeProvider === 'codex-cli' || activeProvider === 'chatgpt-cli'
+    ? settings.openaiModel
+    : activeProvider === 'google' || activeProvider === 'gemini-cli'
+      ? settings.googleModel
+      : activeProvider === 'openrouter'
+        ? settings.openrouterModel
+        : settings.anthropicModel
+  if (modelSelection && activeModel !== modelSelection.model) {
+    throw new Error(`Staged Settings resolved ${activeModel}, expected ${modelSelection.model}.`)
+  }
+  console.log(c('cyan', `Model: ${modelSelection?.label ?? activeModel} · Provider: ${activeProvider} (${modelSelection ? 'terminal-selected staged Settings' : 'live Settings'})`))
 
   async function runTurn(message: string, threadId: number | null, userAnswer?: string): Promise<TurnOutcome> {
     let streamed = ''
@@ -125,9 +151,7 @@ async function main(): Promise<void> {
     // streamed snapshot as a consistency check. Artifacts and the tool trace
     // are read off the same top-level message fields MessageList renders.
     const answer = result.assistantMessage.content
-    if (streamed && !answer.startsWith(streamed.slice(0, 40)) && process.env.BENCH_VERBOSE) {
-      console.log(c('yellow', '  ! streamed snapshot and persisted answer diverge in their first 40 chars'))
-    }
+    if (streamed !== answer) throw new Error('Streamed snapshot and persisted UI answer diverged.')
     return {
       answer,
       threadId: result.threadId,
@@ -148,15 +172,16 @@ async function main(): Promise<void> {
         }
       }
     }
-    if (!benchCase.dataDependent) {
-      for (const needle of benchCase.mustContain ?? []) {
-        if (!final.answer.toLowerCase().includes(needle.toLowerCase())) {
-          failures.push(`final answer missing mustContain: ${JSON.stringify(needle)}`)
-        }
+    for (const needle of benchCase.mustContain ?? []) {
+      if (!final.answer.toLowerCase().includes(needle.toLowerCase())) {
+        failures.push(`final answer missing mustContain: ${JSON.stringify(needle)}`)
       }
     }
     if (benchCase.minDistinctTimes && distinctClockTimes(final.answer) < benchCase.minDistinctTimes) {
       failures.push(`final answer cites ${distinctClockTimes(final.answer)} distinct clock times; needs >= ${benchCase.minDistinctTimes}`)
+    }
+    if (benchCase.incrementMinutes) {
+      failures.push(...validateIncrementRanges(final.answer, benchCase.incrementMinutes))
     }
     if (benchCase.expectArtifactFormat) {
       const artifact = final.artifacts.find((entry) => entry.format === benchCase.expectArtifactFormat)
@@ -175,7 +200,7 @@ async function main(): Promise<void> {
 
   try {
     if (askIdx !== -1) {
-      const question = args.slice(askIdx + 1).join(' ').trim()
+      const question = effectiveArgs.slice(askIdx + 1).join(' ').trim()
       if (!question) {
         console.error(c('red', 'Usage: npm run moment:bench -- --ask "your question"'))
         process.exit(2)
@@ -188,7 +213,7 @@ async function main(): Promise<void> {
       process.exit(0)
     }
 
-    const filter = args.find((arg) => !arg.startsWith('--')) ?? null
+    const filter = effectiveArgs.find((arg) => !arg.startsWith('--')) ?? null
     const cases = loadCases().filter((entry) => !filter || entry.id === filter)
     if (cases.length === 0) {
       console.error(c('red', filter ? `No case id "${filter}"` : 'No cases in cases.yaml'))

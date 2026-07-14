@@ -58,7 +58,7 @@ export interface TimelineBlockEditResult {
   changedFields: Array<'label' | 'category' | 'time'>
 }
 
-// D5: each Apps row leads with what was accomplished, not how long.
+// Each Apps row leads with what was accomplished, not how long.
 // This compact digest provides the headline activity per app over a range —
 // the top work block the app participated in and the top artifact it touched.
 export interface AppActivityDigest {
@@ -243,15 +243,14 @@ export interface WorkContextBlock {
   boundary?: BlockBoundary
   // The live day before it has been analyzed: one neutral provisional block per
   // idle-bounded stretch ("Active now"), never per-activity named. Set only on
-  // the today view before Analyze Day / nightly finalize (timeline.md §4). The
-  // renderer hides Rename/Merge/Hide and the category badge for these.
+  // the today view before Analyze Day / nightly finalize. The renderer hides
+  // Rename/Merge/Hide and the category badge for these.
   provisional?: boolean
 }
 
-// A gap on the timeline always carries the reason it happened (founder
-// decision, Jul 2, 2026) — looking at a day retroactively you can tell what
-// kind of absence each blank stretch was, derived from the activity-state
-// events that covered it:
+// A gap on the timeline always carries the reason it happened — looking at a
+// day retroactively you can tell what kind of absence each blank stretch was,
+// derived from the activity-state events that covered it:
 //   asleep    — machine suspended / lid closed
 //   locked    — screen locked; user confirmed not present
 //   idle      — machine open and unlocked, but no input for a sustained stretch
@@ -338,14 +337,14 @@ export interface WorkMemorySettingsSummary {
 }
 
 // Work memory as an editable, human-readable profile (ChatGPT-style) — replaces
-// the opaque pattern table. See docs/specs/work-memory.md.
+// the opaque pattern table.
 type WorkMemoryFactOrigin = 'drafted' | 'user'
-// DEV-107: where a fact came from, shown in the Manage-memory view. Durability
-// is keyed on origin, never source.
+// Where a fact came from, shown in the Manage-memory view. Durability is
+// keyed on origin, never source.
 type WorkMemoryFactSource = 'evidence' | 'chat' | 'hand'
-// DEV-107: which readable section a fact belongs to in the Manage-memory view
-// (memory.md §3 — "general memory in its sections"). Derived deterministically
-// from the fact, never persisted — grouping is cosmetic, never durability.
+// Which readable section a fact belongs to in the Manage-memory view.
+// Derived deterministically from the fact, never persisted — grouping is
+// cosmetic, never durability.
 export type WorkMemoryCategory = 'work' | 'personal' | 'preferences'
 
 export interface WorkMemoryFact {
@@ -360,8 +359,8 @@ export interface WorkMemoryProfile {
   facts: WorkMemoryFact[]
 }
 
-// DEV-108: one client's scoped memory, shown under that client in the
-// Manage-memory view (memory.md §2.2 / §3). A client is a named memory scope.
+// One client's scoped memory, shown under that client in the Manage-memory
+// view. A client is a named memory scope.
 export interface ClientMemoryGroup {
   clientId: string
   clientName: string
@@ -376,7 +375,7 @@ export interface ScopedMemoryProfile {
   clients: ClientMemoryGroup[]
 }
 
-// DEV-107: one plain-language entry in the memory audit (memory.md §3).
+// One plain-language entry in the memory audit.
 export interface MemoryAuditEntry {
   id: string
   action: 'remembered' | 'updated' | 'forgot'
@@ -558,13 +557,13 @@ interface AIReviewFocusAction {
 
 export type AIMessageAction = AIStartFocusAction | AIStopFocusAction | AIReviewFocusAction
 
-// ── AI action widgets (DEV-109, ai-actions.md) ──────────────────────────────
+// ── AI action widgets ───────────────────────────────────────────────────────
 // The AI chat can ACT, not just answer. When you tell it to change something —
 // rename a block, remember a fact, attribute an afternoon to a client — the main
 // process resolves the instruction into one of these *proposals* and the chat
 // renders a preview widget. Nothing is written until you confirm; the commit
-// then runs through the SAME manual-edit pipeline (invariants 1, 3, 5). This is
-// separate from the read-only resolvers (ADR 0002) — acting is explicit.
+// then runs through the SAME manual-edit pipeline. This is separate from the
+// read-only resolvers — acting is explicit.
 
 // The model picks the surface per action: a small inline card for a one-line
 // change, the side canvas for a richer multi-item edit.
@@ -675,7 +674,7 @@ export interface AIChatStreamEvent {
   status?: string
 }
 
-/** The agent's one clarifying question (ADR 0003), pushed to the renderer. */
+/** The agent's one clarifying question, pushed to the renderer. */
 export interface AIAgentQuestionEvent {
   questionId: string
   requestId: string | null
@@ -685,7 +684,7 @@ export interface AIAgentQuestionEvent {
 }
 
 export interface AIThreadMessageMetadata {
-  /** Agent-turn evidence (ADR 0003): which tools ran and what they returned. */
+  /** Agent-turn evidence: which tools ran and what they returned. */
   agent?: { toolTrace: Array<{ tool: string; input: unknown; output: string }>; stepCount: number; groundingRetried: boolean }
   answerKind?: AIAnswerKind | null
   suggestedFollowUps?: FollowUpSuggestion[]
@@ -714,7 +713,7 @@ export interface AIThreadMessage {
   actions?: AIMessageAction[]
   actionWidgets?: AIActionWidget[]
   artifacts?: AIMessageArtifact[]
-  /** Agent-turn evidence (ADR 0003), mirrored from metadata so every caller (UI, bench) reads one shape. */
+  /** Agent-turn evidence, mirrored from metadata so every caller (UI, bench) reads one shape. */
   agent?: AIThreadMessageMetadata['agent']
   rating?: AIMessageRating | null
   ratingUpdatedAt?: number | null
@@ -745,7 +744,7 @@ export interface AIStarterSuggestionResult {
   error: string | null
 }
 
-// FB7: post-answer transforms. The renderer signals the transform explicitly so
+// Post-answer transforms. The renderer signals the transform explicitly so
 // the main process rewrites the SPECIFIC prior answer (with its grounded numbers)
 // instead of mis-routing a disguised English prompt to the generic report bundle.
 export type AIAnswerTransformKind = 'shorter' | 'checklist' | 'bullets' | 'report'
@@ -795,7 +794,7 @@ export interface AIThreadDetail {
   hasEarlier: boolean
 }
 
-// D4: per-thread overrides, stored in ai_threads.metadata_json (no migration).
+// Per-thread overrides, stored in ai_threads.metadata_json (no migration).
 // `provider` + `model` are set together (a model picked from the catalog) and
 // take precedence over the global chat provider for this thread's turns, but
 // only when that provider actually has a key. `instructions` are appended to
@@ -1062,10 +1061,10 @@ export interface AppDetailPayload {
   /**
    * Where a browser app's time went — present only for browser apps
    * (Chrome, Safari, Arc, Dia, …); omit for native apps so the renderer
-   * hides the section. Replaces the old separate topDomains/topPages pair
-   * (2026-07-05): both were raw sums over browser history that kept
-   * accruing in the background, so they could never add up to the app's
-   * own foreground total. This tree reconciles by construction:
+   * hides the section. Replaces a separate topDomains/topPages pair that
+   * were raw sums over browser history that kept accruing in the
+   * background, so they could never add up to the app's own foreground
+   * total. This tree reconciles by construction:
    * Σ page.totalSeconds = its domain's totalSeconds, Σ domain.totalSeconds
    * = attributedSeconds, and attributedSeconds + unattributedSeconds =
    * totalSeconds (the same number as the header). `unattributedSeconds`
@@ -1132,6 +1131,7 @@ export type AIJobType =
   | 'week_review'
   | 'app_narrative'
   | 'chat_answer'
+  | 'chat_thread_title'
   | 'chat_followup_suggestions'
   | 'report_generation'
   | 'attribution_assist'
@@ -1224,7 +1224,8 @@ export interface DaySnapshot {
   longestBlock: { label: string; seconds: number; startClock: string } | null
   /** Sum of meeting-block SPANS — meeting truth is the calendar span, not
    *  active seconds (a 73-minute call is 73 minutes even hands-off). Additive;
-   *  absent on snapshots frozen before 2026-07-08. */
+   *  absent on snapshots frozen with an older builder version that predates
+   *  this field. */
   meetingsSpanSeconds?: number
   /** SNAPSHOT_BUILDER_VERSION at freeze time. A frozen row whose version is
    *  older than the current builder is stale by construction and gets rebuilt
@@ -1236,7 +1237,7 @@ export interface DaySnapshot {
   finalizedAt: number
 }
 
-// ─── External signals (wrapped Stage 0.2) ─────────────────────────────────────
+// ─── External signals ──────────────────────────────────────────────────────
 // Optional, per-day results from local connectors. Each connector is
 // independent: unavailable or unpermissioned sources simply produce no row.
 // Stored in external_signals keyed by date+source.
@@ -1297,9 +1298,9 @@ export interface StoredExternalSignal<T = unknown> {
 // event-type inference: what a calendar event most likely WAS (a class, a 1:1,
 // a presentation, ...), inferred deterministically from the title, attendee
 // count, and duration already on CalendarEventSignal — never a network call or
-// an AI guess. See src/main/services/eventTypeInference.ts for the classifier
-// and docs/specs/voice.md for how the writer may use it (only at high
-// confidence; otherwise it stays literal, "the meeting").
+// an AI guess. See src/main/services/eventTypeInference.ts for the classifier.
+// The writer may use this only at high confidence; otherwise it stays
+// literal, "the meeting".
 export type EventType =
   | 'class'
   | 'one_on_one'
@@ -1332,9 +1333,9 @@ export interface MeetingNotesSignal {
   notes: MeetingNoteSignal[]
 }
 
-/** The day's external signals, RESOLVED for the wrap writer (Stage 0 Gap 1):
- *  sanitized, humanized, pre-formatted, and stripped of anything the model must
- *  never echo (raw paths, branches, clock times it can't ground). Each block is
+/** The day's external signals, RESOLVED for the wrap writer: sanitized,
+ *  humanized, pre-formatted, and stripped of anything the model must never
+ *  echo (raw paths, branches, clock times it can't ground). Each block is
  *  null when its connector found nothing. This is what turns "4h in Cursor" into
  *  "wrote 9 commits to the billing service and opened a PR". */
 export interface DayEnrichment {
@@ -1375,16 +1376,16 @@ export interface DayEnrichment {
   } | null
 }
 
-/** Discovered optional enrichment sources shown in Settings (Stage 0.2):
- *  MCP servers from the Claude Desktop config and focus tools on this machine.
- *  Discovery only — nothing is called until the user enables it AND a future
- *  stage actually wires the enrichment. */
+/** Discovered optional enrichment sources shown in Settings: MCP servers from
+ *  the Claude Desktop config and focus tools on this machine. Discovery
+ *  only — nothing is called until the user enables it AND the enrichment is
+ *  actually wired up. */
 export interface EnrichmentSourcesState {
   mcpServers: Array<{ name: string; transport: 'stdio' | 'http' | 'unknown'; enabled: boolean }>
   focusApps: Array<{ app: string; installed: boolean; enabled: boolean }>
 }
 
-// ─── Wrap pre-flight (wrapped Stage 0.4) ──────────────────────────────────────
+// ─── Wrap pre-flight ────────────────────────────────────────────────────────
 // Honest, specific warnings BEFORE a wrap generates. None of them block:
 // the user can always generate anyway with one tap.
 
@@ -1635,12 +1636,12 @@ export interface SyncStatus {
 }
 
 export interface AppSettings {
-  /** MCP servers the chat agent may connect to (ADR 0003). Same shape as
-   *  Claude Desktop entries; edited in settings JSON for now. */
+  /** MCP servers the chat agent may connect to. Same shape as Claude Desktop
+   *  entries; edited in settings JSON for now. */
   mcpServers?: Array<{ name: string; command: string; args?: string[]; env?: Record<string, string> }>
   // Provider API keys are stored in OS keychain via keytar (never in plain-text)
-  // Anonymous analytics is always on (2026-07-07); the only kill switch is
-  // building without a PostHog key.
+  // Anonymous analytics is always on; the only kill switch is building
+  // without a PostHog key.
   shareAIFeedbackExamples: boolean // legacy setting; cloud feedback upload is disabled in local-only builds
   launchOnLogin: boolean
   theme: AppTheme
@@ -1684,7 +1685,7 @@ export interface AppSettings {
   mcpServerEnabled?: boolean
   workMemoryConsolidationEnabled?: boolean   // Evening consolidation: archive the day, score and promote patterns, decay stale ones.
   useRemoteAI?: boolean   // legacy setting; remote workspace AI is disabled in local-only builds.
-  // T3 — Tracking Controls (opt-in, OFF by default). When disabled and not
+  // Tracking Controls (opt-in, OFF by default). When disabled and not
   // paused, capture is unchanged. See src/shared/trackingControls.ts.
   trackingControlsEnabled?: boolean
   trackingExcludedApps?: string[]   // bundle ids and/or app names
@@ -1697,9 +1698,9 @@ export interface AppSettings {
   // #rrggbb + known categories on write (see shared/activityColors.ts).
   activityColorOverrides?: Partial<Record<AppCategory, string>>
   dimLeisureBlocks?: boolean        // fade non-work blocks on the calendar; default true
-  // Optional enrichment sources (wrapped Stage 0.2): user enable/disable flags
-  // for discovered MCP servers ("mcp:notion") and focus apps ("focus:Session").
-  // Discovery is free; nothing is called until enabled AND wired in a later stage.
+  // Optional enrichment sources: user enable/disable flags for discovered
+  // MCP servers ("mcp:notion") and focus apps ("focus:Session"). Discovery
+  // is free; nothing is called until enabled AND the enrichment is wired up.
   enrichmentSources?: Record<string, boolean>
 }
 
@@ -2210,7 +2211,7 @@ export const IPC = {
     GET_PERMISSION_STATE: 'tracking:get-permission-state',
     GET_PERMISSION_DETAILS: 'tracking:get-permission-details',
     REQUEST_SCREEN_PERMISSION: 'tracking:request-screen-permission',
-    // T3: delete already-captured history for an excluded app/site.
+    // Delete already-captured history for an excluded app/site.
     DELETE_APP_HISTORY: 'tracking:delete-app-history',
     DELETE_SITE_HISTORY: 'tracking:delete-site-history',
     DELETE_ACTIVITY: 'tracking:delete-activity',

@@ -63,7 +63,7 @@ export default function DayWrapped({
   const [reloadKey, setReloadKey] = useState(0)
   const gated = underThreshold && !forced
 
-  // Pre-flight data quality gate (wrapped Stage 0.4): before the FIRST
+  // Pre-flight data quality gate: before the FIRST
   // generation, surface honest, specific warnings about thin data. One tap
   // proceeds; an already-generated wrap opens directly, no nagging. The
   // live-day lowWork warning is owned by the 2h threshold gate above.

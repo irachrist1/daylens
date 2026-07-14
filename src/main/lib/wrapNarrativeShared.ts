@@ -43,7 +43,7 @@ export const HOMEWORK_GUILT_PATTERNS = [
 ]
 
 // ─── Evidence honesty (say only what was observed) ───────────────────────────
-// The one written-once contract ("wrapped yes or no.md"): every sentence claims
+// The one written-once contract (docs/product/product.md, evidence-before-narrative): every sentence claims
 // only what the tracked data can back. The DIRECTIVES go into both the day and
 // the period system prompts; the PATTERNS below are the deterministic guard the
 // runtime validator AND the benchmark share, so a rule lives in exactly one place.

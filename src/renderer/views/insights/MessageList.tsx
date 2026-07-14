@@ -94,7 +94,7 @@ export interface MessageListProps {
   onLoadEarlier?: () => void
 }
 
-// FB7: "Turn into…" — post-answer transforms on the latest answer. Each runs a
+// "Turn into…" — post-answer transforms on the latest answer. Each runs a
 // real model call that rewrites THIS answer's grounded content into the chosen
 // form (see request.transform); the menu is a small hover-light popover.
 function TransformMenu({ onTransform }: { onTransform: (kind: AnswerTransform) => void }) {
@@ -135,7 +135,7 @@ function TransformMenu({ onTransform }: { onTransform: (kind: AnswerTransform) =
   )
 }
 
-// R4: branded header label per error class — never a raw provider/channel string.
+// Branded header label per error class — never a raw provider/channel string.
 const ERROR_HEADER: Record<AIProviderErrorCode, string> = {
   transient_rate_limit: 'Provider busy',
   quota_exhausted: 'Limit reached',
@@ -212,9 +212,8 @@ function MessageListImpl({
                   onSnapshotUpdate={scrollToBottom}
                 />
               ) : message.state === 'cancelled' ? (
-                // Real cancel (W1-C): an honestly-stopped turn — no partial
-                // text presented as an answer, no error card. Retry re-runs
-                // the question in place.
+                // An honestly-stopped turn — no partial text presented as an
+                // answer, no error card. Retry re-runs the question in place.
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
                   <span style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', fontStyle: 'italic' }}>
                     Stopped — no answer was generated.
@@ -241,7 +240,7 @@ function MessageListImpl({
                     >
                       <IconRetry /> Retry
                     </button>
-                    {/* R2: on a hard wall, offer a one-tap switch to another
+                    {/* On a hard wall, offer a one-tap switch to another
                         configured provider instead of looping on the dead one. */}
                     {message.errorInfo?.alternateProviders?.map((alt) => (
                       <button

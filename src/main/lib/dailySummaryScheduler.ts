@@ -55,11 +55,10 @@ export interface DailyNotifierState {
 }
 
 // ─── AI attempt budget ────────────────────────────────────────────────────────
-// Cost audit 2026-07-07: the notifier runs its checks every 60s. When a check's
+// The notifier runs its checks every 60s. When a check's
 // window was open but the wrap call failed (or timed out and was discarded), no
 // state was written — so the next minute spent ANOTHER full AI call, an
-// AI-call-per-minute loop for the rest of the window (~116 system-triggered
-// wrapped_narrative calls in 3 days). This budget makes a failed attempt cost
+// AI-call-per-minute loop for the rest of the window. This budget makes a failed attempt cost
 // something: at most AI_ATTEMPT_MAX_PER_DAY attempts per notification kind per
 // day, spaced at least AI_ATTEMPT_MIN_GAP_MS apart. A SUCCESSFUL attempt ends
 // the loop through the existing last*Date state, so the budget only ever gates

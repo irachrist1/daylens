@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // The one humanizer for every user-facing title.
 //
-// Wave 1 leaked raw machine strings straight onto the surface: a notebook
+// Without it, raw machine strings leak straight onto the surface: a notebook
 // filename ("ResNet50_Malaria_Group3_Tonny_Colab.ipynb"), a raw video title
 // ("I spent $200 to try Opus 4.8, was it worth it?"), a domain-derived label
 // ("Free Movies"). Every title the user sees must pass through here first.

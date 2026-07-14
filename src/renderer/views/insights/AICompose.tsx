@@ -12,14 +12,14 @@ export interface AIComposeHandle {
 interface AIComposeProps {
   onSubmit: (text: string) => void
   loading: boolean
-  // Real cancel (W1-C): while loading, the send button becomes Stop and calls
-  // this — it aborts the in-flight provider request, not just the spinner.
+  // While loading, the send button becomes Stop and calls this — it aborts
+  // the in-flight provider request, not just the spinner.
   onCancel?: () => void
   placeholder?: string
   variant?: 'docked' | 'starter'
 }
 
-// D5: composer affordances — `/` commands and `@` entity mentions. FB11: mentions
+// Composer affordances — `/` commands and `@` entity mentions. Mentions
 // insert as inline icon chips (contenteditable), like Notion/Raycast.
 type SlashCommand = { id: string; label: string; hint: string; prompt: string }
 const SLASH_COMMANDS: SlashCommand[] = [
@@ -299,9 +299,9 @@ function AIComposeImpl(
             ))}
         </div>
       )}
-      {/* Compact composer (founder report, 2026-07-05): the box starts at a
-          single centered line and grows only as the text does — never a big
-          empty well with the caret stranded at the top. */}
+      {/* Compact composer: the box starts at a single centered line and grows
+          only as the text does — never a big empty well with the caret
+          stranded at the top. */}
       <div style={{
         display: 'flex',
         alignItems: 'flex-end',

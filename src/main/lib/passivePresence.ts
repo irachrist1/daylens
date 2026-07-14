@@ -15,6 +15,7 @@ export type PassivePresenceInput = {
   appName: string
   rawAppName: string
   windowTitle: string | null
+  passivePresence?: boolean
 }
 
 // Lean-back media: a video or music surface, watched not driven.
@@ -31,6 +32,7 @@ const LIVE_CALL_OR_CLASS_RE =
 /** True when the session is presence (watching/attending), so a no-input idle
  *  stretch should hold it open rather than flush it as away. */
 export function looksLikePassivePresenceSession(session: PassivePresenceInput): boolean {
+  if (session.passivePresence) return true
   if (session.category === 'entertainment' || session.category === 'meetings') return true
   const haystack = `${session.bundleId} ${session.appName} ${session.rawAppName} ${session.windowTitle ?? ''}`.toLowerCase()
   return PASSIVE_MEDIA_RE.test(haystack) || LIVE_CALL_OR_CLASS_RE.test(haystack)

@@ -8,7 +8,7 @@
 //   %LOCALAPPDATA%\ConnectedDevicesPlatform\<account-folder>\ActivitiesCache.db
 //
 // ActivityType=5 rows are user app activities with StartTime/EndTime as Unix
-// seconds (seconds since 1970-01-01). The DB may not exist on Windows 11 22H2+
+// seconds (seconds since the Unix epoch). The DB may not exist on Windows 11 22H2+
 // where Microsoft removed the Timeline UI — we fail silently in that case.
 
 import fs from 'node:fs'

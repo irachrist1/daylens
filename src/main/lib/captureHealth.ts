@@ -1,14 +1,14 @@
 // Capture-gap honesty detector — pure functions, no Electron/DB access.
 //
-// The Jul 7 incident: the tracker recorded nothing from 00:29 to 11:15 local
-// (a ~10.8h wall gap), but the monotonic clock — which pauses while macOS is
-// asleep — only advanced ~5.0h across that gap. That means the Mac was
-// actually asleep for ~5.8h and *awake but unrecorded* for ~5h: real usage
-// the tracker silently missed. That distinction is the whole point of this
-// module: `asleep` gaps are invisible by design and safe to stay silent
-// about, `blind` gaps are a tracker failure and the wrap must say so plainly.
-//
-// See docs/specs/wrapped-agent-plan.md, "Capture-gap honesty".
+// A wall-clock gap with no recorded activity can mean two very different
+// things: the tracker recorded nothing for a stretch of wall-clock time, but
+// the monotonic clock — which pauses while macOS is asleep — may have
+// advanced far less across that same gap. When the monotonic advance is much
+// smaller than the wall gap, the machine was actually asleep for most of it
+// and *awake but unrecorded* for the rest: real usage the tracker silently
+// missed. That distinction is the whole point of this module: `asleep` gaps
+// are invisible by design and safe to stay silent about, `blind` gaps are a
+// tracker failure and the wrap must say so plainly.
 
 export type GapVerdict = 'asleep' | 'blind' | 'unknown'
 

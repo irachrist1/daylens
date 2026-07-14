@@ -1,8 +1,8 @@
-// Retention for the app's own AI telemetry (V2 ship plan W1-B / storage audit).
+// Retention for the app's own AI telemetry.
 //
 // ai_usage_events grows one row per provider call and NOTHING ever pruned it:
-// the founder's real DB carried 888,767 rows (~364 MB with indexes — 55% of a
-// 660 MB database), most of them the May–June 2026 failing-relabel storm.
+// one real-world DB carried 888,767 rows (~364 MB with indexes — 55% of a
+// 660 MB database), most of them from a failing-relabel storm that kept retrying.
 //
 // The policy:
 //   - Keep full per-event detail for the most recent 90 local days. That
@@ -36,8 +36,8 @@
 // growing and all reclaimed space is reused by future writes. Physically
 // shrinking the file needs a VACUUM. On DBs with auto_vacuum=INCREMENTAL we
 // reclaim pages right here with chunked `PRAGMA incremental_vacuum`; initDb
-// now enables that mode for brand-new databases. Existing installs (like the
-// founder's) were created with auto_vacuum=NONE, and flipping it on requires
+// now enables that mode for brand-new databases. Existing installs were
+// created with auto_vacuum=NONE, and flipping it on requires
 // a full VACUUM first — a blocking, disk-doubling operation we deliberately
 // do NOT run automatically behind the user's back. For those DBs the run
 // logs the reclaimable freelist size so the win is visible and inspectable.
@@ -50,7 +50,7 @@ import { maintenanceRunAt, markMaintenanceRun } from '../db/maintenance'
 import { localDateString, localDayBounds, shiftLocalDateString } from '../lib/localDate'
 
 export const AI_USAGE_DETAIL_RETENTION_DAYS = 90
-// Sized from a measured 900k-row fixture (2026-07-12, M-series MacBook,
+// Sized from a measured 900k-row fixture (M-series MacBook,
 // file-backed WAL DB): 2k rows per transaction = ~157ms average / 654ms max
 // write lock — short enough that the main process never visibly stalls —
 // and a first-run backlog of 837k rows still cleared in ~66s of cumulative

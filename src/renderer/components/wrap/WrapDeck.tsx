@@ -45,7 +45,7 @@ export default function WrapDeck({
   meta: WrapDeckMeta
   narrative: WrapDeckNarrativeView
   seed: number
-  /** Filename stem for exports ("daylens-2026-07-06" / "daylens-week-..."). */
+  /** Filename stem for exports ("daylens-<date>" / "daylens-week-..."). */
   exportStem: string
   /** "generated 2h ago" marker + Regenerate on the finale, when persisted. */
   generatedLabel?: string | null

@@ -60,7 +60,7 @@ interface TraceProsePassEvent {
   fallback?: 'timestamp_mismatch' | 'empty' | 'error' | 'timeout'
 }
 
-// Emitted by the planner (ADR 0002 step 1): which resolvers it chose, and
+// Emitted by the planner: which resolvers it chose, and
 // whether that came from a deterministic shortcut, the constrained model call,
 // or the nearest-answerable fallback.
 interface TracePlannerDecisionEvent {
@@ -69,7 +69,7 @@ interface TracePlannerDecisionEvent {
   queries: unknown[]
 }
 
-// Emitted by the phrase pass (ADR 0002 step 3). `input` is the resolved facts
+// Emitted by the phrase pass. `input` is the resolved facts
 // block; `output` is the answer handed to the user.
 interface TracePhrasePassEvent {
   kind: 'phrase_pass'

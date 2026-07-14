@@ -185,6 +185,11 @@ function intentTitleFromPrompt(message: string): string | null {
     return 'Focus session'
   }
 
+  if (/\b(?:break|split|divide)\b.*\b(?:into|down|chunks?|increments?|intervals?)\b|\bbreakdown\b/.test(normalized)) {
+    const tf = topicTimeAnchor(normalized)
+    return tf ? `${tf} breakdown` : 'Activity breakdown'
+  }
+
   // FB6: "what did I work on / do <timeframe>" must become a real topic phrase
   // ("Today's work"), never the bare timeframe word ("today").
   if (
@@ -302,6 +307,18 @@ function extractSubjectTitle(message: string): string | null {
 export function normalizeThreadTitle(title: string | null | undefined, fallback = DEFAULT_THREAD_TITLE): string {
   const normalized = collapseWhitespace(title ?? '')
   return normalized || fallback
+}
+
+export function parseGeneratedThreadTitle(raw: string): string | null {
+  const candidate = collapseWhitespace(raw)
+    .replace(/^```(?:text)?\s*|\s*```$/g, '')
+    .replace(/^["'“”]+|["'“”]+$/g, '')
+    .replace(/[.!?;:]+$/g, '')
+    .trim()
+  const words = candidate.split(' ').filter(Boolean)
+  if (words.length < 2 || words.length > 6) return null
+  if (candidate.length > MAX_THREAD_TITLE_LENGTH || isWeakThreadTitle(candidate)) return null
+  return titleCase(candidate)
 }
 
 export function isWeakThreadTitle(title: string | null | undefined): boolean {

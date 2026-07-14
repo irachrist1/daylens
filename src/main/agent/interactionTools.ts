@@ -1,8 +1,8 @@
-// Interaction tools for the chat agent (ADR 0003): the clarifying question
+// Interaction tools for the chat agent: the clarifying question
 // (options + free-text escape, resolved by the renderer over IPC or by the
 // bench's scripted answerer) and real downloadable file artifacts (CSV, Excel,
 // Markdown). Both take injected handlers so the IPC path and the terminal
-// bench share this exact code (ai.md §4.3).
+// bench share this exact code.
 import { tool } from 'ai'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
@@ -29,6 +29,14 @@ export interface InteractionDeps {
 
 const CELL = z.union([z.string(), z.number(), z.null()])
 
+export interface CreateArtifactInput {
+  title: string
+  format: 'xlsx' | 'csv' | 'markdown'
+  columns?: string[]
+  rows?: Array<Array<string | number | null>>
+  content?: string
+}
+
 function safeFilename(title: string, extension: string): string {
   const base = title.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'export'
   return `${base}-${randomUUID().slice(0, 8)}.${extension}`
@@ -49,6 +57,36 @@ function toCsv(columns: string[], rows: Array<Array<string | number | null>>): s
     return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
   }
   return [columns.map(cell).join(','), ...rows.map((row) => row.map(cell).join(','))].join('\n')
+}
+
+export async function createArtifact(deps: InteractionDeps, input: CreateArtifactInput) {
+  const { title, format, columns, rows, content } = input
+  if (format === 'markdown') {
+    if (!content?.trim()) return { found: false, reason: 'Markdown artifacts need content.' }
+  } else if (!columns?.length || !rows?.length) {
+    return { found: false, reason: `${format} artifacts need columns and rows.` }
+  }
+  await fs.mkdir(deps.artifactDir, { recursive: true })
+  const extension = format === 'markdown' ? 'md' : format
+  const filePath = path.join(deps.artifactDir, safeFilename(title, extension))
+  if (format === 'xlsx') {
+    await writeXlsx(filePath, title, columns!, rows!)
+  } else if (format === 'csv') {
+    await fs.writeFile(filePath, toCsv(columns!, rows!), 'utf8')
+  } else {
+    await fs.writeFile(filePath, `# ${title}\n\n${content}`, 'utf8')
+  }
+  const artifact: AIMessageArtifact = {
+    id: randomUUID(),
+    kind: format === 'markdown' ? 'report' : 'export',
+    format: format === 'xlsx' ? 'xlsx' : format === 'csv' ? 'csv' : 'markdown',
+    title,
+    path: filePath,
+    openTarget: { kind: 'local_path', value: filePath },
+    createdAt: Date.now(),
+  }
+  deps.onArtifact(artifact)
+  return { found: true, savedTo: filePath, filename: path.basename(filePath), title, columns: columns ?? null, rowCount: rows?.length ?? null }
 }
 
 export function buildInteractionTools(deps: InteractionDeps) {
@@ -75,36 +113,7 @@ export function buildInteractionTools(deps: InteractionDeps) {
         rows: z.array(z.array(CELL).max(20)).max(2000).optional().describe('Data rows (xlsx/csv)'),
         content: z.string().max(200_000).optional().describe('Markdown body (markdown format only)'),
       }),
-      execute: async ({ title, format, columns, rows, content }) => {
-        if (format === 'markdown') {
-          if (!content?.trim()) return { found: false, reason: 'Markdown artifacts need content.' }
-        } else if (!columns?.length || !rows?.length) {
-          return { found: false, reason: `${format} artifacts need columns and rows.` }
-        }
-        await fs.mkdir(deps.artifactDir, { recursive: true })
-        const extension = format === 'markdown' ? 'md' : format
-        const filePath = path.join(deps.artifactDir, safeFilename(title, extension))
-        if (format === 'xlsx') {
-          await writeXlsx(filePath, title, columns!, rows!)
-        } else if (format === 'csv') {
-          await fs.writeFile(filePath, toCsv(columns!, rows!), 'utf8')
-        } else {
-          await fs.writeFile(filePath, `# ${title}\n\n${content}`, 'utf8')
-        }
-        const artifact: AIMessageArtifact = {
-          id: randomUUID(),
-          kind: format === 'markdown' ? 'report' : 'export',
-          format: format === 'xlsx' ? 'xlsx' : format === 'csv' ? 'csv' : 'markdown',
-          title,
-          path: filePath,
-          openTarget: { kind: 'local_path', value: filePath },
-          createdAt: Date.now(),
-        }
-        deps.onArtifact(artifact)
-        // Echo title + columns back so the answer can name them without the
-        // grounding verifier reading its own headers as fabricated entities.
-        return { found: true, savedTo: filePath, filename: path.basename(filePath), title, columns: columns ?? null, rowCount: rows?.length ?? null }
-      },
+      execute: async (input) => createArtifact(deps, input),
     }),
   }
 }

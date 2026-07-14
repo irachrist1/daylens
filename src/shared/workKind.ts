@@ -3,7 +3,7 @@
 //
 // Daylens has always known *what category* an activity is (development,
 // browsing, entertainment…) but never *whether it is work at all*. That single
-// missing distinction is the root cause of nearly every Wave 1 defect: coding
+// missing distinction is the root cause of a whole class of defects: coding
 // merged into a video block, a documentary tagged "execution", a leisure day
 // scored for focus, and a YouTube title surfaced as "what mattered".
 //
@@ -137,9 +137,9 @@ export function kindForDomain(host: string | null | undefined): WorkKind | null 
   const normalized = normalizeHost(host)
   if (!normalized) return null
 
-  // Leisure/adult/social sinks: domainPolicy already enumerates them.
+  // Leisure/social sinks: domainPolicy already enumerates them.
   const policy = policyForHost(normalized)
-  if (policy === 'entertainment' || policy === 'adult' || policy === 'social_feed') {
+  if (policy === 'entertainment' || policy === 'social_feed') {
     return 'leisure'
   }
 
@@ -160,8 +160,8 @@ export function kindForDomain(host: string | null | undefined): WorkKind | null 
   // than the short allowlist above — Canva, Figma, Linear, hosted consoles.
   // Before this, a whole browser-based design day on canva.com resolved to
   // "personal" because the domain carried "no signal" here while the category
-  // layer knew exactly what it was (2026-07-08 audit: Jul 5 read 50m work /
-  // 9h37m personal for a day spent redesigning a website in the browser).
+  // layer knew exactly what it was (a day spent redesigning a website in the
+  // browser once read as 50m work / 9h37m personal because of this gap).
   const category = categoryForDomain(normalized)
   if (category) {
     const kind = kindForCategory(category)
@@ -262,11 +262,11 @@ const DISTRIBUTION_KIND_MIN_SECONDS = 120
 
 /** The kind implied by a block's site-weighted category distribution, or null
  *  when the distribution carries no real signal (all browsing/system). This is
- *  the same reconciled distribution that drives the block's category and color
- *  (2026-07-06 site-weighted fix), so kind and category can no longer disagree:
- *  a block that is mostly design + development seconds is work, even when every
- *  one of those seconds happened inside a browser on a domain the short
- *  work-domain allowlist has never heard of. */
+ *  the same reconciled distribution that drives the block's category and color,
+ *  so kind and category can no longer disagree: a block that is mostly design
+ *  + development seconds is work, even when every one of those seconds
+ *  happened inside a browser on a domain the short work-domain allowlist has
+ *  never heard of. */
 export function kindFromCategoryDistribution(
   distribution: Partial<Record<AppCategory, number>> | undefined,
 ): WorkKind | null {

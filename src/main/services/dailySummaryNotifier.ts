@@ -39,9 +39,9 @@ const MAX_TRACKED_RECAP_DATES = 21
 // only for the next minute's check to spend another call.
 const AI_REPORT_TIMEOUT_MS = 26_000
 
-// Spend an AI attempt only when the retry budget allows it (cost audit
-// 2026-07-07: a failing wrap call used to retry every 60s for the whole
-// notification window). Records the attempt BEFORE the call so a crash or
+// Spend an AI attempt only when the retry budget allows it — otherwise a
+// failing wrap call would retry every 60s for the whole notification
+// window. Records the attempt BEFORE the call so a crash or
 // timeout still counts against the budget.
 function withAiAttemptBudget(kind: AiAttemptKind, date: string): boolean {
   const state = readState()

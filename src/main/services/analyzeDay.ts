@@ -102,9 +102,8 @@ export async function analyzeTimelineDay(
   let attempted = 0
   const failures: string[] = []
 
-  // REPAIR (v2-ship-plan W1-A): a day stored before the absence guard existed
-  // can contain a block that spans a real absence of 15+ minutes — on July 10
-  // a 3:49 PM–10:05 PM block sat over an 8:01–9:39 PM absence. Detect any such
+  // REPAIR: a day stored before the absence guard existed can contain a
+  // block that spans a real absence of 15+ minutes. Detect any such
   // block and force the day to rebuild from its sessions: the pipeline now
   // refuses to join across the gap (scoreBoundary treats a real absence as a
   // hard cut that outranks every stored merge correction), so the block splits

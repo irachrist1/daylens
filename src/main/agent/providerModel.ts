@@ -1,8 +1,8 @@
-// Maps the app's ResolvedProviderConfig (Settings-chosen provider + model,
-// invariant 12) onto an AI SDK LanguageModel for the chat agent loop.
+// Maps the app's ResolvedProviderConfig (Settings-chosen provider + model)
+// onto an AI SDK LanguageModel for the chat agent loop.
 // Direct API providers and the managed proxy are supported; CLI providers
 // cannot make structured tool calls, so the chat surface says so honestly
-// instead of silently degrading (ADR 0003).
+// instead of silently degrading.
 import { createAnthropic } from '@ai-sdk/anthropic'
 import { createOpenAI } from '@ai-sdk/openai'
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
@@ -10,6 +10,7 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import type { LanguageModel } from 'ai'
 import type { AIProviderMode } from '@shared/types'
 import type { ResolvedProviderConfig } from '../services/aiOrchestration'
+import { assertRealDayExternalAccessAllowed } from '../lib/realDayHarness'
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'
 
@@ -19,6 +20,7 @@ export function providerSupportsAgentTools(provider: AIProviderMode, transport?:
 }
 
 export function languageModelFor(config: ResolvedProviderConfig): LanguageModel {
+  assertRealDayExternalAccessAllowed('model-provider')
   if (config.transport === 'managed') {
     if (!config.baseUrl) throw new Error('Managed AI transport is missing its base URL.')
     return createOpenAICompatible({

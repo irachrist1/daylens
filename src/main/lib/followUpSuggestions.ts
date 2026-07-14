@@ -77,6 +77,7 @@ const GENERIC_REJECT_PHRASES = [
 
 const TEMPORAL_REJECT_RE = /\b(today|yesterday|tomorrow|this week|last week|next week|this month|last month|monday|tuesday|wednesday|thursday|friday|saturday|sunday|morning|afternoon|evening)\b/i
 const GREETING_RE = /\b(hi|hey|hello|thanks|thank you)\b/i
+const ASSISTANT_VOICE_RE = /\b(you|your|yours|yourself)\b|\b(?:would|do) you like\b/i
 
 export type QuestionShape = 'time' | 'specific_work' | 'cross_cutting' | 'reflective' | 'generative'
 
@@ -89,6 +90,8 @@ function validSuggestion(text: string): boolean {
   const normalized = normalizeSuggestion(text)
   if (!normalized) return false
   if (normalized.split(/\s+/).length > 8) return false
+  if (!normalized.endsWith('?')) return false
+  if (ASSISTANT_VOICE_RE.test(normalized)) return false
   const lower = normalized.toLowerCase()
   return !GENERIC_REJECT_PHRASES.includes(lower)
 }
@@ -151,10 +154,6 @@ export function filterFollowUpCandidatesWithReport(
   for (const candidate of candidates) {
     const text = normalizeSuggestion(candidate.text)
     const key = text.toLowerCase()
-    if (!validSuggestion(text)) {
-      rejectedByRule.invalid += 1
-      continue
-    }
     if (seen.has(key)) {
       rejectedByRule.duplicate += 1
       continue
@@ -165,6 +164,10 @@ export function filterFollowUpCandidatesWithReport(
     }
     if (GREETING_RE.test(text)) {
       rejectedByRule.greeting += 1
+      continue
+    }
+    if (!validSuggestion(text)) {
+      rejectedByRule.invalid += 1
       continue
     }
     if (GENERIC_REJECT_PHRASES.some((phrase) => key.includes(phrase))) {
@@ -324,18 +327,19 @@ No markdown, no explanation.
 RULES
 1. Return 3–4 suggestions, or [] if the answer is a greeting or contains no productivity data.
 2. Each suggestion must be ≤8 words.
-3. Every suggestion must reference a specific named entity that appears in the answer — an app (Cursor, Chrome, Notion), a file, a page title, a person, a project, or a domain. Do not invent names; pull them from the answer text.
-4. Vary the question type across suggestions: one about time/duration, one about specific content (windows, pages, files), one about comparison or trend, one about cause or breakdown.
-5. Ground each suggestion in what the answer actually said. Do not ask about something the answer did not mention.
-6. Prefer the WORK as the subject — a project, page, file, task, person, or a specific number / time range from the answer ("Break down the 4h 8m repo session", "Which days was Coursera my main focus?"). Never make a bare app / provider / model name the subject of a "how long on X" question, and never template from a section-header word ("Top work threads" must not become "How long on Top?").
-7. Forbidden phrases (never use): "Tell me more", "What stood out", "Go deeper", "What else", "Can you explain", "What evidence", "Say more", "Expand on", "Be more specific", "Continue".
-8. Forbidden patterns: fragment suggestions like "What drove The?" or "Which windows mention Hey?" — these indicate a stop-word or header word leaked into the entity slot. If you cannot name a real entity, number, or timeframe from the answer, return [].
+3. Each chip is the user's next message. Write a complete natural question in the user's first-person voice ("my", "I", or an implicit first-person command) and end it with a question mark. Never address the user as "you" or "your", and never speak as the assistant.
+4. Every suggestion must reference a specific named entity that appears in the answer — an app (Cursor, Chrome, Notion), a file, a page title, a person, a project, or a domain. Do not invent names; pull them from the answer text.
+5. Vary the question type across suggestions: one about time/duration, one about specific content (windows, pages, files), one about comparison or trend, one about cause or breakdown.
+6. Ground each suggestion in what the answer actually said. Do not ask about something the answer did not mention.
+7. Prefer the WORK as the subject — a project, page, file, task, person, or a specific number / time range from the answer ("Break down my 4h 8m repo session?", "Which days was Coursera my main focus?"). Never make a bare app / provider / model name the subject of a "how long on X" question, and never template from a section-header word ("Top work threads" must not become "How long on Top?").
+8. Forbidden phrases (never use): "Tell me more", "What stood out", "Go deeper", "What else", "Can you explain", "What evidence", "Say more", "Expand on", "Be more specific", "Continue".
+9. Forbidden patterns: fragment suggestions like "What drove The?" or "Which windows mention Hey?" — these indicate a stop-word or header word leaked into the entity slot. If you cannot name a real entity, number, or timeframe from the answer, return [].
 
 GOOD EXAMPLES
 "Which days was Coursera my main focus?"
-"Break down the 4h 8m Daylens repo session."
+"Can I see my 4h 8m repo session by task?"
 "How does this week's 31% focus compare to last week?"
-"Export this 7-day summary as a CSV."
+"Can I export my 7-day summary?"
 "What pulled me off task on May 31?"
 "What was the Study Planner page about?"
 

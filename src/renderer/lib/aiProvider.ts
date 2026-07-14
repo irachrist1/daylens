@@ -17,14 +17,13 @@ export interface AIProviderMeta {
   models: AIModelOption[]
 }
 
-// models reviewed: 2026-05-31 — ids verified against each provider's public
-// model docs (ai.google.dev, platform.openai.com, Anthropic). Notable changes:
-//   - Google: gemini-3.1-flash-lite-preview was SHUT DOWN 2026-05-25; replaced
-//     with the GA gemini-3.1-flash-lite (cheapest/highest-RPM → the default,
-//     which directly helps R1). Added GA gemini-3.5-flash; dropped the
-//     gemini-3-flash-preview offering.
-//   - OpenAI: flagship gpt-5.4 → gpt-5.5 (GA 2026-04-23); mini/nano stay 5.4.
-//   - Anthropic: flagship opus 4.6 → 4.8 (current); Sonnet 4.6 / Haiku 4.5 hold.
+// ids verified against each provider's public model docs (ai.google.dev,
+// platform.openai.com, Anthropic).
+//   - Google: gemini-3.1-flash-lite-preview was SHUT DOWN; replaced
+//     with the GA gemini-3.1-flash-lite (cheapest/highest-RPM → the default).
+//     Added GA gemini-3.5-flash; dropped the gemini-3-flash-preview offering.
+//   - OpenAI: flagship is gpt-5.5 (GA); mini/nano stay on 5.4.
+//   - Anthropic: flagship is opus 4.8 (current); Sonnet 4.6 / Haiku 4.5 hold.
 // The main-process tier fallback (services/aiOrchestration.ts) is kept a subset
 // of these ids. settings.ts read-time-migrates the dead flash-lite-preview id.
 // Live answer-quality testing per provider is a separate device step (needs keys).
@@ -42,6 +41,11 @@ export const AI_PROVIDER_META: Record<AIProviderMode, AIProviderMeta> = {
         id: 'claude-opus-4-8',
         label: 'Claude Opus 4.8',
         description: 'Latest flagship for the hardest coding and reasoning work.',
+      },
+      {
+        id: 'claude-sonnet-5',
+        label: 'Claude Sonnet 5',
+        description: 'Latest Sonnet for fast, high-quality agentic work.',
       },
       {
         id: 'claude-sonnet-4-6',
@@ -143,6 +147,11 @@ export const AI_PROVIDER_META: Record<AIProviderMode, AIProviderMeta> = {
         description: 'Uses your local Claude CLI install and Anthropic account.',
       },
       {
+        id: 'claude-sonnet-5',
+        label: 'Claude Sonnet 5',
+        description: 'Uses the latest Sonnet through the local Claude CLI.',
+      },
+      {
         id: 'claude-sonnet-4-6',
         label: 'Claude Sonnet 4.6',
         description: 'Balanced local Claude CLI option.',
@@ -227,9 +236,10 @@ export interface AIModelCapabilities {
 }
 
 // Keyed by model id (ids are shared across API + CLI variants, distinct on
-// OpenRouter). Reviewed alongside the catalog on 2026-05-31.
+// OpenRouter).
 const AI_MODEL_CAPABILITIES: Record<string, AIModelCapabilities> = {
-  'claude-opus-4-8': { speed: 3, intelligence: 5, contextTokens: 200_000, vision: true, toolUse: true, reasoning: true },
+  'claude-opus-4-8': { speed: 3, intelligence: 5, contextTokens: 1_000_000, vision: true, toolUse: true, reasoning: true },
+  'claude-sonnet-5': { speed: 4, intelligence: 5, contextTokens: 1_000_000, vision: true, toolUse: true, reasoning: true },
   'claude-sonnet-4-6': { speed: 4, intelligence: 4, contextTokens: 200_000, vision: true, toolUse: true, reasoning: true },
   'claude-haiku-4-5': { speed: 5, intelligence: 3, contextTokens: 200_000, vision: true, toolUse: true, reasoning: false },
   'gpt-5.5': { speed: 3, intelligence: 5, contextTokens: 400_000, vision: true, toolUse: true, reasoning: true },

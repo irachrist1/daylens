@@ -4,8 +4,8 @@
 //
 // A site or page visited inside a browser, or a file/document opened inside
 // an app, is a breakdown of that owning app's tracked time, never additional
-// time on top of it (docs/findings.md, "app time and site time
-// double-counted"). This module turns a block's flat evidence arrays
+// time on top of it — app time and site time must never be double-counted.
+// This module turns a block's flat evidence arrays
 // (topApps, topArtifacts, websites) into a tree: children nest under the app
 // row they happened in, everything else stays a top-level sibling.
 

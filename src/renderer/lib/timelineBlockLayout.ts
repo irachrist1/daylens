@@ -1,12 +1,11 @@
-// Calendar-track card heights (2026-07-05, docs/issues-2026-07-05.md §3).
+// Calendar-track card heights.
 //
-// A card sits at its wall-clock position and its height is its duration
-// (timeline.md §3.4 / invariant 4). The readability floor (a just-started or
-// sliver block still needs a clickable card) used to be applied blindly:
-// `max(minHeight, durationPx)` with the top pinned at the true start meant a
-// short block PAINTED PAST ITS REAL END — covering the idle gap below it, its
-// "Idle · 12m" caption, and sometimes the next block's header. The founder saw
-// it as "the distance between idle time and the next block is wrong".
+// A card sits at its wall-clock position and its height is its duration.
+// The readability floor (a just-started or sliver block still needs a
+// clickable card) used to be applied blindly: `max(minHeight, durationPx)`
+// with the top pinned at the true start meant a short block PAINTED PAST ITS
+// REAL END — covering the idle gap below it, its "Idle · 12m" caption, and
+// sometimes the next block's header.
 //
 // The rule here: the floor may stretch a card into genuinely empty space it
 // does not distort, but it must never reach the next block's top. When the

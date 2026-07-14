@@ -67,6 +67,7 @@ interface InFlightSession {
   captureSource: string
   startTime: number
   category: AppCategory
+  passivePresence: boolean
   windowTitles?: { title: string | null; ticks: number }[]
   // Set when the session's start was stamped from the true input time on a
   // return from away/provisional_idle. Lets the MIN_SESSION_SEC floor log why a
@@ -93,7 +94,7 @@ const AWAY_THRESHOLD_SEC = 300  // 5 min of no input → treat as away and flush
 // was asleep (or the process frozen): interval timers do not run during sleep,
 // so the pre-sleep session would otherwise survive the gap and absorb it as
 // active time. macOS lid-close proved able to sleep WITHOUT emitting the
-// powerMonitor suspend/lock-screen events (2026-07-06: idle_start 03:08 →
+// powerMonitor suspend/lock-screen events (idle_start 03:08 →
 // unlock 12:52 with nothing in between, 9h44m counted as one Dia session), so
 // gap detection is the primary sleep signal, not a fallback.
 const GAP_FLUSH_MS = 60_000
@@ -1421,24 +1422,29 @@ function recoverPersistedLiveSnapshot(): void {
 }
 
 function handleLockScreen(): void {
+  const endMs = currentSession && looksLikePassiveMediaSession(currentSession)
+    ? undefined
+    : provisionalIdleStart ?? undefined
   if (currentSession) {
-    // If the user was already idle when the lock fired, end at the true
-    // last-input time, not the lock moment — the idle minutes were not work.
-    flushCurrent(provisionalIdleStart ?? undefined, 'lock_screen')
+    // Ordinary idle ends at the last input; passive media ends at the lock.
+    flushCurrent(endMs, 'lock_screen')
     console.log('[tracking] screen locked — session flushed')
   }
-  flushActiveBrowserContext(getDb(), provisionalIdleStart ?? undefined)
+  flushActiveBrowserContext(getDb(), endMs)
   recordActivityEvent('lock_screen')
   idleState = 'away'
   provisionalIdleStart = null
 }
 
 function handleSuspend(): void {
+  const endMs = currentSession && looksLikePassiveMediaSession(currentSession)
+    ? undefined
+    : provisionalIdleStart ?? undefined
   if (currentSession) {
-    flushCurrent(provisionalIdleStart ?? undefined, 'suspend')
+    flushCurrent(endMs, 'suspend')
     console.log('[tracking] system suspended — session flushed')
   }
-  flushActiveBrowserContext(getDb(), provisionalIdleStart ?? undefined)
+  flushActiveBrowserContext(getDb(), endMs)
   recordActivityEvent('suspend')
   idleState = 'away'
   provisionalIdleStart = null
@@ -1451,7 +1457,9 @@ function handleSuspend(): void {
 // either.
 function cutSessionAfterWake(reason: 'unlock_screen' | 'resume'): void {
   if (!currentSession) return
-  const endMs = provisionalIdleStart ?? lastPollTickMs ?? undefined
+  const endMs = looksLikePassiveMediaSession(currentSession)
+    ? lastPollTickMs ?? undefined
+    : provisionalIdleStart ?? lastPollTickMs ?? undefined
   flushCurrent(endMs, reason)
   flushActiveBrowserContext(getDb(), endMs)
   idleState = 'away'
@@ -1615,7 +1623,9 @@ async function poll(): Promise<void> {
     // suspend/lock events have been observed not to fire on lid-close.
     const tickMs = nowMs()
     if (lastPollTickMs != null && tickMs - lastPollTickMs > GAP_FLUSH_MS) {
-      const gapStartMs = provisionalIdleStart ?? lastPollTickMs
+      const gapStartMs = currentSession && looksLikePassiveMediaSession(currentSession)
+        ? lastPollTickMs
+        : provisionalIdleStart ?? lastPollTickMs
       if (currentSession) {
         flushCurrent(gapStartMs, 'sleep_gap')
         console.log(`[tracking] ${Math.round((tickMs - gapStartMs) / 1000)}s poll gap — session flushed at last activity`)
@@ -1748,6 +1758,7 @@ async function poll(): Promise<void> {
         backend = win ? 'focus_events' : backend
         if (!win) {
           flushActiveBrowserContext(getDb())
+          if (currentSession) currentSession.passivePresence = false
           return
         }
       }
@@ -1773,6 +1784,7 @@ async function poll(): Promise<void> {
             backend = 'focus_events'
           } else {
             flushActiveBrowserContext(getDb())
+            if (currentSession) currentSession.passivePresence = false
             trackingStatus.pollError = formatError(err)
             captureRateLimited(ANALYTICS_EVENT.TRACKING_ENGINE_HEALTH, 'tracking:get-active-window', {
               failure_kind: classifyFailureKind(err),
@@ -1788,6 +1800,7 @@ async function poll(): Promise<void> {
 
     if (!win) {
       flushActiveBrowserContext(getDb())
+      if (currentSession) currentSession.passivePresence = false
       trackingStatus.pollError = null
       trackingStatus.lastRawWindow = null
       trackingStatus.lastResolvedWindow = null
@@ -1908,19 +1921,24 @@ async function poll(): Promise<void> {
 
     // Browser context is sampled BEFORE any session is created or continued,
     // because the tab read is also the private-window signal: an incognito
-    // window must produce no website visit AND no app session (founder rule,
-    // 2026-07-06 — applies regardless of the Tracking Controls master switch;
-    // the opt-in title gate above stays for parity with user exclusions).
+    // window must produce no website visit AND no app session — this applies
+    // regardless of the Tracking Controls master switch; the opt-in title
+    // gate above stays for parity with user exclusions.
     // For non-browser apps this call flushes whatever browser context was open.
     const browserSample = recordActiveBrowserContextSample(getDb(), {
       bundleId,
       appName: identity.displayName,
       windowTitle: resolvedWindowTitle,
-      capturedAt: Date.now(),
+      capturedAt: tickMs,
       executablePath: resolvedWin.path,
     })
     if (browserSample.isPrivate) {
       if (currentSession) flushCurrent(undefined, 'incognito')
+      clearPersistedLiveSnapshot()
+      return
+    }
+    if (browserSample.captureBlockReason) {
+      if (currentSession) flushCurrent(undefined, `tracking_controls:${browserSample.captureBlockReason}`)
       clearPersistedLiveSnapshot()
       return
     }
@@ -1961,6 +1979,7 @@ async function poll(): Promise<void> {
           : 'foreground_poll',
         startTime: startedAt,
         category,
+        passivePresence: browserSample.passivePresence,
         bornOnIdleReturn,
         windowTitles: [{ title: resolvedWindowTitle, ticks: 1 }],
       }
@@ -1979,6 +1998,7 @@ async function poll(): Promise<void> {
       persistLiveSnapshot(true)
     } else {
       currentSession.windowTitle = resolvedWindowTitle
+      currentSession.passivePresence = browserSample.passivePresence
       if (!currentSession.windowTitles) {
         currentSession.windowTitles = [{ title: resolvedWindowTitle, ticks: 1 }]
       } else {
@@ -1990,6 +2010,22 @@ async function poll(): Promise<void> {
         }
       }
       persistLiveSnapshot()
+    }
+
+    if (
+      idleSec >= AWAY_THRESHOLD_SEC
+      && idleState === 'provisional_idle'
+      && currentSession
+      && !looksLikePassiveMediaSession(currentSession)
+    ) {
+      flushCurrent(nowMs(), 'away')
+      flushActiveBrowserContext(getDb(), nowMs())
+      recordActivityEvent('away_start', {
+        idleSeconds: Math.round(idleSec),
+        passivePresenceEnded: true,
+      })
+      idleState = 'away'
+      provisionalIdleStart = null
     }
   } catch (err) {
     // active-window can throw on permissions denial (macOS) or unsupported platform

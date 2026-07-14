@@ -50,8 +50,8 @@ import {
 const SWITCHABLE_PROVIDERS: AIProviderMode[] = ['anthropic', 'openai', 'google', 'openrouter', 'claude-cli', 'chatgpt-cli', 'gemini-cli', 'codex-cli']
 const API_PROVIDERS: AIProviderMode[] = ['anthropic', 'openai', 'google', 'openrouter']
 
-// D1: the thread list now includes archived threads (the sidebar shows an
-// Archive section), so "adopt a thread" must skip archived ones.
+// The thread list includes archived threads (the sidebar shows an Archive
+// section), so "adopt a thread" must skip archived ones.
 function firstActiveThreadId(rows: AIThreadSummary[]): number | null {
   return rows.find((row) => !row.archived)?.id ?? null
 }
@@ -66,13 +66,13 @@ let rememberedThreadId: number | null | undefined = undefined
 type SendOptions = {
   contextOverride?: ThreadMessage['contextSnapshot']
   trigger?: 'freeform' | 'suggested' | 'retry'
-  // R4: bounds the rate-limit auto-retry so it fires at most once per turn.
+  // Bounds the rate-limit auto-retry so it fires at most once per turn.
   autoRetryCount?: number
-  // FB7: when set, the main process rewrites the prior answer into this form.
+  // When set, the main process rewrites the prior answer into this form.
   transform?: AnswerTransform | null
 }
 
-// R3: a turn that never resolves must still leave "Thinking" — convert a stuck
+// A turn that never resolves must still leave "Thinking" — convert a stuck
 // pending row into a retryable error after this ceiling.
 const SEND_TIMEOUT_MS = 90_000
 
@@ -105,21 +105,21 @@ export function useAIChat() {
   const [messageActionState, setMessageActionState] = useState<Record<string, MessageActionStateEntry>>({})
   const [actionWidgetState, setActionWidgetState] = useState<Record<string, ActionWidgetStateEntry>>({})
   const [reducedMotion, setReducedMotion] = useState(false)
-  // The agent's pending clarifying question (ADR 0003), if any.
+  // The agent's pending clarifying question, if any.
   const [agentQuestion, setAgentQuestion] = useState<AIAgentQuestionEvent | null>(null)
 
   const loadingRef = useRef(false)
   loadingRef.current = loading
-  // Real cancel (W1-C): the turn currently in flight, so Stop knows which
-  // request to abort — and which synthetic rows to flip to `cancelled`.
+  // The turn currently in flight, so Stop knows which request to abort — and
+  // which synthetic rows to flip to `cancelled`.
   const inFlightTurnRef = useRef<{ requestId: string; assistantId: string; userId: string } | null>(null)
   // Requests the user cancelled: when their promise later settles (resolve OR
   // reject), the result is dropped so a cancelled turn never mutates the view.
   const cancelledRequestsRef = useRef<Set<string>>(new Set())
-  // U1: track the most recently requested thread so a slow getThread response
-  // for a thread the user already navigated away from never clobbers the view.
+  // Track the most recently requested thread so a slow getThread response for
+  // a thread the user already navigated away from never clobbers the view.
   const latestRequestedThreadRef = useRef<number | null>(null)
-  // R4: pending rate-limit auto-retry timers, cleared on unmount / new sends.
+  // Pending rate-limit auto-retry timers, cleared on unmount / new sends.
   const autoRetryTimeoutsRef = useRef<Record<string, number>>({})
   const actionFeedbackTimeoutsRef = useRef<Record<string, number>>({})
   const suggestionImpressionsRef = useRef<Record<string, boolean>>({})
@@ -138,7 +138,7 @@ export function useAIChat() {
     cliTools: { claude: string | null; chatgpt: string | null; gemini: string | null; codex: string | null }
     hasProviderAccess: boolean
     // Per-provider key/tool availability, so the error card can offer a
-    // concrete one-tap switch on a hard wall (R2).
+    // concrete one-tap switch on a hard wall.
     providerAvailability: Partial<Record<AIProviderMode, boolean>>
     activeFocusSession: FocusSession | null
     billingAccess: BillingAccessSnapshot
@@ -207,7 +207,7 @@ export function useAIChat() {
       })
     : null
 
-  // R2: other configured providers we can offer as a one-tap switch when the
+  // Other configured providers we can offer as a one-tap switch when the
   // selected one hits a hard wall (quota/credit/auth). Never auto-routed.
   const providerAvailability = providerResource.data?.providerAvailability ?? {}
   const alternateProviders = useMemo<AltProvider[]>(() => {
@@ -269,8 +269,8 @@ export function useAIChat() {
     })
   }, [])
 
-  // The agent's clarifying question (ADR 0003): shown as a card; answering
-  // resumes the paused turn in main. Cleared when the turn ends either way.
+  // The agent's clarifying question: shown as a card; answering resumes the
+  // paused turn in main. Cleared when the turn ends either way.
   useEffect(() => {
     return ipc.ai.onAgentQuestion((event) => {
       setAgentQuestion(event)
@@ -295,9 +295,9 @@ export function useAIChat() {
   }, [])
 
   const loadThread = useCallback(async (threadId: number) => {
-    // U1: selecting a thread must load ITS messages, not just update the header.
-    // The old guard dropped the fetched messages whenever a send was in flight,
-    // which is exactly the "header changes, body stays empty" bug. Instead we
+    // Selecting a thread must load ITS messages, not just update the header.
+    // A guard that dropped the fetched messages whenever a send was in flight
+    // caused exactly the "header changes, body stays empty" bug. Instead
     // stale-guard by thread id: only the latest requested thread may write.
     setActiveThreadId(threadId)
     setIsNewChatDraft(false)
@@ -312,7 +312,7 @@ export function useAIChat() {
       setHasEarlierMessages(detail.hasEarlier)
     } catch (error) {
       // Surface the failure as an inline error rather than silently keeping a
-      // mismatched view (R4 — no raw IPC text).
+      // mismatched view — no raw IPC text.
       if (latestRequestedThreadRef.current !== threadId) return
       const { message } = sanitizeIpcError(error, "Couldn't load this conversation. Try again.")
       setMessages([{ id: `thread-error:${threadId}`, role: 'assistant', content: message, createdAt: Date.now(), state: 'error' }])
@@ -505,7 +505,7 @@ export function useAIChat() {
     inFlightTurnRef.current = { requestId, assistantId, userId }
     setMessages((current) => beginTurn(current, { userId, assistantId, prompt, createdAt }))
 
-    // R3: race the turn against a hard timeout so a stuck request always
+    // Race the turn against a hard timeout so a stuck request always
     // resolves the pending row to a retryable error — never an eternal spinner.
     let timedOut = false
     let timeoutHandle: number | undefined
@@ -525,14 +525,14 @@ export function useAIChat() {
         timeoutPromise,
       ]) as AIChatTurnResult
 
-      // Real cancel (W1-C): the user stopped this turn; a late completion must
-      // never overwrite the cancelled row with a fake "completed" answer.
+      // The user stopped this turn; a late completion must never overwrite
+      // the cancelled row with a fake "completed" answer.
       if (cancelledRequestsRef.current.has(requestId)) {
         cancelledRequestsRef.current.delete(requestId)
         return
       }
 
-      // R3: flip the pending row to the final answer FIRST. The visible
+      // Flip the pending row to the final answer FIRST. The visible
       // completion must not be gated on the thread-list refresh that follows —
       // that ordering was why answers only appeared after navigating away.
       setAgentQuestion(null)
@@ -566,11 +566,10 @@ export function useAIChat() {
         error,
         timedOut ? 'That took longer than expected. Tap retry to run it again.' : undefined,
       )
-      // R4: ride out a *transient* per-minute limit automatically, once, after a
+      // Ride out a *transient* per-minute limit automatically, once, after a
       // short backoff. A hard wall (daily/free-tier quota gone, credit, auth)
-      // is NOT auto-retried — retrying just fails again; instead the card offers
-      // switch-provider (R2). This is the fix for the misdiagnosed Gemini
-      // free-tier case found in R1 verification.
+      // is NOT auto-retried — retrying just fails again; instead the card
+      // offers switch-provider.
       const failure = classifyTurnFailure(
         { code: sanitized.code, retryAfterSeconds: sanitized.retryAfterSeconds },
         autoRetryCount,
@@ -614,10 +613,10 @@ export function useAIChat() {
   handleSendRef.current = handleSend
   const submitMessage = useCallback((text: string) => { void handleSendRef.current(text) }, [])
 
-  // Real cancel (W1-C): Stop aborts the in-flight provider request in the main
-  // process (ai:cancel-message → AbortController → SDK abort) and flips the
-  // pending row to `cancelled` — never a fake completed answer, never an error
-  // card. The turn's late settle is suppressed via cancelledRequestsRef.
+  // Stop aborts the in-flight provider request in the main process
+  // (ai:cancel-message → AbortController → SDK abort) and flips the pending
+  // row to `cancelled` — never a fake completed answer, never an error card.
+  // The turn's late settle is suppressed via cancelledRequestsRef.
   const cancelGeneration = useCallback(() => {
     const inFlight = inFlightTurnRef.current
     if (!inFlight) return
@@ -642,8 +641,8 @@ export function useAIChat() {
     await handleSend(previousUser.content, { contextOverride: message.contextSnapshot ?? null, trigger: 'retry', transform: transformKindFromLabel(previousUser.content) })
   }, [latestCompletedAssistantId, messages, triggerActionFeedback, analyticsContext, handleSend])
 
-  // R4: retry a turn that ended in an error card. Cancels any pending
-  // auto-retry for that row, then re-sends the user message that preceded it.
+  // Retry a turn that ended in an error card. Cancels any pending auto-retry
+  // for that row, then re-sends the user message that preceded it.
   const handleErrorRetry = useCallback(async (message: ThreadMessage) => {
     if (loadingRef.current) return
     const key = String(message.id)
@@ -661,7 +660,7 @@ export function useAIChat() {
     await handleSend(previousUser.content, { contextOverride: message.contextSnapshot ?? null, trigger: 'retry', transform: transformKindFromLabel(previousUser.content) })
   }, [messages, analyticsContext, handleSend])
 
-  // R2: explicit, user-initiated provider switch from a hard-wall error card.
+  // Explicit, user-initiated provider switch from a hard-wall error card.
   // Persists the chat provider (never silent/auto), refreshes the header model,
   // then re-runs the turn on the new provider in place of the errored one.
   const switchProviderAndRetry = useCallback(async (message: ThreadMessage, provider: AIProviderMode) => {
@@ -759,7 +758,7 @@ export function useAIChat() {
     }
   }, [refreshProvider])
 
-  // DEV-109 — commit an action proposal (the user confirmed the preview). The
+  // Commit an action proposal (the user confirmed the preview). The
   // real change runs in main through the manual-edit pipeline; the card flips to
   // a committed state with the confirmation line and an undo when reversible.
   const commitActionWidget = useCallback(async (proposal: AIActionWidget) => {
@@ -862,8 +861,8 @@ export function useAIChat() {
     }
   }, [activeThreadId, resetComposerState, loadThread])
 
-  // D1: archive / unarchive a thread. Archiving the active thread moves focus
-  // to the next active one (like delete), so the body never strands on a thread
+  // Archive / unarchive a thread. Archiving the active thread moves focus to
+  // the next active one (like delete), so the body never strands on a thread
   // the user just tucked away.
   const archiveThread = useCallback(async (thread: AIThreadSummary, archived: boolean) => {
     try {
@@ -914,7 +913,7 @@ export function useAIChat() {
     void handleSend(prompt, { trigger: 'suggested' })
   }, [hasApiKey, analyticsContext, handleSend])
 
-  // FB7: transform the previous answer (shorter / checklist / bullets / report).
+  // Transform the previous answer (shorter / checklist / bullets / report).
   // The concise label is the user-visible message; `transform` tells the main
   // process to rewrite the SPECIFIC prior answer faithfully (real numbers, no
   // generic day shell).

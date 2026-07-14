@@ -24,7 +24,7 @@ import { cleanWorkSubject } from '@shared/workNameGuards'
 
 /** Bumped when the snapshot builder's semantics change (kind resolution,
  *  meeting truth, subject guards) so the range reader knows a frozen row
- *  predates the current logic and must be rebuilt once. v2: 2026-07-08 —
+ *  predates the current logic and must be rebuilt once. v2:
  *  distribution-first kind, span-based meetings, work-subject guards. */
 export const SNAPSHOT_BUILDER_VERSION = 2
 

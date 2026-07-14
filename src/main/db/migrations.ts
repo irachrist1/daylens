@@ -1519,29 +1519,9 @@ const migrations: Migration[] = [
   },
   {
     version: 25,
-    description: 'Null out timeline_blocks labels sourced from blocklisted hosts (adult/social-feed/entertainment) so they regenerate',
+    description: 'Invalidate timeline_blocks labels sourced from feed pages so they regenerate',
     up: () => {
-      // The v1 ship-blocker: blocks were being labeled with porn/social-feed
-      // page titles when a stray browser visit landed in an otherwise dev/
-      // communication block. The labeler is fixed (preferredArtifactLabel
-      // now requires category compatibility), but persisted rows still
-      // carry the corrupted labels and the table is a derived cache keyed
-      // by `invalidated_at IS NULL`.
-      //
-      // Strategy: find rows whose label_current contains a high-signal
-      // adult/social token. Mark them invalidated so the labeler re-runs
-      // on next view and writes a clean label. label_current is NOT NULL,
-      // so we can't null it; invalidation is the supported "force recompute"
-      // path (see workBlocks.ts:1730-1737, 2310). Conservative token set:
-      // false positives would be cleared and regenerate identically;
-      // false negatives are caught at runtime by appActivityDigest's
-      // labelLooksHostBlocked guard.
       const db = getDb()
-      const ADULT_TOKENS = [
-        'pornhub', 'xvideos', 'xnxx', 'xhamster', 'redtube', 'youporn',
-        'spankbang', 'onlyfans', 'stripchat', 'chaturbate', 'eporner',
-        'tnaflix', 'brazzers', 'bangbros', 'fapello', 'motherless',
-      ]
       const SOCIAL_FEED_PATTERNS = [
         '%/ X | %',
         '% / X',
@@ -1550,18 +1530,11 @@ const migrations: Migration[] = [
         '%| TikTok%',
         '%reddit.com%',
       ]
-      const adultClause = ADULT_TOKENS.map(() => `LOWER(label_current) LIKE ?`).join(' OR ')
       const socialClause = SOCIAL_FEED_PATTERNS.map(() => `label_current LIKE ?`).join(' OR ')
-      const tokenClauses = `(${adultClause}) OR (${socialClause})`
-      const params = [
-        ...ADULT_TOKENS.map((token) => `%${token}%`),
-        ...SOCIAL_FEED_PATTERNS,
-      ]
-      const now = Date.now()
       const result = db
-        .prepare(`UPDATE timeline_blocks SET invalidated_at = ? WHERE invalidated_at IS NULL AND (${tokenClauses})`)
-        .run(now, ...params)
-      console.log(`[migrations:v25] invalidated ${result.changes} corrupted block label(s)`)
+        .prepare(`UPDATE timeline_blocks SET invalidated_at = ? WHERE invalidated_at IS NULL AND (${socialClause})`)
+        .run(Date.now(), ...SOCIAL_FEED_PATTERNS)
+      console.log(`[migrations:v25] invalidated ${result.changes} block label(s)`)
     },
   },
   {
@@ -2086,7 +2059,34 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 45,
+    description: 'website_visits_pending — live-observed visits from browsers that cannot report their window mode wait here until the browser\'s own history corroborates them; corroborated rows are promoted to website_visits, the rest are deleted',
+    up: () => {
+      getDb().exec(`
+        CREATE TABLE IF NOT EXISTS website_visits_pending (
+          id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+          domain                TEXT    NOT NULL,
+          page_title            TEXT,
+          url                   TEXT    NOT NULL,
+          normalized_url        TEXT,
+          page_key              TEXT,
+          visit_time            INTEGER NOT NULL,
+          visit_time_us         INTEGER NOT NULL,
+          duration_sec          INTEGER NOT NULL,
+          browser_bundle_id     TEXT    NOT NULL,
+          canonical_browser_id  TEXT,
+          browser_profile_id    TEXT,
+          observed_at           INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_website_visits_pending_browser
+          ON website_visits_pending (canonical_browser_id, observed_at);
+      `)
+    },
+  },
 ]
+
+export const LATEST_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0
 
 function attentionClassForCategory(category: string): 'focus' | 'supporting' | 'ambient' {
   switch (category) {

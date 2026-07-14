@@ -75,21 +75,21 @@ const TIME_GUTTER_WIDTH = 56
 // and 22px is the least height at which a one-line title still reads.
 const MIN_CARD_HEIGHT = 22
 // Day-view floor: a block that just started must still read and click like a
-// real calendar event (title + time row), not a sliver — founder requirement
-// (2026-07-02). 44px is the least height that shows both lines.
+// real calendar event (title + time row), not a sliver. 44px is the least
+// height that shows both lines.
 const MIN_DAY_CARD_HEIGHT = 44
 
 // The read-only block detail panel is height-capped so it never grows with its
 // content: the title header stays fixed and the evidence below scrolls inside a
 // bounded box. Two candidate caps render side by side under the dev preview
-// (?panelVariants=1) so the founder can pick the final feel before it's fixed.
+// (?panelVariants=1) to compare final feel before settling on one.
 const DETAIL_PANEL_MAX_HEIGHT_A = 320
 const DETAIL_PANEL_MAX_HEIGHT_B = 480
 const DETAIL_PANEL_MAX_HEIGHT_DEFAULT = 560
 
-// Daylens won't shape a day into named blocks until there's enough to work with
-// (founder decision: at least 2 hours tracked). Below this the Analyze action
-// stays disabled with a gentle "keep going" nudge.
+// Daylens won't shape a day into named blocks until there's enough to work
+// with — at least 2 hours tracked. Below this the Analyze action stays
+// disabled with a gentle "keep going" nudge.
 const ANALYZE_MIN_SECONDS = 2 * 60 * 60
 
 // The day's tracked seconds, from the same blocks the timeline draws (invariant
@@ -120,10 +120,10 @@ function hourLabel(hour: number): string {
   return new Intl.DateTimeFormat(undefined, { hour: 'numeric' }).format(new Date(2000, 0, 1, hour % 24))
 }
 
-// The day bounds = actual activity (founder rule): the track runs from the
-// hour of the first tracked event to the hour of the last — empty midnight
-// hours simply don't exist in the view. On today the track extends to "now"
-// so the current-time line always has a home.
+// The day bounds follow actual activity: the track runs from the hour of the
+// first tracked event to the hour of the last — empty midnight hours simply
+// don't exist in the view. On today the track extends to "now" so the
+// current-time line always has a home.
 interface TrackBounds {
   startHour: number
   endHour: number
@@ -268,8 +268,8 @@ function CalendarBlockCard({
         borderRadius: compact ? 6 : 8,
         // The thin border stays on every block so neighbouring blocks read as
         // separate cards; the solid accent stripe on the left carries the
-        // category colour unmistakably at every size (founder ask, Jul 2026 —
-        // the low-alpha fills alone read as "no colour" on the light theme).
+        // category colour unmistakably at every size (the low-alpha fills
+        // alone read as "no colour" on the light theme).
         // The live block reads as "happening now": solid accent border and a
         // stronger fill, against the quieter tint of finished blocks.
         border: block.isLive
@@ -278,7 +278,7 @@ function CalendarBlockCard({
         borderLeft: `3px solid ${accent}`,
         // Frosted glass: a stronger tint over a backdrop blur, so the hour
         // lines behind the card haze out instead of striking through the
-        // title and summary text (founder ask, Jul 2026).
+        // title and summary text.
         background: (isSelected || inMergeRange) ? `${accent}40` : block.isLive ? `${accent}36` : `${accent}2a`,
         backdropFilter: 'blur(10px) saturate(1.4)',
         WebkitBackdropFilter: 'blur(10px) saturate(1.4)',
@@ -386,8 +386,8 @@ function HourGutter({ hourHeight, bounds }: { hourHeight: number; bounds: TrackB
 // One day as a 24-hour calendar track: hour lines, blocks at their clock
 // positions, and the current-time line on today. Idle/away time renders as
 // blank space between blocks, sized by the clock — no card, no fill, nothing
-// clickable — but never unexplained (founder decision, Jul 2, 2026): each
-// visible gap carries one quiet line saying what kind of absence it was
+// clickable — but never unexplained: each visible gap carries one quiet
+// line saying what kind of absence it was
 // (Asleep / Away / Idle / Passive / Tracking paused / Untracked) and for how
 // long. Blocks are buttons carrying data-timeline-block-id, so the day view's
 // click-capture selection (plain click, shift-click merge, click-empty
@@ -1180,8 +1180,7 @@ function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePaylo
       gap: 16,
     }} className="timeline-summary-inspector">
       {/* No date heading here — the nav pill above the grid already names the
-          day (founder ask, Jul 2026): the panel goes straight to the recap,
-          Analyze day, and stats. */}
+          day: the panel goes straight to the recap, Analyze day, and stats. */}
       {payload.totalSeconds === 0 ? (
         <div style={{ fontSize: 13, color: 'var(--color-text-tertiary)', lineHeight: 1.6 }}>
           Nothing tracked yet.
@@ -1291,8 +1290,7 @@ function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePaylo
 // right column from the day recap to this READ-ONLY view — color chip +
 // title, the date/time line, type tags, the summary, and the app/site
 // evidence underneath — and clicking anywhere outside the block swaps it
-// back (founder decision, Jul 2, 2026, reverting the floating event card:
-// nothing ever floats over the timeline). Selection state lives in Timeline;
+// back: nothing ever floats over the timeline. Selection state lives in Timeline;
 // this component just renders the selected block. No edit controls live
 // here: editing happens exclusively through right-click → Edit, which opens
 // the separate editor modal.
@@ -1406,7 +1404,7 @@ function BlockDetailInspector({
     // with a `paddingLeft` longhand in one spread object lets the shorthand
     // land AFTER the longhand in key order (spread dedup keeps the longhand's
     // first position) and silently reset the indent to 0 — which flattened
-    // every nested site row under its browser (2026-07-06 founder audit).
+    // every nested site row under its browser.
     const baseStyle: CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, width: '100%', minWidth: 0, opacity: dimmed ? 0.6 : 1, padding: indented ? '0 0 0 34px' : 0 }
     const rowNode = onOpen
       ? (
@@ -2048,8 +2046,8 @@ export default function Timeline() {
   const view = navState.view
   const date = navState.date
   const isToday = date === todayString()
-  // Dev preview (?panelVariants=1): render both height caps side by side so the
-  // founder can compare the short vs. tall detail panel before one is fixed.
+  // Dev preview (?panelVariants=1): render both height caps side by side to
+  // compare the short vs. tall detail panel before settling on one.
   const panelVariantsPreview = searchParams.get('panelVariants') === '1'
 
   useEffect(() => {
@@ -2486,9 +2484,8 @@ export default function Timeline() {
         />
       </div>
 
-      {/* The timeline scrolls without showing a scrollbar (founder ask, Jul
-          2026) — the grid is the chrome; the hidden thumb lives in globals.css
-          under .timeline-scroller. */}
+      {/* The timeline scrolls without showing a scrollbar — the grid is the
+          chrome; the hidden thumb lives in globals.css under .timeline-scroller. */}
       <div ref={scrollRef} className="timeline-scroller" style={{ flex: 1, overflowY: 'auto', scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
         {view === 'week' && (
           <div style={{ padding: '24px 32px 40px' }}>
@@ -2672,8 +2669,8 @@ export default function Timeline() {
                       <DaySummaryInspector payload={payload} onRefresh={timelineResource.refresh} />
                     )}
                     {/* Dev preview only (?panelVariants=1): the two candidate
-                        height caps side by side, so the founder can compare the
-                        short (320) vs. tall (480) feel before one is fixed. */}
+                        height caps side by side, to compare the short (320)
+                        vs. tall (480) feel before settling on one. */}
                     {panelVariantsPreview && selectedBlock && (
                       <div
                         data-timeline-inspector="true"

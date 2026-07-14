@@ -102,8 +102,15 @@ export function sanitizeBlockLabel(label: string | null | undefined): string | n
   return label
 }
 
-// The single "session break" rule (founder decision, Jul 2, 2026 — supersedes
-// the earlier 45-minute rule): a real gap in activity of roughly 15 minutes or
+/**
+ * Timeline policy: split at meetings, work-kind changes, sustained context shifts,
+ * and real absences; merge only contiguous related work within the span ceiling.
+ * Labels prefer user edits, then AI, memory, artifacts/pages, and app context.
+ * Gaps state asleep, locked, idle, paused, or missing capture explicitly.
+ * User renames and boundary corrections remain authoritative across rebuilds.
+ */
+// The single "session break" rule (supersedes the earlier 45-minute rule): a
+// real gap in activity of roughly 15 minutes or
 // more ENDS the current block. The gap is never absorbed into a block; it
 // renders as blank space on the timeline, and a new block starts only once
 // real activity resumes. A block's duration is the time the user was genuinely
@@ -172,9 +179,9 @@ const TIMELINE_MAX_COHERENT_BLOCK_SPAN_MS = 300 * 60_000
 const TIMELINE_MAX_ASSISTED_WORK_SPAN_MS = 360 * 60_000
 const TIMELINE_SPLIT_GAP_THRESHOLD_MS = 5 * 60_000
 const TIMELINE_MIN_CHILD_SPAN_MS = 15 * 60_000
-// Bumped to v9 with: the 15-minute session break (founder decision, Jul 2,
-// 2026 — a real activity gap of 15+ minutes ends the block, is never absorbed,
-// and renders as blank space; a new block starts only when activity resumes),
+// Bumped to v9 with: the 15-minute session break (a real activity gap of
+// 15+ minutes ends the block, is never absorbed, and renders as blank
+// space; a new block starts only when activity resumes),
 // the same-work bridge and sliver-fold caps aligned to the same 15 minutes,
 // the live provisional day split into one provisional block per continuous
 // sitting instead of one whole-day card, and suspiciously long unbroken
@@ -214,7 +221,7 @@ const TIMELINE_HEURISTIC_VERSION = 'timeline-v10'
 // A single unbroken block this long is almost never real (~11 hours of
 // continuous engagement is suspicious on its face) — it usually means
 // idle/away detection failed somewhere in the span. Flag it in the logs
-// rather than trusting it silently (founder rule, Jul 2, 2026).
+// rather than trusting it silently.
 const SUSPICIOUS_UNBROKEN_BLOCK_SPAN_MS = 6 * 60 * 60_000
 
 type FormationReason = 'coherent' | 'heuristic' | 'mixed' | 'meeting' | 'longSingleApp'
@@ -561,7 +568,7 @@ export function dominantCategoryForBlock(
   // development. But the dev evidence (localhost time + editor time) must not be
   // dwarfed by genuine leisure: a late-night block that is mostly YouTube and
   // Netflix, and merely happened to also load localhost, is NOT development.
-  // (2026-07-06 founder audit: a 4h mostly-leisure block with a 262s dev sliver
+  // (a 4h mostly-leisure block with a 262s dev sliver
   // was being stamped development → counted as work.)
   if (baseCategory === 'browsing' && hasLocalhostPageArtifact(topArtifacts) && (distribution.development ?? 0) > 0) {
     const devEvidenceSeconds = localhostArtifactSeconds(topArtifacts) + (distribution.development ?? 0)
@@ -640,7 +647,7 @@ function inferredFocusedCategoryForSession(session: AppSession): AppCategory {
   // Dia and Comet are BROWSERS, not AI tools: their sessions go through the
   // site-weighted distribution, where claude.ai time (etc.) becomes aiTools on
   // its own merit. Forcing the app to aiTools here made every block of a
-  // browser-centric day one category (2026-07-06 founder audit).
+  // browser-centric day one category.
   if (/\b(codex|claude|chatgpt|copilot|perplexity)\b/.test(haystack)) return 'aiTools'
   if (/\b(antigravity|cursor|vscode|visual studio code|zed|xcode|sublime|warp|ghostty|iterm|terminal|cmux)\b/.test(haystack)) return 'development'
   return session.category
@@ -688,7 +695,7 @@ function categoryDistributionFor(sessions: EffectiveSession[]): Partial<Record<A
 // A browser session's category used to be whatever the browser APP was
 // cataloged as, so a user who lives in one browser had every block collapse
 // into that single category — one color across the whole calendar, whatever
-// they actually did inside it (2026-07-06 founder audit). The block facts now
+// they actually did inside it. The block facts now
 // split each browser session's seconds across the categories of the sites
 // reconciled inside the block (canva.com → design, youtube.com →
 // entertainment, claude.ai → aiTools…); seconds no site accounts for stay
@@ -3334,7 +3341,7 @@ function bridgeSameWorkCandidates(candidates: CandidateBlock[], db: Database.Dat
 
 const BOUNDARY_CUT_THRESHOLD = 1
 const BOUNDARY_HARD_SCORE = 100
-// timeline.md §3.2 (founder decision): under 10 minutes = absorbed into the
+// Under 10 minutes = absorbed into the
 // surrounding block; 10 minutes or more = its own block. A peek at X/Netflix in
 // the middle of a work stretch folds in; it never splits or renames the block.
 const BRIEF_PEEK_MAX_ACTIVE_MS = 10 * 60_000
@@ -3809,7 +3816,7 @@ function enforceMinimumBlockFloor(
   // The guard must be the ORIGINAL count: each fold removes one candidate, so
   // at most N-1 folds are ever possible. Bounding by the shrinking
   // result.length exited after ~N/2 folds on a fragmented day and let 12-second
-  // slivers survive the floor (seen persisted on 2026-07-01).
+  // slivers survive the floor.
   const maxFolds = result.length
   for (let guard = 0; guard < maxFolds; guard++) {
     let foldedAny = false
@@ -4037,8 +4044,7 @@ function looksLikeSearchResultTitle(value: string): boolean {
 
 // Categories where a browser page / website is the natural label source.
 // For anything else (development, communication, design, etc.), a stray
-// browser page should NOT be picked as the block label — that's how
-// "Pornhub - $title" ended up labeling a development block.
+// browser page should NOT be picked as the block label.
 const PAGE_LABEL_COMPATIBLE_CATEGORIES = new Set<AppCategory>([
   'browsing',
   'aiTools',
@@ -4138,7 +4144,7 @@ function preferredArtifactLabel(block: WorkContextBlock): string | null {
   if (documentLabel && !looksLikeBrowserTabTitle(documentLabel)) return documentLabel
 
   // Page and website labels only apply when the block is browsing-dominant.
-  // For a development block, a stray YouTube/Pornhub/news page is noise,
+  // For a development block, a stray entertainment or news page is noise,
   // not a label.
   if (!isPageLabelCompatible(block)) return null
 
@@ -4965,10 +4971,10 @@ function persistedDayHeuristicIsStale(db: Database.Database, dateStr: string): b
   return row.heuristic_version !== TIMELINE_HEURISTIC_VERSION
 }
 
-// timeline.md §4: the live day, before it is analyzed, is provisional — never
+// The live day, before it is analyzed, is provisional — never
 // split into speculative intent-named blocks (naming live is how a
 // transcription session got stamped "Software Development Block"). But the raw
-// unit is still honest (founder decision, Jul 2, 2026): each continuous
+// unit is still honest: each continuous
 // sitting is its own provisional block, ended by any real activity gap of 15+
 // minutes. The gap between sittings is blank space, never absorbed — one card
 // spanning 12:00 AM to 10:54 AM across a night of sleep is a lie. The stretch
@@ -4981,14 +4987,14 @@ function buildProvisionalLiveBlocks(
 ): WorkContextBlock[] {
   if (sessions.length === 0) return []
   const context = buildTimelineContext(db, sessions)
-  // timeline.md §4: a new provisional block starts when activity resumes — so
+  // A new provisional block starts when activity resumes — so
   // the day's MOST RECENT sitting always shows, no matter how short yet. The
   // old floor filter here made a sitting that just resumed after an idle/away
   // gap — including the one being lived in right now, "Active now" —
-  // invisible for up to 15 minutes (divergence #3b). Earlier, finished
+  // invisible for up to 15 minutes. Earlier, finished
   // sittings still need to clear the block floor on span or active time: a
   // 24s 1:56am blip separated from the real day by an 8h sleep gap must not
-  // become its own phantom block (both founder decisions, Jul 2, 2026).
+  // become its own phantom block.
   const segments = coarseSegmentsFromSessions(sessions).filter((seg) => seg.sessions.length > 0)
   const kept = segments.filter((seg, index) => {
     if (index === segments.length - 1) return true
@@ -5043,7 +5049,7 @@ function loadIgnoredBlockSpans(db: Database.Database, dateStr: string): MergedSp
   return spans
 }
 
-// Deterministic category refresh for settled days (2026-07-05, docs/issues-2026-07-05.md §2).
+// Deterministic category refresh for settled days.
 // A processed day is never rebuilt — boundaries, labels, and corrections are
 // frozen — but the category facts under its colors were computed by an old
 // heuristic and stayed wrong forever ("no color until I click Analyze").
@@ -5099,7 +5105,7 @@ function withoutIgnoredSpans(sessions: AppSession[], spans: MergedSpan[]): AppSe
     !spans.some((span) => session.startTime >= span.startMs && session.startTime < span.endMs))
 }
 
-// Sanity check (founder rule, Jul 2, 2026): a single block claiming many hours
+// Sanity check: a single block claiming many hours
 // of unbroken engagement is almost never real — it usually means idle/away
 // detection failed inside the span. We don't silently trust it; we flag it in
 // the main-process log so the failure is visible and diagnosable. Deduped per
@@ -5190,11 +5196,11 @@ interface GapCauseInterval {
 
 const GAP_KIND_LABELS: Record<string, string> = {
   asleep: 'Asleep',
-  locked: 'Away',
+  locked: 'Locked',
   idle: 'Idle',
   passive: 'Passive',
   paused: 'Tracking paused',
-  untracked: 'Untracked',
+  untracked: 'No data captured',
 }
 
 // When multiple causes covered parts of one gap, the strongest signal names
@@ -5267,13 +5273,12 @@ function gapCauseIntervals(events: ReturnType<typeof getActivityStateEventsForRa
 
 // Name one gap range from the cause intervals that overlap it: a gap that no
 // signal covers at least half of is honestly "Untracked" — Daylens wasn't
-// running to know (timeline.md §3.1). Otherwise, when several causes covered
+// running to know. Otherwise, when several causes covered
 // parts of the gap, the strongest real-absence signal names it by priority
 // order (asleep > locked > paused > passive > idle) — NOT whichever kind
-// happened to cover the most of the gap (founder decision, Jul 2, 2026,
-// divergence #6: coverage share used to outrank priority, so a gap that was
-// 60% idle and 40% asleep read as "Idle" instead of the stronger "Asleep"
-// signal).
+// happened to cover the most of the gap (coverage share used to outrank
+// priority, so a gap that was 60% idle and 40% asleep read as "Idle"
+// instead of the stronger "Asleep" signal).
 function classifyGapRange(
   range: { startTime: number; endTime: number },
   causes: GapCauseInterval[],
@@ -5343,7 +5348,7 @@ export function buildSegmentsForDay(
     gapRanges.push({ startTime: cursor, endTime: gapCeiling })
   }
 
-  // One classified segment per visible gap (founder decision, Jul 2, 2026):
+  // One classified segment per visible gap:
   // the blank space stays blank, but it always knows why it's blank.
   const gapSegments: TimelineSegment[] = gapRanges
     .filter((range) => range.endTime - range.startTime >= MIN_VISIBLE_GAP_MS)
@@ -5553,7 +5558,7 @@ export function getTimelineDayPayload(
   liveSession?: LiveSession | null,
   options: { materialize?: boolean; forceRebuild?: boolean } = {},
 ): DayTimelinePayload {
-  // timeline.md §4 (founder rule): today stays provisional — one neutral block
+  // Today stays provisional — one neutral block
   // per continuous sitting, split only at real 15+ minute activity gaps —
   // until the USER explicitly analyzes it (a materialize request from Analyze
   // Day). We can't know the shape of the day until it is done, so Daylens
@@ -5566,8 +5571,8 @@ export function getTimelineDayPayload(
     && !(options.materialize ?? false)
     && validPersistedTimelineBlockCount(db, dateStr) === 0
     && !persistedDayWasProcessed(db, dateStr)
-  // The live provisional day always reads the full calendar day — founder rule
-  // (2026-07-02): at 3 AM mid-sitting the Today view shows everything tracked
+  // The live provisional day always reads the full calendar day: at 3 AM
+  // mid-sitting the Today view shows everything tracked
   // since local midnight, matching the Apps view (which reads calendar bounds
   // for today). Which day finally owns a cross-midnight sitting is decided by
   // ownedDayBounds when the day is materialized, never while it is live — the

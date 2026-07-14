@@ -158,7 +158,7 @@ export function compactDayFacts(facts: DayWrapFacts, enrichment?: DayEnrichment 
       : null,
     topLeisure: facts.topLeisure,
     // What the window titles say was actually being done in each app — the
-    // semantic depth under "4 hours in Cursor" (Stage 0.1). Already humanized;
+    // semantic depth under "4 hours in Cursor". Already humanized;
     // still subject to every naming rule (name the work, never the file).
     insideTheApps: facts.titleContext.map((app) => ({
       app: app.appName,

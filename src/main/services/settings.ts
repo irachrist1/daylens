@@ -75,7 +75,7 @@ const DEFAULTS: AppSettings = {
 // Only confirmed-dead ids belong here; superseded-but-working ids are left
 // alone so we never silently change a user's model (or its cost) without intent.
 const DEPRECATED_MODEL_REMAP: Record<string, string> = {
-  // gemini-3.1-flash-lite-preview was deprecated and shut down 2026-05-25.
+  // gemini-3.1-flash-lite-preview was deprecated and shut down at the provider.
   'gemini-3.1-flash-lite-preview': 'gemini-3.1-flash-lite',
 }
 

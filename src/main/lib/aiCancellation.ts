@@ -1,4 +1,4 @@
-// Real cancel for AI chat turns (W1-C).
+// Real cancel for AI chat turns.
 //
 // The renderer's Stop button must abort the in-flight provider HTTP request,
 // not just hide the spinner. A chat turn fans out through several layers

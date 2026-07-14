@@ -13,11 +13,11 @@ export interface AltProvider {
 // the persisted numeric id once the server turn resolves.
 // `cancelled`: the user hit Stop mid-generation — the turn was aborted in the
 // main process, nothing was persisted, and the row must never read as a
-// completed answer (W1-C real cancel).
+// completed answer.
 export type ThreadMessage = Omit<AIThreadMessage, 'id'> & {
   id: string | number
   state: 'pending' | 'complete' | 'error' | 'cancelled'
-  // R4: classified error context for the branded error card (Retry + rate-limit
+  // Classified error context for the branded error card (Retry + rate-limit
   // auto-retry hint + switch-provider on a hard wall). Present only when
   // state === 'error'.
   errorInfo?: {
@@ -32,7 +32,7 @@ export type ThreadMessage = Omit<AIThreadMessage, 'id'> & {
 
 export type MessageAction = 'copy' | 'up' | 'down' | 'retry'
 
-// FB7: post-answer transforms run a real model call against the SPECIFIC prior
+// Post-answer transforms run a real model call against the SPECIFIC prior
 // answer (request.transform). Labels + instructions live in shared/answerTransforms.
 export type AnswerTransform = AIAnswerTransformKind
 export const ANSWER_TRANSFORMS: { kind: AnswerTransform; label: string }[] =
@@ -49,7 +49,7 @@ export interface MessageActionStateEntry {
   successLabel: string | null
 }
 
-// DEV-109 — per-proposal state for an action widget (preview → confirm). Keyed
+// Per-proposal state for an action widget (preview → confirm). Keyed
 // by AIActionWidget.proposalId.
 export interface ActionWidgetStateEntry {
   status: 'idle' | 'committing' | 'committed' | 'undoing' | 'error'

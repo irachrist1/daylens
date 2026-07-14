@@ -1,4 +1,4 @@
-// Calendar event-type inference (wrapped, Stage 0 follow-on) — what a calendar
+// Calendar event-type inference — what a calendar
 // event most likely WAS: a class, a 1:1, a presentation, an interview, a
 // workout, a team meeting, a solo deep-work block, or nothing distinctive
 // (generic). Pure and deterministic: it only correlates signals Daylens

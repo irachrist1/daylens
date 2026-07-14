@@ -20,7 +20,12 @@ import Database from 'better-sqlite3'
 import { ANALYTICS_EVENT, classifyFailureKind } from '@shared/analytics'
 import type { SafariHistoryAccessStatus } from '@shared/types'
 import { getDb } from './database'
-import { insertWebsiteVisit } from '../db/queries'
+import {
+  insertWebsiteVisit,
+  listPendingWebsiteVisits,
+  deletePendingWebsiteVisits,
+  deleteExpiredPendingWebsiteVisits,
+} from '../db/queries'
 import { normalizeUrlForStorage, pageKeyForUrl, resolveCanonicalBrowser } from '../lib/appIdentity'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { localDateString } from '../lib/localDate'
@@ -535,6 +540,40 @@ async function copyHistorySnapshot(historyPath: string, tmpDb: string, tmpWal: s
 
 // ─── Chromium poll ─────────────────────────────────────────────────────────────
 
+// Quarantined live visits (browserContext could not read the window mode)
+// are resolved against the browser's own history while its copy is open:
+// corroborated rows are promoted to website_visits, the rest deleted —
+// private windows never write browser history. The grace period gives the
+// browser time to flush its own history write; expiry bounds how long an
+// uncorroborable row can wait.
+const PENDING_VISIT_GRACE_MS = 90_000
+const PENDING_VISIT_MAX_AGE_MS = 86_400_000
+
+function reconcilePendingLiveVisits(
+  db: ReturnType<typeof getDb>,
+  browserBundleId: string,
+  urlExistsInHistory: (url: string) => boolean,
+): void {
+  const canonicalBrowserId = resolveCanonicalBrowser(browserBundleId).canonicalBrowserId
+  const now = Date.now()
+  const resolved: number[] = []
+  for (const visit of listPendingWebsiteVisits(db, canonicalBrowserId)) {
+    if (now - visit.observedAt < PENDING_VISIT_GRACE_MS) continue
+    if (urlExistsInHistory(visit.url)) {
+      const inserted = insertWebsiteVisit(db, visit)
+      if (inserted) {
+        const date = localDateString(new Date(visit.visitTime))
+        invalidateProjectionScope('timeline', 'active_browser_context_recorded', { date })
+        invalidateProjectionScope('apps', 'active_browser_context_recorded', { canonicalAppId: visit.canonicalBrowserId })
+        invalidateProjectionScope('insights', 'active_browser_context_recorded', { date })
+      }
+    }
+    resolved.push(visit.id)
+  }
+  deletePendingWebsiteVisits(db, resolved)
+  deleteExpiredPendingWebsiteVisits(db, now - PENDING_VISIT_MAX_AGE_MS)
+}
+
 async function pollChromium(
   browser: BrowserEntry,
   db: ReturnType<typeof getDb>,
@@ -622,6 +661,9 @@ async function pollChromium(
 
     // Persist the cursor so next poll continues from where we left off
     browserCursors.set(browser.bundleId, cursor)
+
+    const urlLookup = histDb.prepare('SELECT 1 FROM urls WHERE url = ? LIMIT 1')
+    reconcilePendingLiveVisits(db, browser.bundleId, (url) => urlLookup.get(url) != null)
 
     histDb.close()
   } catch (err) {
@@ -771,6 +813,10 @@ async function pollWebKit(
       ORDER BY history_visits.visit_time ASC
       LIMIT 5000
     `).all(fromWebKitSeconds) as WebKitHistoryRow[]
+
+    const urlLookup = histDb.prepare('SELECT 1 FROM history_items WHERE url = ? LIMIT 1')
+    reconcilePendingLiveVisits(db, browser.bundleId, (url) => urlLookup.get(url) != null)
+
     histDb.close()
 
     const controls = trackingControlsStateFromSettings(getSettings())

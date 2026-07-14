@@ -1,7 +1,7 @@
-// T3 — Tracking Controls: user-controlled capture exclusions.
+// Tracking Controls: user-controlled capture exclusions.
 //
-// Design invariant (owner decision 2026-05-31): the feature is OPT-IN and OFF by
-// default. When disabled and not paused, every gate here is a strict passthrough,
+// Design invariant: the feature is OPT-IN and OFF by default. When disabled
+// and not paused, every gate here is a strict passthrough,
 // so capture stays byte-for-byte identical to today. Only an explicit master
 // opt-in (plus an ad-hoc pause that works regardless of the switch) changes
 // behavior. This is the hermetic core — no DB, no settings store — so it can be
@@ -20,11 +20,14 @@ export interface AppCaptureCandidate {
   canonicalAppId?: string | null
   appName?: string | null
   windowTitle?: string | null
+  /** Structured private-window signal from the browser reader, when available. */
+  isPrivate?: boolean | null
 }
 
 export interface SiteCaptureCandidate {
   domain?: string | null
   windowTitle?: string | null
+  isPrivate?: boolean | null
 }
 
 type CaptureBlockReason = 'paused' | 'excluded_app' | 'excluded_site' | 'incognito'
@@ -44,6 +47,13 @@ const INCOGNITO_TITLE_RE = /\b(incognito|inprivate|private browsing|private wind
 
 export function detectIncognitoFromTitle(windowTitle: string | null | undefined): boolean {
   return !!windowTitle && INCOGNITO_TITLE_RE.test(windowTitle)
+}
+
+// A window is private when the browser reader said so (structured signal,
+// e.g. Chromium's window mode — titles alone are not enough: Chrome on macOS
+// puts no marker in the window title) or the title carries a private marker.
+function isPrivateWindow(candidate: { windowTitle?: string | null; isPrivate?: boolean | null }): boolean {
+  return candidate.isPrivate === true || detectIncognitoFromTitle(candidate.windowTitle)
 }
 
 function normalizeToken(value: string | null | undefined): string {
@@ -83,24 +93,26 @@ export function isSiteExcluded(state: TrackingControlsState, candidate: SiteCapt
   })
 }
 
-// Foreground app-session gate. Pause applies regardless of the master switch;
-// exclusions/incognito only when Tracking Controls is enabled.
+// Private/incognito windows are never captured — this check runs before
+// paused/enabled, independent of every setting.
+
+// Foreground app-session gate.
 export function decideAppCapture(state: TrackingControlsState, candidate: AppCaptureCandidate): CaptureDecision {
+  if (isPrivateWindow(candidate)) return { capture: false, reason: 'incognito' }
   if (state.paused) return { capture: false, reason: 'paused' }
   if (!state.enabled) return ALLOW
   if (isAppExcluded(state, candidate)) return { capture: false, reason: 'excluded_app' }
-  if (state.skipIncognito && detectIncognitoFromTitle(candidate.windowTitle)) return { capture: false, reason: 'incognito' }
   return ALLOW
 }
 
 // Browser website-visit gate. The browser app itself is gated upstream by
-// decideAppCapture; this drops a specific excluded domain (or incognito visit)
-// while a non-excluded browser app keeps being tracked.
+// decideAppCapture; this drops a specific excluded domain (or private-window
+// visit) while a non-excluded browser app keeps being tracked.
 export function decideSiteCapture(state: TrackingControlsState, candidate: SiteCaptureCandidate): CaptureDecision {
+  if (isPrivateWindow(candidate)) return { capture: false, reason: 'incognito' }
   if (state.paused) return { capture: false, reason: 'paused' }
   if (!state.enabled) return ALLOW
   if (isSiteExcluded(state, candidate)) return { capture: false, reason: 'excluded_site' }
-  if (state.skipIncognito && detectIncognitoFromTitle(candidate.windowTitle)) return { capture: false, reason: 'incognito' }
   return ALLOW
 }
 

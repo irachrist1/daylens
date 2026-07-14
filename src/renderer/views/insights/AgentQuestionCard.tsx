@@ -1,6 +1,6 @@
-// The agent's one clarifying question (ADR 0003): tappable options plus a
-// free-text escape. Answering resumes the paused turn; dismissing tells the
-// agent to proceed with its most defensible reading.
+// The agent's one clarifying question: tappable options plus a free-text
+// escape. Answering resumes the paused turn; dismissing tells the agent to
+// proceed with its most defensible reading.
 import { useState } from 'react'
 import type { AIAgentQuestionEvent } from '@shared/types'
 

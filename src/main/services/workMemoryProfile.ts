@@ -1,5 +1,5 @@
 // Work memory as an editable, human-readable profile (ChatGPT-style), replacing
-// the opaque "65% pattern" table. See docs/specs/work-memory.md.
+// the opaque "65% pattern" table.
 //
 // A profile is a handful of plain sentences. Daylens DRAFTS facts from real
 // evidence (the apps/sites you actually use); the user can edit, add, or delete

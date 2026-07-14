@@ -76,7 +76,7 @@ export function pickPalette(seed: number): WrapPalette {
 }
 
 // Delegates to the shared, Settings-aware resolver (src/shared/activityColors.ts)
-// so Wrapped agrees with the calendar and honors the founder's per-category
+// so Wrapped agrees with the calendar and honors the user's per-category
 // overrides — it used to carry its own hardcoded palette here, disconnected
 // from Settings → General → Activity colors entirely.
 export function categoryColor(category: AppCategory | 'unknown', kind?: WorkKind): string {

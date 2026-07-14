@@ -56,7 +56,7 @@ function toThreadSummary(row: ReturnType<typeof listThreadsLite>[number]): AIThr
   }
 }
 
-// The agent's clarifying questions (ADR 0003): the ask_user tool pauses the
+// The agent's clarifying questions: the ask_user tool pauses the
 // loop on a promise; the renderer shows the question card and answers over
 // AGENT_ANSWER, which resolves it. A timeout resolves with a no-answer note so
 // an unanswered question can never hang a turn forever.
@@ -99,7 +99,7 @@ export function registerAIHandlers(): void {
     return true
   })
 
-  // Real cancel (W1-C): abort the in-flight provider request for this turn.
+  // Aborts the in-flight provider request for this turn.
   // Returns whether a matching turn was still running.
   ipcMain.handle(IPC.AI.CANCEL_MESSAGE, (_e, payload: { clientRequestId: string }): boolean => {
     return cancelAIRequest(payload.clientRequestId)
@@ -173,7 +173,7 @@ export function registerAIHandlers(): void {
     return getWrapProviderState()
   })
 
-  // Pre-flight data quality check (wrapped Stage 0.4): honest, specific
+  // Pre-flight data quality check: honest, specific
   // warnings before the first generation. Never blocks; the renderer offers a
   // one-tap "Generate anyway".
   ipcMain.handle(IPC.AI.GET_WRAP_PREFLIGHT, async (_e, payload: { date: string }) => {

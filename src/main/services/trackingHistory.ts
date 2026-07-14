@@ -5,6 +5,7 @@
 // search — "gone, not just hidden". Forward capture is stopped separately by the
 // gate in tracking.ts / browserContext.ts.
 
+import fs from 'node:fs'
 import { getDb } from './database'
 import { localDateString } from '../lib/localDate'
 import { materializeTimelineDayProjection } from '../core/query/projections'
@@ -205,6 +206,88 @@ export function deleteHistoryForSite(input: { domain: string }): PurgeResult {
       `).run(...params).changes
     } catch {
       // Derived projection tables are optional on older installs.
+    }
+
+    try {
+      deletedRows += db.prepare(`DELETE FROM website_visits_pending ${where}`).run(...params).changes
+    } catch {
+      // Pending-visit table arrives with migration v45.
+    }
+
+    // A browser window title is the page title, so the site's name can sit in
+    // ANY text column of ANY table: titles, urls, block labels, chat tool
+    // traces, narrative JSON, work-memory observations. A hand-maintained
+    // table list keeps missing surfaces, so the scrub is generic: every user
+    // table, every text-affine column, delete matching rows. Date-bearing
+    // tables record their affected dates first so those days reproject.
+    const brand = domain.split('.')[0]
+    if (brand.length >= 3) {
+      const titlePattern = `%${brand}%`
+
+      const dateColumns: Record<string, string> = {
+        website_visits: 'visit_time',
+        focus_events: 'ts_ms',
+        app_sessions: 'start_time',
+        raw_window_sessions: 'started_at',
+        derived_sessions: 'start_ts_ms',
+        browser_context_events: 'started_at',
+        activity_segments: 'started_at',
+      }
+      const skipTables = new Set(['schema_version'])
+
+      // Exported AI artifacts can embed the rows themselves (a CSV of site
+      // visits): capture their file paths before the row delete, remove after.
+      const artifactFiles: string[] = []
+      try {
+        const artifactRows = db.prepare(`
+          SELECT file_path FROM ai_artifacts
+          WHERE file_path IS NOT NULL
+            AND (lower(title) LIKE ? OR lower(inline_content) LIKE ? OR lower(summary) LIKE ?)
+        `).all(titlePattern, titlePattern, titlePattern) as Array<{ file_path: string }>
+        for (const row of artifactRows) artifactFiles.push(row.file_path)
+      } catch {
+        // Table absent on older installs.
+      }
+
+      const tables = db.prepare(`
+        SELECT name FROM sqlite_master
+        WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '%_fts%'
+      `).all() as Array<{ name: string }>
+      for (const { name } of tables) {
+        if (skipTables.has(name)) continue
+        try {
+          const columns = db.prepare(`PRAGMA table_info("${name}")`).all() as Array<{ name: string; type: string }>
+          const textColumns = columns
+            .filter((column) => !/INT|REAL|BLOB/i.test(column.type ?? ''))
+            .map((column) => column.name)
+          if (textColumns.length === 0) continue
+          const clause = textColumns.map((column) => `lower(CAST("${column}" AS TEXT)) LIKE ?`).join(' OR ')
+          const clauseParams = textColumns.map(() => titlePattern)
+          const timeColumn = dateColumns[name]
+          if (timeColumn) {
+            const timeRows = db.prepare(`SELECT "${timeColumn}" AS t FROM "${name}" WHERE ${clause}`)
+              .all(...clauseParams) as { t: number }[]
+            for (const date of distinctLocalDates(timeRows.map((row) => row.t))) affected.add(date)
+          }
+          deletedRows += db.prepare(`DELETE FROM "${name}" WHERE ${clause}`).run(...clauseParams).changes
+        } catch {
+          // Virtual/shadow tables and schema oddities: skip rather than fail the purge.
+        }
+      }
+
+      for (const filePath of artifactFiles) {
+        try { fs.unlinkSync(filePath) } catch { /* already gone */ }
+      }
+
+      // Rebuild the external-content FTS indexes so no tokenized copy of a
+      // deleted row survives in search.
+      for (const fts of ['website_visits_fts', 'app_sessions_fts', 'timeline_blocks_fts', 'ai_artifacts_fts']) {
+        try {
+          db.prepare(`INSERT INTO ${fts}(${fts}) VALUES ('rebuild')`).run()
+        } catch {
+          // Index absent on older installs.
+        }
+      }
     }
   })
   purge()

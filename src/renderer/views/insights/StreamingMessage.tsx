@@ -45,7 +45,7 @@ export function StreamingMessage({ messageId, fallback, renderContent, onSnapsho
     () => '',
   )
   // Tool-status line while the agent works ("Searching for…"), cleared as soon
-  // as answer text arrives (ADR 0003).
+  // as answer text arrives.
   const status = useSyncExternalStore(
     (listener) => subscribeStreaming(messageId, listener),
     () => getStreamingStatus(messageId),

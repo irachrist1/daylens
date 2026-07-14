@@ -1,8 +1,8 @@
 // Moment evidence — what was actually on screen at a specific clock time.
 //
 // Extracted from insightsQueryRouter when chat moved to the agent loop
-// (ADR 0003) so the "one page at the asked minute, never the whole block"
-// fixes (docs/findings.md 2026-07-12) survive the router. Returns structured
+// so the "one page at the asked minute, never the whole block"
+// fix survives the router. Returns structured
 // data; the caller (the chat agent, tests, the bench) does the phrasing.
 import type Database from 'better-sqlite3'
 import { localDateString } from './localDate'

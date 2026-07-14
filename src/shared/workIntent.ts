@@ -14,7 +14,7 @@ import { humanizeTitle } from './humanize'
 
 type BlockLike = Pick<
   WorkContextBlock,
-  'dominantCategory' | 'topApps' | 'websites' | 'pageRefs' | 'documentRefs' | 'topArtifacts' | 'workflowRefs' | 'switchCount'
+  'dominantCategory' | 'topApps' | 'websites' | 'pageRefs' | 'documentRefs' | 'topArtifacts' | 'workflowRefs' | 'switchCount' | 'boundary'
 > & { kind?: WorkContextBlock['kind'] }
 
 interface PageSignal {
@@ -484,8 +484,25 @@ function roleFromSignals(block: BlockLike, pages: PageSignal[]): WorkIntentRole 
   const socialOnly = block.websites.length > 0 && block.websites.every((site) => SOCIAL_DOMAINS.has(normalizedDomain(site.domain)))
   const mixedBrowserBlock = hasExecutionAnchor && (block.dominantCategory === 'browsing' || block.dominantCategory === 'research')
   const browserDominated = browserSeconds > executionSeconds * 1.1
+  const meetingBounded = Boolean(
+    block.boundary?.startReasons.includes('meeting-start')
+    || block.boundary?.endReasons.includes('meeting-end'),
+  )
+  const pageLabels = pages.map((page) => page.label.toLowerCase()).join(' ')
+  const researchNamed = /\b(research|documentation|reference|competitive|comparison|evidence|source\s+scan)\b/.test(pageLabels)
+  const coordinationNamed = pages.some((page) => (
+    (page.kind === 'sheet' || page.kind === 'doc' || page.kind === 'calendar' || page.kind === 'issue')
+    && /\b(planning|roadmap|budget|tracker|checklist|schedule|triage|invoice|expenses?|receipts?)\b/.test(page.label.toLowerCase())
+  ))
 
-  if (block.dominantCategory === 'meetings') return 'coordination'
+  if (block.dominantCategory === 'meetings' || meetingBounded) return 'coordination'
+
+  // Browser-hosted work inherits a generic browser/writing category even when
+  // the page itself carries the stronger intent signal. With no native
+  // execution tool in the episode, named research material and operational
+  // planning artifacts are authoritative over that container category.
+  if (!hasExecutionAnchor && coordinationNamed) return 'coordination'
+  if (!hasExecutionAnchor && researchNamed && hasResearchPages) return 'research'
 
   // A productivity-dominant block with no execution anchor is coordination work
   // by nature — calendars, task boards, password vaults, checklists, triage.

@@ -5,9 +5,9 @@
 // Why this exists: a browser session's category used to be whatever the
 // BROWSER app was cataloged as, so a user who lives in one browser got every
 // block collapsed into that single category — one color across the whole
-// calendar, whatever they actually did (2026-07-06 founder audit). The block
-// builder now splits a browser session's seconds across the categories of the
-// sites reconciled inside it; this file is the site → category half of that.
+// calendar, whatever they actually did. The block builder now splits a
+// browser session's seconds across the categories of the sites reconciled
+// inside it; this file is the site → category half of that.
 //
 // Keep it boring and declarative — it is meant to be read and audited. Hosts
 // match exactly or by subdomain suffix ("m.youtube.com" ⊂ "youtube.com").
@@ -117,7 +117,7 @@ export function categoryForDomain(host: string | null | undefined): AppCategory 
 
   const policy = policyForHost(normalized)
   if (policy === 'social_feed') return 'social'
-  if (policy === 'entertainment' || policy === 'adult') return 'entertainment'
+  if (policy === 'entertainment') return 'entertainment'
 
   for (const [candidate, category] of HOST_CATEGORIES) {
     if (normalized === candidate || normalized.endsWith(`.${candidate}`)) return category

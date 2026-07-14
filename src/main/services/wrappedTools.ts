@@ -1,4 +1,4 @@
-// Wrapped tool layer (Stage 0.3) — typed data functions the AI calls to pull
+// Wrapped tool layer — typed data functions the AI calls to pull
 // exactly what it needs for a wrap, instead of hoping one big prompt covers it.
 //
 // Each tool is a plain TypeScript function against the SAME trusted data the
@@ -298,8 +298,8 @@ export function getDistractionProfile(
     else other += seconds
   }
 
-  // Per-site time via the reconciled interval reader (never raw SUM — the
-  // 2026-07-07 fix), restricted to leisure-kind domains.
+  // Per-site time via the reconciled interval reader (never raw SUM),
+  // restricted to leisure-kind domains.
   const [fromMs, toMs] = localDayBounds(params.date)
   const siteSeconds = new Map<string, number>()
   for (const interval of getReconciledDomainIntervals(db, fromMs, toMs, (domain) => kindForDomain(domain) === 'leisure')) {
@@ -341,7 +341,7 @@ const BASELINE_DAYS = 28
 interface SurpriseCandidate extends Omit<SurprisingFactResult, 'date'> { score: number }
 
 /** The single most likely-to-surprise true fact of the day. Surprise is
- *  DEVIATION FROM THIS USER'S OWN BASELINE (founder decision 2026-07-08), not a
+ *  DEVIATION FROM THIS USER'S OWN BASELINE, not a
  *  generic expectation: the app they forgot, the unusually early start against
  *  their own weekday median, the stretch that beats their trailing record. A
  *  boring day returns null — a forced fact is worse than none. */

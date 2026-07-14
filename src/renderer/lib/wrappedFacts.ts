@@ -373,8 +373,8 @@ export function looksLikeRawArtifactLabel(label: string): boolean {
   // A lone camelCase identifier ("AskUserQuestion", "useAIChat") is code, not a
   // human title — one word, no spaces, an internal capital after a lowercase run.
   if (!/\s/.test(normalized) && /[a-z][A-Z]/.test(normalized)) return true
-  // A pipe is tab-title join syntax ("OC | Apply founder design to
-  // chrispin.jpeg" reached prose on Jul 6). No human names their work with a
+  // A pipe is tab-title join syntax ("OC | Apply updated design to
+  // chrispin.jpeg" once reached prose). No human names their work with a
   // pipe; any title carrying one is a raw capture, not a subject.
   if (/\|/.test(normalized)) return true
   if (/\b(youtube|linkedin)\b/i.test(normalized) && /[–-]/.test(normalized)) return true

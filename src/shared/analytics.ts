@@ -207,7 +207,6 @@ const SAFE_STRING_KEYS = new Set([
   'artifact_kind',
   'byte_size_bucket',
   'thread_action',
-  // Feature-event taxonomy (2026-07-07): the ten core product events.
   'view_name',
   'date_context',
   'date',
@@ -240,7 +239,6 @@ const SAFE_NUMBER_KEYS = new Set([
   'rejected_shape_count',
   'duration_sec',
   'target_minutes',
-  // Feature-event taxonomy (2026-07-07).
   'block_count',
   'block_count_before',
   'tracked_hours',
@@ -260,7 +258,6 @@ const SAFE_BOOLEAN_KEYS = new Set([
   'onboarding_complete',
   'reset_context',
   'reused_context',
-  // Feature-event taxonomy (2026-07-07).
   'has_completed_onboarding',
   'has_date_context',
 ])

@@ -1,4 +1,4 @@
-// Deterministic tool bodies the app owns. The chat agent (ADR 0003) wraps the
+// Deterministic tool bodies the app owns. The chat agent wraps the
 // `exec*` functions as its Daylens tools via `agent/daylensTools.ts`, and the
 // MCP server exposes them to external clients. `executeTool` is the typed
 // name→body dispatch both go through — it applies the tracking-exclusion

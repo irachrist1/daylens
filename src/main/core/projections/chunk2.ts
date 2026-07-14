@@ -10,36 +10,18 @@ import { classifyResult } from '../../services/tracking'
 import { localDateString } from '../../lib/localDate'
 import { ownedDayBounds } from '../../lib/dayOwnership'
 import { naturalizeProjectionLabel } from './chunk2Label'
+import {
+  countFocusEventsInRange,
+  listFocusEventsInRange,
+  type StoredFocusEvent,
+} from '../../db/focusEventRepository'
 
 // Bump when segmentation or labeling logic changes. Reprojection rewrites
 // any rows whose stored version is older. Idempotent.
 export const PROJECTION_VERSION = 1
 
-const IDLE_GAP_MS = 15 * 60 * 1000   // 15 min boundary between blocks (founder decision 2026-07-02)
+const IDLE_GAP_MS = 15 * 60 * 1000   // 15 min boundary between blocks
 const MIN_SESSION_MS = 1000          // drop sub-second flicker
-
-interface FocusEventRow {
-  id: number
-  ts_ms: number
-  mono_ns: number
-  event_type:
-    | 'app_activated'
-    | 'app_deactivated'
-    | 'window_changed'
-    | 'space_changed'
-    | 'sleep'
-    | 'wake'
-    | 'lock'
-    | 'unlock'
-    | 'tab_changed'
-    | 'tab_sampled'
-  app_bundle_id: string | null
-  app_name: string | null
-  window_title: string | null
-  url: string | null
-  page_title: string | null
-  confidence: 'observed' | 'unknown'
-}
 
 interface DerivedSessionRow {
   start_ts_ms: number
@@ -100,13 +82,7 @@ export function projectDay(
   }
 
   const [from, to] = ownedDayBounds(db, date)
-  const events = db.prepare(`
-    SELECT id, ts_ms, mono_ns, event_type, app_bundle_id, app_name,
-           window_title, url, page_title, confidence
-      FROM focus_events
-     WHERE ts_ms >= ? AND ts_ms < ?
-     ORDER BY ts_ms ASC, id ASC
-  `).all(from, to) as FocusEventRow[]
+  const events = listFocusEventsInRange(db, from, to)
 
   const sessions = foldSessions(events, to)
   const blocks = segmentBlocks(sessions)
@@ -134,7 +110,7 @@ interface OpenSession {
   confidence: 'observed' | 'uncertain'
 }
 
-function foldSessions(events: FocusEventRow[], dayEnd: number): DerivedSessionRow[] {
+function foldSessions(events: StoredFocusEvent[], dayEnd: number): DerivedSessionRow[] {
   const out: DerivedSessionRow[] = []
   let open: OpenSession | null = null
 
@@ -518,8 +494,7 @@ function writeProjection(
 }
 
 function queryEventCount(db: Database.Database, from: number, to: number): number {
-  const row = db.prepare(`SELECT COUNT(*) AS n FROM focus_events WHERE ts_ms >= ? AND ts_ms < ?`).get(from, to) as { n: number }
-  return row.n
+  return countFocusEventsInRange(db, from, to)
 }
 
 // ---------- adapter for legacy renderer types (D4) ----------

@@ -1,4 +1,4 @@
-// The chat agent loop (ADR 0003). One loop for every chat answer: the model
+// The chat agent loop. One loop for every chat answer: the model
 // reasons over the conversation, calls read-only tools, optionally asks the
 // user one clarifying question, and streams the answer in the Daylens voice.
 //
@@ -10,9 +10,9 @@
 //     whose replacement streams over the same snapshot channel.
 //
 // This function is the ONE chat entrypoint body — the IPC handler and the
-// terminal bench both reach it through sendMessage (ai.md §4.3). Keep every
+// terminal bench both reach it through sendMessage. Keep every
 // behavior deps-injected so the bench cannot diverge from the UI.
-import { streamText, stepCountIs, type ModelMessage, type ToolSet } from 'ai'
+import { streamText, stepCountIs, type LanguageModel, type ModelMessage, type ToolSet } from 'ai'
 import type Database from 'better-sqlite3'
 import os from 'node:os'
 import type { AIMessageArtifact } from '@shared/types'
@@ -23,13 +23,19 @@ import { verifyTimestamps, verifyCitedEntities } from '../ai/citations'
 import { languageModelFor } from './providerModel'
 import { buildDaylensTools } from './daylensTools'
 import { buildSystemTools } from './systemTools'
-import { buildInteractionTools, type AgentQuestion } from './interactionTools'
+import { buildInteractionTools, createArtifact, type AgentQuestion, type InteractionDeps } from './interactionTools'
 import { connectMcpTools, type McpServerConfig } from './mcpTools'
 import { buildAgentSystemPrompt } from './systemPrompt'
+import { renderTimeChunkAnswer, type TimeChunkResult } from './timeChunkAnswer'
+import { sanitizeForRender } from '@shared/aiSanitize'
 
 const MAX_STEPS = 14
 const MAX_OUTPUT_TOKENS = 8_000
 const MAX_TOOL_RESULT_CHARS = 60_000
+
+interface PageVisitToolResult {
+  pages?: Array<{ pageTitle?: string | null; url?: string | null; totalSeconds?: number; visitCount?: number }>
+}
 
 export interface AgentToolTraceEntry {
   tool: string
@@ -50,6 +56,7 @@ export interface ChatAgentDeps {
   signal?: AbortSignal
   now?: Date
   trackingStart?: string | null
+  model?: LanguageModel
 }
 
 export interface ChatAgentResult {
@@ -65,17 +72,20 @@ function statusForTool(tool: string, input: unknown): string {
   const params = (input ?? {}) as Record<string, unknown>
   switch (tool) {
     case 'get_moment': return `Looking at ${params.date ?? ''} ${params.time ?? ''}`.trim()
+    case 'get_time_chunks': return `Building ${params.incrementMinutes ?? ''}-minute intervals`.trim()
     case 'get_day_overview': return `Reading ${params.date ?? 'the day'}`
     case 'search_history': return `Searching for "${params.query ?? ''}"`
     case 'list_page_visits': return 'Going through your page visits'
     case 'get_app_usage': return `Checking time in ${params.appName ?? 'that app'}`
     case 'get_week_summary': return 'Reading the week'
+    case 'discover_repositories': return 'Finding active repositories'
+    case 'search_files': return `Searching files for "${params.query ?? ''}"`
     case 'git': return 'Reading git history'
     case 'read_file': return 'Reading a file'
     case 'list_dir': return 'Listing a folder'
     case 'create_artifact': return 'Building your file'
     case 'ask_user': return 'Asking you'
-    default: return tool.startsWith('mcp_') ? `Using ${tool.replace(/^mcp_/, '').replace(/_/g, ' ')}` : 'Working'
+    default: return tool.startsWith('mcp_') ? 'Checking a connected source' : 'Working'
   }
 }
 
@@ -107,6 +117,8 @@ export async function runChatAgentTurn(
   const artifacts: AIMessageArtifact[] = []
   const toolTrace: AgentToolTraceEntry[] = []
   const toolResultStrings: string[] = []
+  let timeChunkResult: TimeChunkResult | null = null
+  let pageVisitResult: PageVisitToolResult | null = null
   let stepCount = 0
 
   const usage: AIProviderUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
@@ -119,15 +131,16 @@ export async function runChatAgentTurn(
 
   const mcp = await connectMcpTools(deps.mcpServers ?? [])
   try {
+    const interactionDeps: InteractionDeps = {
+      askUser: deps.askUser,
+      artifactDir: deps.artifactDir,
+      onArtifact: (artifact) => artifacts.push(artifact),
+      signal: deps.signal,
+    }
     const tools: ToolSet = {
       ...buildDaylensTools(deps.db),
-      ...buildSystemTools(),
-      ...buildInteractionTools({
-        askUser: deps.askUser,
-        artifactDir: deps.artifactDir,
-        onArtifact: (artifact) => artifacts.push(artifact),
-        signal: deps.signal,
-      }),
+      ...buildSystemTools({ db: deps.db }),
+      ...buildInteractionTools(interactionDeps),
       ...mcp.tools,
     }
 
@@ -146,10 +159,9 @@ export async function runChatAgentTurn(
       { role: 'user', content: question },
     ]
 
-    let snapshot = ''
-    const streamTurn = async (turnMessages: ModelMessage[], replaceFrom: string | null): Promise<string> => {
+    const streamTurn = async (turnMessages: ModelMessage[]): Promise<string> => {
       const result = streamText({
-        model: languageModelFor(deps.config),
+        model: deps.model ?? languageModelFor(deps.config),
         system,
         messages: turnMessages,
         tools,
@@ -158,37 +170,28 @@ export async function runChatAgentTurn(
         abortSignal: deps.signal,
       })
 
-      let text = ''
+      let finalText = ''
+      let stepText = ''
+      let stepUsedTool = false
       for await (const part of result.fullStream) {
         switch (part.type) {
           case 'start-step':
             stepCount += 1
             recordProviderCall()
-            // Text from consecutive steps would otherwise concatenate with no
-            // separator ("…data fresh.Now I have…") — glued prose in the UI and
-            // phantom entities ("fresh.Now") in the grounding check.
-            if (text) {
-              text += '\n\n'
-              snapshot = replaceFrom != null ? replaceFrom + text : snapshot + '\n\n'
-              await deps.onStreamEvent?.({ delta: replaceFrom != null ? '' : '\n\n', snapshot })
-            }
+            stepText = ''
+            stepUsedTool = false
             break
           case 'text-delta': {
-            text += part.text
-            // A grounding retry replaces the already-streamed answer: reset the
-            // snapshot to the retry's own text and stream from there.
-            snapshot = replaceFrom != null ? replaceFrom + text : snapshot + part.text
-            if (replaceFrom != null) {
-              await deps.onStreamEvent?.({ delta: '', snapshot })
-            } else {
-              await deps.onStreamEvent?.({ delta: part.text, snapshot })
-            }
+            stepText += part.text
             break
           }
           case 'tool-call':
-            await deps.onStreamEvent?.({ delta: '', snapshot, status: statusForTool(part.toolName, part.input) })
+            stepUsedTool = true
+            await deps.onStreamEvent?.({ delta: '', snapshot: '', status: statusForTool(part.toolName, part.input) })
             break
           case 'tool-result': {
+            if (part.toolName === 'get_time_chunks') timeChunkResult = part.output as TimeChunkResult
+            if (part.toolName === 'list_page_visits') pageVisitResult = part.output as PageVisitToolResult
             const output = JSON.stringify(part.output ?? null)
             const bounded = output.length > MAX_TOOL_RESULT_CHARS ? `${output.slice(0, MAX_TOOL_RESULT_CHARS)}…` : output
             toolTrace.push({ tool: part.toolName, input: part.input, output: bounded })
@@ -202,6 +205,7 @@ export async function runChatAgentTurn(
           }
           case 'finish-step':
             addUsage(part.usage)
+            if (!stepUsedTool && stepText.trim()) finalText = stepText.trim()
             break
           case 'error':
             throw part.error instanceof Error ? part.error : new Error(String(part.error))
@@ -209,16 +213,32 @@ export async function runChatAgentTurn(
             break
         }
       }
-      return text.trim()
+      return finalText
     }
 
-    let text = await streamTurn(messages, null)
+    let text = await streamTurn(messages)
+    text = (timeChunkResult && renderTimeChunkAnswer(timeChunkResult)) || text
+    const exportFormat = /\b(?:excel|xlsx)\b/i.test(question) ? 'xlsx' : /\bcsv\b/i.test(question) ? 'csv' : null
+    const exportPages = (pageVisitResult as PageVisitToolResult | null)?.pages
+    if (exportFormat && artifacts.length === 0 && exportPages?.length) {
+      await createArtifact(interactionDeps, {
+        title: 'Page activity export',
+        format: exportFormat,
+        columns: ['Title', 'Total time (seconds)', 'Visits', 'URL'],
+        rows: exportPages.map((page) => [
+          page.pageTitle ?? '',
+          page.totalSeconds ?? 0,
+          page.visitCount ?? 0,
+          page.url ?? '',
+        ]),
+      })
+    }
     let groundingRetried = false
 
-    // Grounding verification (ADR 0003 §3): every clock time and quoted entity
+    // Grounding verification: every clock time and quoted entity
     // in the answer must appear in this turn's tool results (or the user's own
     // words). One named-violation retry; a second failure ships anyway with the
-    // violation logged — never a crash, the SOFT-guard philosophy.
+    // violation logged — never a crash, the soft-guard philosophy.
     if (text && toolResultStrings.length > 0) {
       const corpus = [...toolResultStrings, question]
       const timestamps = verifyTimestamps(text, corpus)
@@ -238,7 +258,7 @@ export async function runChatAgentTurn(
             content: `Your answer failed the grounding check: ${problems}. Rewrite it using only times and names that appear in the tool results you already have (call a tool again if you need to re-check). Reply with the corrected answer only.`,
           },
         ]
-        const replacement = await streamTurn(retryMessages, '')
+        const replacement = await streamTurn(retryMessages)
         if (replacement) {
           text = replacement
           const recheck = verifyTimestamps(text, [...toolResultStrings, question])
@@ -246,6 +266,9 @@ export async function runChatAgentTurn(
         }
       }
     }
+
+    text = sanitizeForRender(text).text
+    if (text) await deps.onStreamEvent?.({ delta: text, snapshot: text })
 
     return { text, toolTrace, artifacts, usage, stepCount, groundingRetried }
   } finally {

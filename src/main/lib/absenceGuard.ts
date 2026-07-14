@@ -1,4 +1,4 @@
-// The ONE deterministic absence guard (v2-ship-plan W1-A; timeline.md §3.1).
+// The ONE deterministic absence guard.
 //
 // A "real absence" is a stretch of 15+ minutes with no captured activity at
 // all — the machine was asleep or locked, the user walked away, or capture was

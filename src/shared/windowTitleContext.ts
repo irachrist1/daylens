@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// Window-title semantic context — Stage 0.1 of the Wrapped data layer.
+// Window-title semantic context for the Wrapped data layer.
 //
 // app_sessions stores rich window titles (project names, document titles,
 // meeting names, branch names) that the wrap facts historically ignored: the

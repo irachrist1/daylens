@@ -11,8 +11,7 @@ export function IconSend() {
   )
 }
 
-// Real cancel (W1-C): the composer's send button flips to this while a
-// generation is running.
+// The composer's send button flips to this while a generation is running.
 export function IconStop() {
   return (
     <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
@@ -65,7 +64,7 @@ export function IconSparkle({ size = 16 }: { size?: number }) {
   )
 }
 
-// U3: a clearer "new chat" affordance than the bare pencil — a compose square
+// A clearer "new chat" affordance than the bare pencil — a compose square
 // with a plus, which reads unambiguously as "start a new chat".
 export function IconNewChat() {
   return (
@@ -93,7 +92,7 @@ export function IconSearch({ size = 14 }: { size?: number }) {
   )
 }
 
-// D1: sidebar toggle — a panel with a divider, reads as "show/hide the list".
+// Sidebar toggle — a panel with a divider, reads as "show/hide the list".
 export function IconSidebar({ size = 15 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
