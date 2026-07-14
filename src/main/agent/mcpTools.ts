@@ -1,4 +1,4 @@
-// MCP client for the chat agent (ADR 0003): connects to the MCP servers the
+// MCP client for the chat agent: connects to the MCP servers the
 // user has configured and exposes their tools to the loop. MCP is the one
 // interface for "whatever's installed on this laptop" — never a parallel
 // plugin system. Config lives in settings (`mcpServers`), same shape as
@@ -7,6 +7,8 @@
 import { createMCPClient } from '@ai-sdk/mcp'
 import { Experimental_StdioMCPTransport as StdioMCPTransport } from '@ai-sdk/mcp/mcp-stdio'
 import type { ToolSet } from 'ai'
+import { minimalChildEnv } from '../lib/childEnv'
+import { isRealDayHarness } from '../lib/realDayHarness'
 
 export interface McpServerConfig {
   name: string
@@ -22,7 +24,16 @@ export interface McpToolPool {
 
 const CONNECT_TIMEOUT_MS = 8_000
 
+// Anything a server genuinely needs beyond launch essentials is set
+// explicitly in its settings entry's `env`.
+export function mcpChildEnv(configured?: Record<string, string>): Record<string, string> {
+  return minimalChildEnv(configured)
+}
+
 export async function connectMcpTools(servers: McpServerConfig[]): Promise<McpToolPool> {
+  if (isRealDayHarness()) {
+    return { tools: {}, close: async () => undefined }
+  }
   const clients: Array<{ close: () => Promise<void> }> = []
   const tools: ToolSet = {}
 
@@ -33,7 +44,7 @@ export async function connectMcpTools(servers: McpServerConfig[]): Promise<McpTo
           transport: new StdioMCPTransport({
             command: server.command,
             args: server.args ?? [],
-            env: { ...process.env as Record<string, string>, ...(server.env ?? {}) },
+            env: mcpChildEnv(server.env),
           }),
         }),
         new Promise<never>((_resolve, reject) => {
