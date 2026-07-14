@@ -66,7 +66,11 @@ test('packaged smoke runs tracking on a fresh isolated profile and waits for per
     /if \(!SMOKE_TEST\) \{[\s\S]*?startBrowserTracking\(\)[\s\S]*?backfillWindowsHistory\(\)[\s\S]*?\}/,
     'packaged capture smoke must not read browser history',
   )
-  assert.match(source, /if \(!SMOKE_TEST\) initUpdater\(mainWindow\)/)
+  assert.match(
+    source,
+    /if \(REAL_DAY_HARNESS \|\| !SMOKE_TEST\) initUpdater\(mainWindow\)/,
+    'packaged smoke must skip the updater; the real-day harness initializes it against its internal network block',
+  )
   assert.match(source, /if \(!SMOKE_TEST\) await initAnalytics\(\)/)
   assert.match(source, /if \(!SMOKE_TEST\) void prewarmBrowserRegistry\(\)/)
   assert.match(source, /reason: 'offline-packaged-smoke'/)
