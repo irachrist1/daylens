@@ -56,7 +56,7 @@ jobs:
       - name: Install Linux packaging dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y rpm libsecret-1-dev libnotify-dev libx11-dev libxss-dev libxtst-dev xvfb xauth x11-utils xdotool dbus-x11
+          sudo apt-get install -y rpm libsecret-1-dev libnotify-dev libx11-dev libxss-dev libxtst-dev xvfb xauth x11-utils xdotool dbus-x11 openbox xterm
           docker --version
 
       - name: Stamp version into package.json
@@ -141,15 +141,20 @@ jobs:
         run: |
           VERSION="${{ steps.meta.outputs.version }}"
           chmod +x "dist-release/Daylens-${VERSION}.AppImage"
-          timeout 90s dbus-run-session -- xvfb-run -a env \
+          timeout 110s dbus-run-session -- xvfb-run -a env \
             DAYLENS_SMOKE_TEST=1 \
             DAYLENS_SMOKE_REPORT_PATH="$RUNNER_TEMP/daylens-appimage-smoke.json" \
+            DAYLENS_SMOKE_WINDOW_STATE_PATH="$RUNNER_TEMP/daylens-appimage-window-state.json" \
+            DAYLENS_SMOKE_EXPECT_FOREGROUND_TITLE="Runtime Capture Foreground" \
+            DAYLENS_SMOKE_EXPECT_FULLSCREEN_TITLE="Runtime Capture Fullscreen" \
+            DAYLENS_DEV_USERDATA="$RUNNER_TEMP/daylens-appimage-userdata" \
             APPIMAGE_EXTRACT_AND_RUN=1 \
-            "./dist-release/Daylens-${VERSION}.AppImage" \
+            scripts/run-linux-capture-smoke.sh "./dist-release/Daylens-${VERSION}.AppImage" \
             --no-sandbox \
             --disable-setuid-sandbox
           node scripts/verify-linux-smoke.js \
             --report "$RUNNER_TEMP/daylens-appimage-smoke.json" \
+            --window-state "$RUNNER_TEMP/daylens-appimage-window-state.json" \
             --expect-package-type appimage \
             --expect-package-source appimage-env \
             --expect-updater-supported true
@@ -168,14 +173,19 @@ jobs:
             fi
           done)"
           test -n "$APP_PATH"
-          timeout 90s dbus-run-session -- xvfb-run -a env \
+          timeout 110s dbus-run-session -- xvfb-run -a env \
             DAYLENS_SMOKE_TEST=1 \
             DAYLENS_SMOKE_REPORT_PATH="$RUNNER_TEMP/daylens-deb-smoke.json" \
-            "$APP_PATH" \
+            DAYLENS_SMOKE_WINDOW_STATE_PATH="$RUNNER_TEMP/daylens-deb-window-state.json" \
+            DAYLENS_SMOKE_EXPECT_FOREGROUND_TITLE="Runtime Capture Foreground" \
+            DAYLENS_SMOKE_EXPECT_FULLSCREEN_TITLE="Runtime Capture Fullscreen" \
+            DAYLENS_DEV_USERDATA="$RUNNER_TEMP/daylens-deb-userdata" \
+            scripts/run-linux-capture-smoke.sh "$APP_PATH" \
             --no-sandbox \
             --disable-setuid-sandbox
           node scripts/verify-linux-smoke.js \
             --report "$RUNNER_TEMP/daylens-deb-smoke.json" \
+            --window-state "$RUNNER_TEMP/daylens-deb-window-state.json" \
             --expect-package-type deb \
             --expect-package-source dpkg-query \
             --expect-updater-supported true \
@@ -193,7 +203,7 @@ jobs:
             fedora:40 \
             bash -lc '
               set -euo pipefail
-              dnf install -y nodejs npm findutils grep sed xorg-x11-server-Xvfb xdotool xprop dbus-daemon gtk3 libnotify libXScrnSaver libXtst nss libsecret xdg-utils
+              dnf install -y nodejs npm findutils grep sed xorg-x11-server-Xvfb xdotool xprop xterm openbox xorg-x11-apps dbus-daemon gtk3 libnotify libXScrnSaver libXtst nss libsecret xdg-utils
               PACKAGE_FILE="dist-release/Daylens-'"${VERSION}"'.rpm"
               dnf install --nogpgcheck -y "$PACKAGE_FILE"
               PACKAGE_NAME="$(rpm -qp --queryformat "%{NAME}" "$PACKAGE_FILE")"
@@ -210,11 +220,16 @@ jobs:
               export DISPLAY=:99
               export DAYLENS_SMOKE_TEST=1
               export DAYLENS_SMOKE_REPORT_PATH=/smoke/daylens-rpm-smoke.json
-              timeout 90s dbus-run-session -- "$APP_PATH" \
+              export DAYLENS_SMOKE_WINDOW_STATE_PATH=/smoke/daylens-rpm-window-state.json
+              export DAYLENS_SMOKE_EXPECT_FOREGROUND_TITLE="Runtime Capture Foreground"
+              export DAYLENS_SMOKE_EXPECT_FULLSCREEN_TITLE="Runtime Capture Fullscreen"
+              export DAYLENS_DEV_USERDATA=/tmp/daylens-rpm-userdata
+              timeout 110s dbus-run-session -- scripts/run-linux-capture-smoke.sh "$APP_PATH" \
                 --no-sandbox \
                 --disable-setuid-sandbox
               node scripts/verify-linux-smoke.js \
                 --report /smoke/daylens-rpm-smoke.json \
+                --window-state /smoke/daylens-rpm-window-state.json \
                 --expect-package-type rpm \
                 --expect-package-source rpm-query \
                 --expect-updater-supported true \
@@ -235,6 +250,9 @@ jobs:
             ${{ runner.temp }}/daylens-appimage-smoke.json
             ${{ runner.temp }}/daylens-deb-smoke.json
             ${{ runner.temp }}/daylens-rpm-smoke.json
+            ${{ runner.temp }}/daylens-appimage-window-state.json
+            ${{ runner.temp }}/daylens-deb-window-state.json
+            ${{ runner.temp }}/daylens-rpm-window-state.json
             ${{ runner.temp }}/daylens-deb-info.txt
             ${{ runner.temp }}/daylens-rpm-info.txt
             builder-debug.yml

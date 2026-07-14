@@ -127,6 +127,22 @@ jobs:
       - name: Verify packaged native module layout
         run: node scripts/verify-packaged-natives.js dist-release
 
+      - name: Smoke-test packaged foreground and fullscreen capture
+        shell: bash
+        run: |
+          APP_BUNDLE="$(find dist-release -type d -name Daylens.app -print -quit)"
+          test -n "$APP_BUNDLE"
+          export DAYLENS_SMOKE_TEST=1
+          export DAYLENS_SMOKE_REPORT_PATH="$RUNNER_TEMP/daylens-macos-smoke.json"
+          export DAYLENS_SMOKE_WINDOW_STATE_PATH="$RUNNER_TEMP/daylens-macos-window-state.json"
+          export DAYLENS_SMOKE_EXPECT_FOREGROUND_TITLE="Runtime Capture Foreground"
+          export DAYLENS_SMOKE_EXPECT_FULLSCREEN_TITLE="Runtime Capture Fullscreen"
+          export DAYLENS_DEV_USERDATA="$RUNNER_TEMP/daylens-macos-userdata"
+          scripts/run-macos-capture-smoke.sh "$APP_BUNDLE"
+          node scripts/verify-macos-smoke.js \
+            --report "$DAYLENS_SMOKE_REPORT_PATH" \
+            --window-state "$DAYLENS_SMOKE_WINDOW_STATE_PATH"
+
       - name: Build release notes
         id: notes
         shell: bash
@@ -213,6 +229,8 @@ jobs:
           retention-days: 14
           path: |
             dist-release/**
+            ${{ runner.temp }}/daylens-macos-smoke.json
+            ${{ runner.temp }}/daylens-macos-window-state.json
             builder-debug.yml
             electron-builder-debug.yml
             npm-debug.log*

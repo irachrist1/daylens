@@ -60,9 +60,14 @@ jobs:
           if (-not $appExe) { throw 'Daylens.exe not found after install' }
           $env:DAYLENS_SMOKE_TEST = '1'
           $env:DAYLENS_SMOKE_REPORT_PATH = Join-Path $env:RUNNER_TEMP 'daylens-windows-smoke.json'
-          $proc = Start-Process -FilePath $appExe.FullName -PassThru -Wait
-          if ($proc.ExitCode -ne 0) { throw "Smoke run exited with code $($proc.ExitCode)" }
-          node scripts/verify-windows-smoke.js --report $env:DAYLENS_SMOKE_REPORT_PATH
+          $env:DAYLENS_SMOKE_WINDOW_STATE_PATH = Join-Path $env:RUNNER_TEMP 'daylens-windows-window-state.json'
+          $env:DAYLENS_SMOKE_EXPECT_FOREGROUND_TITLE = 'Runtime Capture Foreground'
+          $env:DAYLENS_SMOKE_EXPECT_FULLSCREEN_TITLE = 'Runtime Capture Fullscreen'
+          $env:DAYLENS_DEV_USERDATA = Join-Path $env:RUNNER_TEMP 'daylens-windows-userdata'
+          scripts/run-windows-capture-smoke.ps1 -AppPath $appExe.FullName
+          node scripts/verify-windows-smoke.js `
+            --report $env:DAYLENS_SMOKE_REPORT_PATH `
+            --window-state $env:DAYLENS_SMOKE_WINDOW_STATE_PATH
 
       - name: Upload Windows runtime diagnostics
         if: always()
@@ -76,6 +81,7 @@ jobs:
           path: |
             dist-release/**
             ${{ runner.temp }}/daylens-windows-smoke.json
+            ${{ runner.temp }}/daylens-windows-window-state.json
             builder-debug.yml
             electron-builder-debug.yml
             npm-debug.log*

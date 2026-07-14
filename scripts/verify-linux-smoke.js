@@ -2,9 +2,10 @@
 
 const fs = require('node:fs')
 const path = require('node:path')
+const { verifyRuntimeCapture } = require('./verify-runtime-capture')
 
 function usage() {
-  console.error('Usage: node scripts/verify-linux-smoke.js --report <path> --expect-package-type <appimage|deb|rpm|pacman|unknown> [--expect-package-source <source>] [--expect-updater-supported <true|false>] [--require-package-owner]')
+  console.error('Usage: node scripts/verify-linux-smoke.js --report <path> --window-state <path> --expect-package-type <appimage|deb|rpm|pacman|unknown> [--expect-package-source <source>] [--expect-updater-supported <true|false>] [--require-package-owner]')
   process.exit(1)
 }
 
@@ -24,12 +25,13 @@ function fail(message) {
 }
 
 const reportPathArg = readArg('--report')
+const windowStatePath = readArg('--window-state')
 const expectedPackageType = readArg('--expect-package-type')
 const expectedPackageSource = readArg('--expect-package-source')
 const expectedUpdaterSupportedArg = readArg('--expect-updater-supported')
 const requirePackageOwner = hasFlag('--require-package-owner')
 
-if (!reportPathArg || !expectedPackageType) usage()
+if (!reportPathArg || !windowStatePath || !expectedPackageType) usage()
 
 const reportPath = path.resolve(reportPathArg)
 if (!fs.existsSync(reportPath)) {
@@ -105,6 +107,8 @@ if (!['ready', 'limited', 'unsupported'].includes(report.linuxTracking.supportLe
   fail(`Expected linuxTracking.supportLevel to be ready/limited/unsupported, got ${report.linuxTracking.supportLevel}`)
 }
 
+const capture = verifyRuntimeCapture(report, windowStatePath, fail)
+
 console.log('Smoke verification passed:')
 console.log(JSON.stringify({
   packageType: report.linuxDesktop.packageType,
@@ -115,4 +119,5 @@ console.log(JSON.stringify({
   linuxTrackingSupport: report.linuxTracking.supportLevel,
   discoveredBrowsers: report.browserStatus.discoveredBrowsers.length,
   trayAvailable: report.tray?.available ?? null,
+  ...capture,
 }, null, 2))

@@ -1,0 +1,78 @@
+name: Verify macOS Runtime
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify-macos-runtime:
+    timeout-minutes: 90
+    runs-on: macos-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Rebuild native modules for Electron
+        run: npx electron-rebuild -f -w better-sqlite3,@paymoapp/active-window,keytar
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build Vite bundles and capture helper
+        run: npm run build:all
+
+      - name: Package macOS application
+        shell: bash
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npx electron-builder --mac dir --publish never --config electron-builder.config.js
+
+      - name: Verify packaged native modules
+        run: node scripts/verify-packaged-natives.js dist-release
+
+      - name: Smoke-test packaged foreground and fullscreen capture
+        shell: bash
+        run: |
+          APP_BUNDLE="$(find dist-release -type d -name Daylens.app -print -quit)"
+          test -n "$APP_BUNDLE"
+          export DAYLENS_SMOKE_TEST=1
+          export DAYLENS_SMOKE_REPORT_PATH="$RUNNER_TEMP/daylens-macos-smoke.json"
+          export DAYLENS_SMOKE_WINDOW_STATE_PATH="$RUNNER_TEMP/daylens-macos-window-state.json"
+          export DAYLENS_SMOKE_EXPECT_FOREGROUND_TITLE="Runtime Capture Foreground"
+          export DAYLENS_SMOKE_EXPECT_FULLSCREEN_TITLE="Runtime Capture Fullscreen"
+          export DAYLENS_DEV_USERDATA="$RUNNER_TEMP/daylens-macos-userdata"
+          scripts/run-macos-capture-smoke.sh "$APP_BUNDLE"
+          node scripts/verify-macos-smoke.js \
+            --report "$DAYLENS_SMOKE_REPORT_PATH" \
+            --window-state "$DAYLENS_SMOKE_WINDOW_STATE_PATH"
+
+      - name: Upload macOS runtime diagnostics
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v6
+        with:
+          name: macos-runtime-diagnostics
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 14
+          path: |
+            dist-release/**
+            ${{ runner.temp }}/daylens-macos-smoke.json
+            ${{ runner.temp }}/daylens-macos-window-state.json
+            builder-debug.yml
+            electron-builder-debug.yml
+            npm-debug.log*

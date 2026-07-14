@@ -2,9 +2,10 @@
 
 const fs = require('node:fs')
 const path = require('node:path')
+const { verifyRuntimeCapture } = require('./verify-runtime-capture')
 
 function usage() {
-  console.error('Usage: node scripts/verify-windows-smoke.js --report <path>')
+  console.error('Usage: node scripts/verify-windows-smoke.js --report <path> --window-state <path>')
   process.exit(1)
 }
 
@@ -20,7 +21,8 @@ function fail(message) {
 }
 
 const reportPathArg = readArg('--report')
-if (!reportPathArg) usage()
+const windowStatePath = readArg('--window-state')
+if (!reportPathArg || !windowStatePath) usage()
 
 const reportPath = path.resolve(reportPathArg)
 if (!fs.existsSync(reportPath)) {
@@ -57,5 +59,8 @@ if (!report.updater || typeof report.updater !== 'object') {
   fail('Updater diagnostics were missing from the smoke report.')
 }
 
-console.log('Windows smoke verification passed.')
+const capture = verifyRuntimeCapture(report, windowStatePath, fail)
+
+console.log('Windows smoke verification passed:')
+console.log(JSON.stringify(capture, null, 2))
 process.exit(0)
