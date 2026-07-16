@@ -1068,7 +1068,7 @@ app.whenReady()
     setDailySummaryNotificationWindow(mainWindow)
     setDistractionAlertWindow(mainWindow)
     if (!REAL_DAY_HARNESS) ensureTray()
-    if (REAL_DAY_HARNESS || !SMOKE_TEST) initUpdater(mainWindow)
+    initUpdater(mainWindow, { diagnosticsOnly: SMOKE_TEST })
 
     // Push OS appearance changes to all renderer windows so the theme updates
     // in real time when the user switches dark/light mode in System Settings.
