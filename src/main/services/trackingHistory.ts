@@ -61,6 +61,15 @@ function clearGeneratedActivitySummaries(db: ReturnType<typeof getDb>): void {
   db.prepare('DELETE FROM ai_surface_summaries').run()
 }
 
+function escapeLike(value: string): string {
+  return value.replace(/([\\%_])/g, '\\$1')
+}
+
+function identifierPattern(value: string): RegExp {
+  const escaped = value.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`(^|[^a-z0-9])${escaped}(?=$|[^a-z0-9])`, 'i')
+}
+
 export function deleteHistoryForApp(input: { bundleId?: string | null; appName?: string | null }): PurgeResult {
   const db = getDb()
   const bundle = (input.bundleId ?? '').trim()
@@ -71,10 +80,12 @@ export function deleteHistoryForApp(input: { bundleId?: string | null; appName?:
   const params = [bundle, bundle, name, name]
   const affected = new Set<string>()
   let deletedRows = 0
-  const identifiers = new Set([bundle, name].filter((value) => value.length >= 3))
+  const identifiers = new Set<string>()
+  if (bundle.length >= 3) identifiers.add(bundle)
+  if (name.length >= 5) identifiers.add(name)
   try {
     const rows = db.prepare(`
-      SELECT app_instance_id, bundle_id, canonical_app_id, raw_app_name, display_name
+      SELECT app_instance_id, bundle_id, canonical_app_id
       FROM app_identities
       WHERE (? <> '' AND lower(bundle_id) = lower(?))
          OR (? <> '' AND (lower(raw_app_name) = lower(?) OR lower(display_name) = lower(?)))
@@ -155,8 +166,11 @@ export function deleteHistoryForApp(input: { bundleId?: string | null; appName?:
       // Derived projection tables are optional on older installs.
     }
 
-    const patterns = [...identifiers].map((value) => `%${value.toLowerCase()}%`)
-    if (patterns.length > 0) {
+    const matchers = [...identifiers].map((value) => ({
+      like: `%${escapeLike(value.toLowerCase())}%`,
+      pattern: identifierPattern(value),
+    }))
+    if (matchers.length > 0) {
       const dateColumns: Record<string, string> = {
         website_visits: 'visit_time',
         focus_events: 'ts_ms',
@@ -177,7 +191,7 @@ export function deleteHistoryForApp(input: { bundleId?: string | null; appName?:
             .join(' ')
             .toLowerCase()
           if (
-            patterns.some((pattern) => text.includes(pattern.slice(1, -1))) &&
+            matchers.some((matcher) => matcher.pattern.test(text)) &&
             row.file_path
           ) {
             artifactFiles.push(row.file_path)
@@ -202,20 +216,28 @@ export function deleteHistoryForApp(input: { bundleId?: string | null; appName?:
             .map((column) => column.name)
           if (textColumns.length === 0) continue
           const clauses = textColumns.flatMap((column) =>
-            patterns.map(() => `lower(CAST("${column}" AS TEXT)) LIKE ?`),
+            matchers.map(() => `lower(CAST("${column}" AS TEXT)) LIKE ? ESCAPE '\\'`),
           )
-          const clauseParams = textColumns.flatMap(() => patterns)
+          const clauseParams = textColumns.flatMap(() => matchers.map((matcher) => matcher.like))
           const clause = clauses.join(' OR ')
           const timeColumn = dateColumns[table]
-          if (timeColumn) {
-            const timeRows = db
-              .prepare(`SELECT "${timeColumn}" AS t FROM "${table}" WHERE ${clause}`)
-              .all(...clauseParams) as Array<{ t: number }>
-            for (const date of distinctLocalDates(timeRows.map((row) => row.t))) affected.add(date)
+          const candidates = db
+            .prepare(`SELECT rowid AS __purge_rowid, * FROM "${table}" WHERE ${clause}`)
+            .all(...clauseParams) as Array<Record<string, unknown>>
+          for (const row of candidates) {
+            const matches = textColumns.some((column) => {
+              const value = row[column]
+              return typeof value === 'string' &&
+                matchers.some((matcher) => matcher.pattern.test(value))
+            })
+            if (!matches || typeof row.__purge_rowid !== 'number') continue
+            if (timeColumn && typeof row[timeColumn] === 'number') {
+              affected.add(localDateString(new Date(row[timeColumn])))
+            }
+            deletedRows += db
+              .prepare(`DELETE FROM "${table}" WHERE rowid = ?`)
+              .run(row.__purge_rowid).changes
           }
-          deletedRows += db
-            .prepare(`DELETE FROM "${table}" WHERE ${clause}`)
-            .run(...clauseParams).changes
         } catch {
           // Virtual tables and legacy schema variants are best-effort.
         }

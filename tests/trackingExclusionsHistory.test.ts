@@ -55,6 +55,26 @@ test('excluding an app removes its app, browser, and native-focus history', () =
   }
 })
 
+test('app purge matches bounded escaped identities without deleting unrelated text', () => {
+  const db = createProductionTestDatabase()
+  db.exec('CREATE TABLE purge_probe (value TEXT NOT NULL)')
+  const insert = db.prepare('INSERT INTO purge_probe (value) VALUES (?)')
+  insert.run('app.test_editor')
+  insert.run('app.testXeditor')
+  insert.run('Frozen roadmap')
+  setTestDb(db)
+
+  try {
+    deleteHistoryForApp({ bundleId: 'app.test_editor', appName: 'TestEditor' })
+    deleteHistoryForApp({ appName: 'Zen' })
+    const rows = db.prepare('SELECT value FROM purge_probe ORDER BY value').all() as Array<{ value: string }>
+    assert.deepEqual(rows.map((row) => row.value), ['Frozen roadmap', 'app.testXeditor'])
+  } finally {
+    clearTestDb()
+    db.close()
+  }
+})
+
 test('excluding a site removes old URL evidence from history and projections', () => {
   const db = createProductionTestDatabase()
   seed(db)
