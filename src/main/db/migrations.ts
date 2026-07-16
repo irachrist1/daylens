@@ -2189,7 +2189,8 @@ const migrations: Migration[] = [
         CREATE UNIQUE INDEX idx_focus_events_identity ON focus_events_v46 (
           source, event_type, ts_ms, mono_ns,
           COALESCE(app_bundle_id, ''), COALESCE(app_name, ''),
-          COALESCE(window_title, ''), COALESCE(url, ''), COALESCE(page_title, '')
+          COALESCE(pid, -1), COALESCE(window_title, ''), COALESCE(url, ''),
+          COALESCE(page_title, ''), confidence, platform
         );
       `)
       if (hasLegacyTable) {

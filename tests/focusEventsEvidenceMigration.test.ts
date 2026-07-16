@@ -37,6 +37,7 @@ interface LegacyRow {
   event_type: string
   app_bundle_id: string | null
   app_name: string | null
+  pid: number | null
   window_title: string | null
   url: string | null
   page_title: string | null
@@ -51,6 +52,7 @@ function legacyRow(overrides: Partial<LegacyRow> & { ts_ms: number }): LegacyRow
     event_type: 'app_activated',
     app_bundle_id: 'com.example.editor',
     app_name: 'Editor',
+    pid: 42,
     window_title: 'notes.md',
     url: null,
     page_title: null,
@@ -61,7 +63,7 @@ function legacyRow(overrides: Partial<LegacyRow> & { ts_ms: number }): LegacyRow
   }
 }
 
-function createUpgradedDatabase(): Database.Database {
+function createUpgradedDatabase(additionalRows: readonly LegacyRow[] = []): Database.Database {
   const db = new Database(':memory:')
   db.pragma('foreign_keys = ON')
   db.exec(SCHEMA_SQL)
@@ -79,7 +81,7 @@ function createUpgradedDatabase(): Database.Database {
       ts_ms, mono_ns, event_type, app_bundle_id, app_name, pid,
       window_title, url, page_title, source, confidence, platform, schema_ver
     ) VALUES (
-      @ts_ms, @mono_ns, @event_type, @app_bundle_id, @app_name, 42,
+      @ts_ms, @mono_ns, @event_type, @app_bundle_id, @app_name, @pid,
       @window_title, @url, @page_title, @source, @confidence, @platform, 1
     )
   `)
@@ -110,6 +112,7 @@ function createUpgradedDatabase(): Database.Database {
     legacyRow({ ts_ms: 6_000, confidence: 'unknown', window_title: null }),
   ]
   for (const row of rows) insert.run(row)
+  for (const row of additionalRows) insert.run(row)
   // An exact duplicate of the first row — a retried batch that was persisted
   // twice under the legacy path.
   insert.run(rows[0])
@@ -204,6 +207,36 @@ test('migrating an upgraded database is idempotent for evidence identities', () 
     runMigrations()
     const second = db.prepare('SELECT id, evidence_id FROM focus_events ORDER BY id').all()
     assert.deepEqual(second, first)
+  } finally {
+    console.log = log
+    clearTestDb()
+    db.close()
+  }
+})
+
+test('migration collapses only exact legacy duplicates', () => {
+  const db = createUpgradedDatabase([
+    legacyRow({ ts_ms: 1_000, pid: 43 }),
+    legacyRow({ ts_ms: 1_000, confidence: 'unknown' }),
+    legacyRow({ ts_ms: 1_000, platform: 'win32' }),
+  ])
+  setTestDb(db)
+  const log = console.log
+  console.log = () => {}
+  try {
+    runMigrations()
+    const rows = db.prepare(`
+      SELECT pid, confidence, platform
+        FROM focus_events
+       WHERE ts_ms = 1000
+       ORDER BY id
+    `).all()
+    assert.deepEqual(rows, [
+      { pid: 42, confidence: 'observed', platform: 'darwin' },
+      { pid: 43, confidence: 'observed', platform: 'darwin' },
+      { pid: 42, confidence: 'unknown', platform: 'darwin' },
+      { pid: 42, confidence: 'observed', platform: 'win32' },
+    ])
   } finally {
     console.log = log
     clearTestDb()
