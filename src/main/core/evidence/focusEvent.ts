@@ -176,11 +176,28 @@ export type FocusEventRejectionReason =
   | 'source_kind_mismatch'
   | 'capture_state_content'
   | 'invalid_sensitivity'
+  | 'page_content_violation'
+
+// Mirrors the storage CHECK constraints so an invalid event is rejected and
+// counted here instead of being silently skipped by the idempotent insert:
+// foreground sources never carry page content, unknown confidence never
+// carries page content, and an observed tab event must name its URL.
+function violatesPageContentRules(event: FocusEventInsert): boolean {
+  const hasPageContent = event.url !== null || event.page_title !== null
+  if (event.confidence === 'unknown' && hasPageContent) return true
+  if ((event.source === 'nsworkspace_event' || event.source === 'uia_foreground') && hasPageContent) return true
+  if (
+    (event.source === 'apple_events_tab' || event.source === 'uia_tab') &&
+    event.confidence === 'observed' && !event.url
+  ) return true
+  return false
+}
 
 export function validateFocusEventForInsert(event: FocusEventInsert): FocusEventRejectionReason | null {
   if (!isSupportedFocusEventSchemaVersion(event.schema_ver)) return 'unsupported_schema_version'
   if (!sourceAcceptsFocusEventType(event.source, event.event_type)) return 'source_kind_mismatch'
   if (captureStateEventCarriesContent(event)) return 'capture_state_content'
+  if (violatesPageContentRules(event)) return 'page_content_violation'
   if (event.sensitivity !== undefined && !isEvidenceSensitivity(event.sensitivity)) return 'invalid_sensitivity'
   return null
 }

@@ -132,3 +132,38 @@ test('insert validation rejects unsupported schema versions and contract violati
     'invalid_sensitivity',
   )
 })
+
+test('insert validation enforces the page-content rules the storage layer checks', () => {
+  assert.equal(
+    validateFocusEventForInsert(baseEvent({ url: 'https://example.com' })),
+    'page_content_violation',
+  )
+  assert.equal(
+    validateFocusEventForInsert(baseEvent({
+      event_type: 'tab_changed',
+      source: 'apple_events_tab',
+      confidence: 'unknown',
+      page_title: 'Leaked title',
+    })),
+    'page_content_violation',
+  )
+  assert.equal(
+    validateFocusEventForInsert(baseEvent({
+      event_type: 'tab_changed',
+      source: 'apple_events_tab',
+      confidence: 'observed',
+      url: null,
+    })),
+    'page_content_violation',
+  )
+  assert.equal(
+    validateFocusEventForInsert(baseEvent({
+      event_type: 'tab_changed',
+      source: 'apple_events_tab',
+      confidence: 'observed',
+      url: 'https://example.com/docs',
+      page_title: 'Docs',
+    })),
+    null,
+  )
+})
