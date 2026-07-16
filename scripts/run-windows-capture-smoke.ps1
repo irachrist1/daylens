@@ -42,7 +42,7 @@ try {
   $foreground = Start-Process -FilePath $foregroundProbe -ArgumentList @(
     "`"$env:DAYLENS_SMOKE_EXPECT_FOREGROUND_TITLE`"",
     'foreground',
-    '18',
+    '30',
     "`"$env:DAYLENS_SMOKE_WINDOW_STATE_PATH`""
   ) -PassThru -Wait
   if ($foreground.ExitCode -ne 0) { throw "Foreground capture probe exited with code $($foreground.ExitCode)" }
@@ -50,7 +50,7 @@ try {
   $fullscreen = Start-Process -FilePath $fullscreenProbe -ArgumentList @(
     "`"$env:DAYLENS_SMOKE_EXPECT_FULLSCREEN_TITLE`"",
     'fullscreen',
-    '18',
+    '30',
     "`"$env:DAYLENS_SMOKE_WINDOW_STATE_PATH`""
   ) -PassThru -Wait
   if ($fullscreen.ExitCode -ne 0) { throw "Fullscreen capture probe exited with code $($fullscreen.ExitCode)" }

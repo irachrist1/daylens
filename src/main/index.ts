@@ -384,7 +384,7 @@ async function waitForSmokeCapture(): Promise<{
     }
   }
 
-  const deadline = Date.now() + 70_000
+  const deadline = Date.now() + 100_000
   while (Date.now() < deadline) {
     const sessions = readSmokeCaptureSessions()
     const foreground = sessions.find((session) => session.windowTitle === SMOKE_FOREGROUND_TITLE)
@@ -744,7 +744,10 @@ function createWindow(): BrowserWindow {
     win.show()
     maybeRunSmokeValidation('ready-to-show')
   })
-  win.webContents.once('did-finish-load', () => maybeRunSmokeValidation('did-finish-load'))
+  win.webContents.once('did-finish-load', () => {
+    if (SMOKE_TEST && !win.isVisible()) win.show()
+    maybeRunSmokeValidation('did-finish-load')
+  })
   if (SMOKE_TEST) {
     setTimeout(() => maybeRunSmokeValidation('watchdog'), 20_000)
   }

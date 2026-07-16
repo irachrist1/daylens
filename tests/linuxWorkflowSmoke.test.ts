@@ -7,6 +7,10 @@ const WORKFLOWS = [
   '.github/workflows/verify-linux-runtime.yml',
   '.github/workflows/release-linux.yml',
 ]
+const RUN_SCRIPT = fs.readFileSync(
+  path.resolve(process.cwd(), 'scripts/run-linux-capture-smoke.sh'),
+  'utf8',
+)
 
 test('linux smoke workflows launch Electron inside a DBus session', () => {
   for (const workflowPath of WORKFLOWS) {
@@ -34,5 +38,10 @@ test('linux smoke workflows launch Electron inside a DBus session', () => {
     assert.match(source, /DAYLENS_SMOKE_EXPECT_FOREGROUND_TITLE="Runtime Capture Foreground"/)
     assert.match(source, /DAYLENS_SMOKE_EXPECT_FULLSCREEN_TITLE="Runtime Capture Fullscreen"/)
     assert.match(source, /--window-state/)
+    assert.match(source, /apt-get install -y[^\n]*\bwmctrl\b/)
+    assert.match(source, /dnf install -y[^\n]*\bwmctrl\b/)
+    assert.match(RUN_SCRIPT, /wmctrl -m[\s\S]*?"\$app_path" "\$@"/)
+    assert.match(RUN_SCRIPT, /kill -0 "\$app_pid"/)
+    assert.match(RUN_SCRIPT, /xwininfo -root -tree/)
   }
 })
