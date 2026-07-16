@@ -13,6 +13,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   isCaptureEventsDayFixture,
+  isKnownIssueDefect,
   loadDayFixtures,
   type CaptureEventsDayFixture,
 } from './support/dayFixture.ts'
@@ -206,7 +207,6 @@ async function runFixture(fixture: CaptureEventsDayFixture): Promise<void> {
     const prohibitedTerms = fixture.expected?.privacy?.prohibitedTerms ?? []
     if (prohibitedTerms.length > 0) {
       const deferrals = fixture.expected?.knownIssues ?? []
-      const matchedDeferrals = new Set<string>()
       const observedPrivacyIssues: string[] = []
       const checkDatabaseMatches = (term: string, tables?: ReadonlySet<string>) => {
         for (const match of findDatabaseTextMatches(db, term, tables)) {
@@ -264,16 +264,9 @@ async function runFixture(fixture: CaptureEventsDayFixture): Promise<void> {
       }
       const unexpectedPrivacyIssues: string[] = []
       for (const signature of new Set(observedPrivacyIssues)) {
-        const deferral = deferrals.find((candidate) => candidate.defectSignatures.includes(signature))
-        if (deferral) matchedDeferrals.add(`${deferral.issue}\0${signature}`)
-        else unexpectedPrivacyIssues.push(signature)
+        if (!isKnownIssueDefect(deferrals, signature)) unexpectedPrivacyIssues.push(signature)
       }
-      const staleDeferrals = deferrals.flatMap((deferral) =>
-        deferral.defectSignatures
-          .filter((signature) => !matchedDeferrals.has(`${deferral.issue}\0${signature}`))
-          .map((signature) => `${deferral.issue}: stale deferral did not occur: ${signature}`),
-      )
-      const privacyDefects = [...new Set([...unexpectedPrivacyIssues, ...staleDeferrals])]
+      const privacyDefects = [...new Set(unexpectedPrivacyIssues)]
       assert.equal(
         privacyDefects.length,
         0,

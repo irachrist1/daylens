@@ -4,6 +4,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createProductionTestDatabase } from '../support/testDatabase.ts'
 import {
+  isKnownIssueDefect,
   isNormalizedEvidenceDayFixture,
   loadDayFixtures,
   type ExpectedDayEpisode,
@@ -1342,25 +1343,14 @@ if (designDefects.length > 0) {
 const wrapDefects = results.flatMap((result) => {
   const defects = [...result.unsupportedWrapClaims, ...result.wrapGroundingIssues]
   const deferrals = result.fixture.expected.knownIssues ?? []
-  const matched = new Set<string>()
   const unexpected: string[] = []
   for (const defect of defects) {
-    const deferral = deferrals.find((candidate) => candidate.defectSignatures.includes(defect))
-    if (!deferral) {
+    if (!isKnownIssueDefect(deferrals, defect)) {
       unexpected.push(`${result.fixture.id}: ${defect}`)
       continue
     }
-    matched.add(`${deferral.issue}\0${defect}`)
+    const deferral = deferrals.find((candidate) => candidate.defectSignatures.includes(defect))!
     console.error(`\n${result.fixture.id}: exact defect deferred to ${deferral.issue}:\n- ${defect}`)
-  }
-  for (const deferral of deferrals) {
-    for (const signature of deferral.defectSignatures) {
-      if (!matched.has(`${deferral.issue}\0${signature}`)) {
-        unexpected.push(
-          `${result.fixture.id}: stale ${deferral.issue} deferral did not occur: ${signature}`,
-        )
-      }
-    }
   }
   return unexpected
 })

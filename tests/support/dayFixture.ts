@@ -112,6 +112,13 @@ export interface KnownIssueDeferral {
   defectSignatures: string[]
 }
 
+export function isKnownIssueDefect(
+  deferrals: readonly KnownIssueDeferral[],
+  defect: string,
+): boolean {
+  return deferrals.some((deferral) => deferral.defectSignatures.includes(defect))
+}
+
 export interface DayFixtureExpected {
   episodes?: ExpectedDayEpisode[]
   wrap?: ExpectedDayWrap

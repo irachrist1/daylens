@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { normalizeDayFixture } from './support/dayFixture.ts'
+import { isKnownIssueDefect, normalizeDayFixture } from './support/dayFixture.ts'
 
 function fixtureWithRole(correctedIntentRole: unknown): unknown {
   return {
@@ -24,4 +24,12 @@ test('day fixtures accept only production work-intent roles', () => {
     () => normalizeDayFixture(fixtureWithRole('anything-at-all')),
     /correctedIntentRole must be one of/,
   )
+})
+
+test('known-issue deferrals match only the exact tracked defect', () => {
+  const deferrals = [{ issue: 'DEV-214', defectSignatures: ['privacy: exact leak'] }]
+
+  assert.equal(isKnownIssueDefect(deferrals, 'privacy: exact leak'), true)
+  assert.equal(isKnownIssueDefect(deferrals, 'privacy: exact leak in another table'), false)
+  assert.equal(isKnownIssueDefect(deferrals, 'privacy: different leak'), false)
 })
