@@ -108,6 +108,17 @@ The retrieval planner narrows time and entities before semantic search. Numeric 
 - A remote embedding provider requires explicit opt-in and receives only the minimized permitted text.
 - Changing models builds a new index before removing the previous valid one.
 
+### Chosen engine
+
+The default local engine is `all-MiniLM-L6-v2` (384 dimensions, int8-quantized ONNX) running under transformers.js on the ONNX runtime — plain Node, Electron-compatible, no Python — with `sqlite-vec` as the vector index so embeddings live in the same SQLite database as the rest of memory and are covered by the same deletion path. `bench/semantic-search` documents the measurement basis on a synthetic year of 109,500 memory records (2026-07-16, Apple Silicon):
+
+- Full-year index build: 97 s at 1,128 records/s, 3.8 CPU-seconds per 1,000 records — bounded background batches re-embed a year in minutes, a day in under a second.
+- Query latency: 76 ms end to end (query embedding plus sqlite-vec top-10) at the 95th percentile, against the 1-second budget below.
+- Resident memory: under 200 MB during a full-year build; the model itself loads in ~100 ms once cached.
+- Vague-memory recall@10: 17/24 on deliberately non-lexical probes — identical to `bge-small-en-v1.5`, which costs twice the build time (198 s) and CPU (7.8 s per 1,000 records) with no measured quality gain.
+
+The model choice stays versioned and replaceable per the invariants above; re-running the decision against a new candidate means re-running the benchmark, not re-opening the architecture.
+
 ## Ranking
 
 Ranking combines:

@@ -1,0 +1,62 @@
+{
+  "generatedAt": "2026-07-16T14:55:22.071Z",
+  "node": "v26.4.0",
+  "platform": "darwin/arm64",
+  "yearRecords": 109500,
+  "embeddedSubset": 109500,
+  "dims": 384,
+  "results": [
+    {
+      "model": "all-MiniLM-L6-v2 (q8)",
+      "loadMs": 100,
+      "recordsPerSec": 1128,
+      "fullYearBuildMin": 1.6,
+      "embedCpuSecPer1k": 3.79,
+      "rssAfterEmbedMb": 198,
+      "sqliteVecInsertSec": 1,
+      "queryEmbedMs": {
+        "p50": 1.9284999999945285,
+        "p95": 7.719874999995227,
+        "max": 28.108500000002095
+      },
+      "bruteForceSearchMs": {
+        "p50": 39.99445800000103,
+        "p95": 71.96125000000757,
+        "max": 133.91295899999386
+      },
+      "sqliteVecSearchMs": {
+        "p50": 44.6840830000001,
+        "p95": 71.92545799999789,
+        "max": 99.69029100000625
+      },
+      "endToEndP95Ms": 76,
+      "recallAt10": "17/24"
+    },
+    {
+      "model": "bge-small-en-v1.5 (q8)",
+      "loadMs": 121,
+      "recordsPerSec": 552,
+      "fullYearBuildMin": 3.3,
+      "embedCpuSecPer1k": 7.78,
+      "rssAfterEmbedMb": 150,
+      "sqliteVecInsertSec": 1.2,
+      "queryEmbedMs": {
+        "p50": 2.7276670000283048,
+        "p95": 6.219457999977749,
+        "max": 10.711874999979045
+      },
+      "bruteForceSearchMs": {
+        "p50": 38.12933400005568,
+        "p95": 59.43300000001909,
+        "max": 67.16345799999544
+      },
+      "sqliteVecSearchMs": {
+        "p50": 42.74516599997878,
+        "p95": 60.15454200003296,
+        "max": 80.28733299998567
+      },
+      "endToEndP95Ms": 63,
+      "recallAt10": "17/24"
+    }
+  ]
+}

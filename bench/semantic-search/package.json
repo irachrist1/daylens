@@ -1,0 +1,19 @@
+{
+  "name": "daylens-bench-semantic-search",
+  "private": true,
+  "description": "DEV-179 research benchmark: local embedding models and a local vector index over a synthetic year of memory records. Standalone on purpose — nothing here may enter the product dependency tree.",
+  "type": "module",
+  "scripts": {
+    "bench": "node bench.mjs",
+    "bench:full": "node bench.mjs --full"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^3.4.0",
+    "sqlite-vec": "^0.1.6"
+  },
+  "allowScripts": {
+    "onnxruntime-node@1.21.0": true,
+    "protobufjs@7.6.5": true,
+    "sharp@0.34.5": true
+  }
+}
