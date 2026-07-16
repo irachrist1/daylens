@@ -273,10 +273,11 @@ async function runFixture(fixture: CaptureEventsDayFixture): Promise<void> {
           .filter((signature) => !matchedDeferrals.has(`${deferral.issue}\0${signature}`))
           .map((signature) => `${deferral.issue}: stale deferral did not occur: ${signature}`),
       )
-      assert.deepEqual(
-        [...new Set([...unexpectedPrivacyIssues, ...staleDeferrals])],
-        [],
-        `${fixture.id}: privacy defects must match one exact tracked deferral`,
+      const privacyDefects = [...new Set([...unexpectedPrivacyIssues, ...staleDeferrals])]
+      assert.equal(
+        privacyDefects.length,
+        0,
+        `${fixture.id}: privacy defects must match one exact tracked deferral:\n${privacyDefects.join('\n')}`,
       )
     }
   } finally {
