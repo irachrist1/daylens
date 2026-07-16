@@ -6,7 +6,8 @@ import { isCaptureEventsDayFixture, loadDayFixture } from './support/dayFixture.
 import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { setTestDb, clearTestDb } from './support/database-stub.mjs'
 import { __resetSettings } from './support/settings-stub.mjs'
-import { driveCaptureDay } from './support/captureDay.ts'
+import { driveCaptureDay, fixtureClockMs } from './support/captureDay.ts'
+import { findDatabaseTextMatches } from './support/dayFixturePrivacy.ts'
 import { projectDay } from '../src/main/core/projections/chunk2.ts'
 import { writeTimelineBlockReview } from '../src/main/services/workBlocks.ts'
 import { materializeTimelineDayProjection } from '../src/main/core/query/projections.ts'
@@ -15,6 +16,7 @@ import { addWorkMemoryFact, chatMemoryPromptBlock } from '../src/main/services/w
 import { buildDaylensTools } from '../src/main/agent/daylensTools.ts'
 import { collectExternalSignals, getExternalSignal } from '../src/main/services/externalSignals.ts'
 import { syncNowForQuit } from '../src/main/services/syncUploader.ts'
+import { executeTool } from '../src/main/services/aiTools.ts'
 import type { CalendarSignal } from '../src/shared/types.ts'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -27,12 +29,6 @@ if (!isCaptureEventsDayFixture(fixture)) {
 const calendar = fixture.context?.calendar
 if (!calendar) throw new Error('reference-workday must include calendar context')
 
-function atMs(clock: string): number {
-  const [year, month, day] = fixture.date.split('-').map(Number)
-  const [hour, minute] = clock.split(':').map(Number)
-  return new Date(year, month - 1, day, hour, minute, 0, 0).getTime()
-}
-
 test('synthetic day agrees from source boundaries through every local fact surface', async () => {
   const db = createProductionTestDatabase()
   setTestDb(db)
@@ -42,7 +38,7 @@ test('synthetic day agrees from source boundaries through every local fact surfa
 
     const projection = projectDay(db, fixture.date, {
       finalize: true,
-      now: new Date(atMs('23:59')),
+      now: new Date(fixtureClockMs(fixture, '23:59')),
     })
     assert.equal(projection.skipped, false)
     assert.ok(
@@ -74,7 +70,7 @@ test('synthetic day agrees from source boundaries through every local fact surfa
     for (const fact of fixture.context?.memoryFacts ?? []) addWorkMemoryFact(db, fact)
     assert.match(chatMemoryPromptBlock(db, 'What should I know about Acme?'), /Atlas project/)
 
-    const fromMs = atMs('00:00')
+    const fromMs = fixtureClockMs(fixture, '00:00')
     const toMs = fromMs + 86_400_000
     const timeline = materializeTimelineDayProjection(db, fixture.date, null)
     const apps = getAppSummariesForRange(db, fromMs, toMs)
@@ -82,7 +78,7 @@ test('synthetic day agrees from source boundaries through every local fact surfa
     assert.ok(appNames.includes('Code'), `missing captured editor in ${appNames.join(', ')}`)
     assert.ok(appNames.includes('Google Chrome'), `missing Google Chrome in ${appNames.join(', ')}`)
     assert.ok(
-      appNames.includes('zoom.us'),
+      apps.some((app) => app.category === 'meetings'),
       `missing captured meeting app in ${appNames.join(', ')}`,
     )
     assert.ok(
@@ -96,42 +92,13 @@ test('synthetic day agrees from source boundaries through every local fact surfa
       'private or excluded label leaked into Timeline',
     )
 
-    const forbiddenCounts = {
-      sessions: (
-        db
-          .prepare(
-            "SELECT COUNT(*) AS n FROM app_sessions WHERE app_name = 'SecretApp' OR window_title LIKE '%Private customer%'",
-          )
-          .get() as { n: number }
-      ).n,
-      pending: (
-        db
-          .prepare(
-            "SELECT COUNT(*) AS n FROM website_visits_pending WHERE domain = 'excluded.example'",
-          )
-          .get() as { n: number }
-      ).n,
-      visits: (
-        db
-          .prepare("SELECT COUNT(*) AS n FROM website_visits WHERE domain = 'excluded.example'")
-          .get() as { n: number }
-      ).n,
-      focus: (
-        db
-          .prepare(
-            "SELECT COUNT(*) AS n FROM focus_events WHERE app_name = 'SecretApp' OR window_title LIKE '%Incognito%'",
-          )
-          .get() as { n: number }
-      ).n,
-      derived: (
-        db
-          .prepare(
-            "SELECT COUNT(*) AS n FROM derived_sessions WHERE app_name = 'SecretApp' OR window_title LIKE '%Incognito%'",
-          )
-          .get() as { n: number }
-      ).n,
+    for (const term of fixture.expected?.privacy?.prohibitedTerms ?? []) {
+      assert.deepEqual(
+        findDatabaseTextMatches(db, term),
+        [],
+        `${term} leaked into a database surface`,
+      )
     }
-    assert.deepEqual(forbiddenCounts, { sessions: 0, pending: 0, visits: 0, focus: 0, derived: 0 })
 
     const search = searchAll(db, 'Acme', {
       startDate: fixture.date,
@@ -157,6 +124,14 @@ test('synthetic day agrees from source boundaries through every local fact surfa
     ).execute({ date: fixture.date }, {})
     assert.match(JSON.stringify(overview), /Acme/)
     assert.doesNotMatch(JSON.stringify(overview), /SecretApp|Private customer|excluded\.example/i)
+    const mcp = executeTool('getDaySummary', { date: fixture.date }, db)
+    assert.doesNotMatch(JSON.stringify(mcp), /SecretApp|Private customer|excluded\.example/i)
+    for (const term of fixture.expected?.privacy?.prohibitedTerms ?? []) {
+      assert.ok(
+        !chatMemoryPromptBlock(db, term).toLowerCase().includes(term.toLowerCase()),
+        `${term} leaked into memory`,
+      )
+    }
 
     const firstBlock = timeline.blocks[0]
     assert.ok(firstBlock, 'synthetic Timeline produced no blocks')

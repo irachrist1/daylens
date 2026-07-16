@@ -34,26 +34,25 @@ export async function driveCaptureDay(
   let foreground = fixture.input.foregroundSamples[0]
   let rejectedFocusEvents = 0
 
-  __setSettings(fixture.input.settings)
-  __setActiveBrowserContextTrackerForTest(
-    new ActiveBrowserContextTracker(
-      () => foreground.tab ?? null,
-      (snapshot) => /chrome/i.test(snapshot.appName),
-    ),
-  )
-  __setTrackingFsmTestHarness({
-    now: () => clock.now,
-    idleSeconds: () => 0,
-    activeWindow: () => ({
-      title: foreground.title,
-      application: foreground.application,
-      path: foreground.path,
-      pid: 42,
-      icon: '',
-    }),
-  })
-
   try {
+    __setSettings(fixture.input.settings)
+    __setActiveBrowserContextTrackerForTest(
+      new ActiveBrowserContextTracker(
+        () => foreground.tab ?? null,
+        (snapshot) => /chrome/i.test(snapshot.appName),
+      ),
+    )
+    __setTrackingFsmTestHarness({
+      now: () => clock.now,
+      idleSeconds: () => 0,
+      activeWindow: () => ({
+        title: foreground.title,
+        application: foreground.application,
+        path: foreground.path,
+        pid: 42,
+        icon: '',
+      }),
+    })
     for (let index = 0; index < fixture.input.foregroundSamples.length; index += 1) {
       const next = fixture.input.foregroundSamples[index]
       const nextMs = fixtureClockMs(fixture, next.at)

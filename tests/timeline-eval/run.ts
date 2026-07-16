@@ -18,6 +18,11 @@ import {
 import { getCorrectedAppSummariesForRange } from '../../src/main/services/activityFacts.ts'
 import { getExternalSignal, putExternalSignal } from '../../src/main/services/externalSignals.ts'
 import { searchAll } from '../../src/main/db/queries.ts'
+import { resolveDayEnrichment } from '../../src/main/services/enrichmentResolve.ts'
+import { chatMemoryPromptBlock } from '../../src/main/services/workMemoryProfile.ts'
+import { buildDaylensTools } from '../../src/main/agent/daylensTools.ts'
+import { executeTool } from '../../src/main/services/aiTools.ts'
+import { findDatabaseTextMatches } from '../support/dayFixturePrivacy.ts'
 import { buildFallbackNarrative, computeFactsHash } from '../../src/main/lib/wrappedNarrative.ts'
 import {
   buildDayWrapFacts,
@@ -303,6 +308,14 @@ function minutesSinceMidnight(fixture: TimelineFixture, ms: number): number {
   return Math.round((ms - msForClock(fixture.date, '00:00')) / 60_000)
 }
 
+function formattedDurationMinutes(value: string | null | undefined): number | null {
+  if (!value) return null
+  const hours = /([0-9]+)h/.exec(value)?.[1]
+  const minutes = /([0-9]+)m/.exec(value)?.[1]
+  if (hours == null && minutes == null) return null
+  return Number(hours ?? 0) * 60 + Number(minutes ?? 0)
+}
+
 interface FactsResult {
   issues: string[]
   passed: number
@@ -348,13 +361,19 @@ function evaluateDayFacts(
   }
 
   const calendar = getExternalSignal<CalendarSignal>(db, fixture.date, 'calendar')?.payload
+  const resolvedMeetings = resolveDayEnrichment(db, fixture.date)?.meetings?.items ?? []
   const actualMeetings = [
-    ...(calendar?.events ?? []).map((event) => ({
-      source: 'calendar',
-      title: event.title,
-      startMinutes: calendarClockToMinutes(event.startClock),
-      minutes: typeof event.durationMinutes === 'number' ? event.durationMinutes : null,
-    })),
+    ...(calendar?.events ?? []).map((event) => {
+      const resolved = resolvedMeetings.find((item) =>
+        item.title != null && containsAny(item.title, [event.title]),
+      )
+      return {
+        source: 'calendar',
+        title: resolved?.title ?? '',
+        startMinutes: calendarClockToMinutes(event.startClock),
+        minutes: formattedDurationMinutes(resolved?.scheduled),
+      }
+    }),
     ...payload.blocks
       .filter((block) => block.dominantCategory === 'meetings')
       .map((block) => ({
@@ -431,20 +450,22 @@ function evaluateDayFacts(
   return { issues, passed, total }
 }
 
-// Privacy rules are absolute: a prohibited term may not reach any product
-// surface the eval can read — organized Timeline blocks, Apps summaries,
-// search, or the wrap. Raw evidence is intentionally not scanned here; an
-// ignored block keeps its capture while disappearing from every surface.
-function evaluateFixturePrivacy(
+// Each fixture names the surfaces where a term is prohibited. Raw evidence is
+// scanned only when named because an ignored block may intentionally keep its
+// capture while disappearing from product surfaces.
+async function evaluateFixturePrivacy(
   fixture: TimelineFixture,
   db: Database.Database,
   payload: DayTimelinePayload,
   texts: string[],
   appSummaries: AppUsageSummary[],
-): string[] {
+): Promise<string[]> {
   const terms = fixture.expected.privacy?.prohibitedTerms ?? []
   if (terms.length === 0) return []
   const issues: string[] = []
+  const declared = new Set(fixture.expected.privacy?.prohibitedSurfaces ?? [
+    'Timeline', 'Apps', 'search', 'wrap',
+  ])
   const timelineHaystack = normalizeText(
     JSON.stringify(
       payload.blocks.map((block) => [
@@ -456,23 +477,62 @@ function evaluateFixturePrivacy(
       ]),
     ),
   )
-  const surfaces: Array<[string, string]> = [
-    ['Timeline', timelineHaystack],
-    ['Apps', normalizeText(appSummaries.map((summary) => summary.appName).join(' | '))],
-    ['wrap', normalizeText(texts.join(' | '))],
-  ]
+  const surfaces: Array<[string, string]> = []
+  if (declared.has('Timeline')) surfaces.push(['Timeline', timelineHaystack])
+  if (declared.has('Apps')) {
+    surfaces.push(['Apps', normalizeText(JSON.stringify(appSummaries))])
+  }
+  if (declared.has('wrap')) surfaces.push(['wrap', normalizeText(texts.join(' | '))])
   for (const term of terms) {
     const normalized = normalizeText(term)
     for (const [surface, haystack] of surfaces) {
       if (haystack.includes(normalized)) issues.push(`privacy: "${term}" leaked into ${surface}`)
     }
-    const rows = searchAll(db, term, {
-      startDate: fixture.date,
-      endDate: fixture.date,
-      limit: 20,
-    })
-    if (rows.length > 0) {
-      issues.push(`privacy: search for "${term}" returns ${rows.length} rows`)
+    if (declared.has('sessions')) {
+      const matches = findDatabaseTextMatches(db, term, new Set(['app_sessions']))
+      if (matches.length > 0) issues.push(`privacy: "${term}" remains in sessions (${matches.length} cells)`)
+    }
+    if (declared.has('pending evidence')) {
+      const matches = findDatabaseTextMatches(db, term, new Set(['website_visits_pending']))
+      if (matches.length > 0) issues.push(`privacy: "${term}" remains in pending evidence (${matches.length} cells)`)
+    }
+    if (declared.has('canonical evidence')) {
+      const matches = findDatabaseTextMatches(db, term)
+      if (matches.length > 0) {
+        issues.push(
+          `privacy: "${term}" remains in ${matches.map((match) => `${match.table}.${match.column}`).join(', ')}`,
+        )
+      }
+    }
+    if (declared.has('search')) {
+      const rows = searchAll(db, term, {
+        startDate: fixture.date,
+        endDate: fixture.date,
+        limit: 20,
+      })
+      if (rows.length > 0) issues.push(`privacy: search for "${term}" returns ${rows.length} rows`)
+    }
+    if (declared.has('memory')) {
+      const memory = chatMemoryPromptBlock(db, term)
+      if (normalizeText(memory).includes(normalized)) issues.push(`privacy: "${term}" leaked into memory`)
+    }
+    if (declared.has('AI context')) {
+      const tools = buildDaylensTools(db)
+      const overview = await (tools.get_day_overview as {
+        execute: (input: unknown, options: unknown) => Promise<unknown>
+      }).execute({ date: fixture.date }, {})
+      if (normalizeText(JSON.stringify(overview)).includes(normalized)) {
+        issues.push(`privacy: "${term}" leaked into AI context`)
+      }
+    }
+    if (declared.has('MCP')) {
+      const result = executeTool('getDaySummary', { date: fixture.date }, db)
+      if (normalizeText(JSON.stringify(result)).includes(normalized)) {
+        issues.push(`privacy: "${term}" leaked into MCP`)
+      }
+    }
+    if (declared.has('sync')) {
+      issues.push('privacy: sync must be exercised by a capture-events fixture')
     }
   }
   return issues
@@ -945,7 +1005,7 @@ function designInvariantIssues(
   return issues
 }
 
-function evaluateFixture(fixture: TimelineFixture): FixtureResult {
+async function evaluateFixture(fixture: TimelineFixture): Promise<FixtureResult> {
   const db = createDb()
   try {
     seedFixture(db, fixture)
@@ -971,7 +1031,7 @@ function evaluateFixture(fixture: TimelineFixture): FixtureResult {
     const dayStartMs = msForClock(fixture.date, '00:00')
     const appSummaries = getCorrectedAppSummariesForRange(db, dayStartMs, dayStartMs + 86_400_000)
     const factsResult = evaluateDayFacts(fixture, db, payload, facts, appSummaries)
-    const privacyIssues = evaluateFixturePrivacy(fixture, db, payload, texts, appSummaries)
+    const privacyIssues = await evaluateFixturePrivacy(fixture, db, payload, texts, appSummaries)
 
     // Every block must explain why it started and stopped — segmentation now
     // records a boundary reason on each edge, so an empty one is a hole in the
@@ -1245,7 +1305,7 @@ if (fixtures.length === 0) {
   throw new Error('No timeline eval fixtures matched.')
 }
 
-const results = fixtures.map(evaluateFixture)
+const results = await Promise.all(fixtures.map(evaluateFixture))
 const report = formatReport(results)
 console.log(report)
 
@@ -1281,15 +1341,28 @@ if (designDefects.length > 0) {
 // reported without failing the run.
 const wrapDefects = results.flatMap((result) => {
   const defects = [...result.unsupportedWrapClaims, ...result.wrapGroundingIssues]
-  if (defects.length === 0) return []
-  const knownIssues = result.fixture.expected.knownIssues ?? []
-  if (knownIssues.length > 0) {
-    console.error(
-      `\n${result.fixture.id}: wrap defects deferred to ${knownIssues.join('; ')}:\n- ${defects.join('\n- ')}`,
-    )
-    return []
+  const deferrals = result.fixture.expected.knownIssues ?? []
+  const matched = new Set<string>()
+  const unexpected: string[] = []
+  for (const defect of defects) {
+    const deferral = deferrals.find((candidate) => candidate.defectSignatures.includes(defect))
+    if (!deferral) {
+      unexpected.push(`${result.fixture.id}: ${defect}`)
+      continue
+    }
+    matched.add(`${deferral.issue}\0${defect}`)
+    console.error(`\n${result.fixture.id}: exact defect deferred to ${deferral.issue}:\n- ${defect}`)
   }
-  return defects.map((issue) => `${result.fixture.id}: ${issue}`)
+  for (const deferral of deferrals) {
+    for (const signature of deferral.defectSignatures) {
+      if (!matched.has(`${deferral.issue}\0${signature}`)) {
+        unexpected.push(
+          `${result.fixture.id}: stale ${deferral.issue} deferral did not occur: ${signature}`,
+        )
+      }
+    }
+  }
+  return unexpected
 })
 if (wrapDefects.length > 0) {
   console.error(`\nWrap-groundedness invariant violated:\n- ${wrapDefects.join('\n- ')}`)

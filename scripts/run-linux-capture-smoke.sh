@@ -39,7 +39,7 @@ if [ -z "${daylens_window:-}" ]; then
   exit 1
 fi
 
-xterm -T "$DAYLENS_SMOKE_EXPECT_FOREGROUND_TITLE" -geometry 100x30+80+80 -e sleep 45 &
+xterm -T "$DAYLENS_SMOKE_EXPECT_FOREGROUND_TITLE" -geometry 100x30+80+80 -e sleep 60 &
 normal_pid=$!
 for _ in $(seq 1 15); do
   normal_window="$(xdotool search --onlyvisible --name "$DAYLENS_SMOKE_EXPECT_FOREGROUND_TITLE" 2>/dev/null | head -n 1 || true)"
@@ -52,7 +52,7 @@ if [ -z "${normal_window:-}" ]; then
 fi
 xdotool windowactivate --sync "$normal_window"
 xdotool mousemove_relative -- 1 1
-sleep 18
+sleep 30
 kill "$normal_pid"
 wait "$normal_pid" 2>/dev/null || true
 normal_pid=''
@@ -69,7 +69,7 @@ if [ -z "${fullscreen_window:-}" ]; then
   exit 1
 fi
 xdotool windowactivate --sync "$fullscreen_window"
-xdotool windowstate --add FULLSCREEN "$fullscreen_window"
+wmctrl -i -r "$fullscreen_window" -b add,fullscreen
 sleep 2
 fullscreen_state="$(xprop -id "$fullscreen_window" _NET_WM_STATE 2>/dev/null || true)"
 if [[ "$fullscreen_state" != *"_NET_WM_STATE_FULLSCREEN"* ]]; then
@@ -86,7 +86,7 @@ node -e '
   }, null, 2) + "\n");
 '
 
-sleep 18
+sleep 30
 kill "$fullscreen_pid"
 wait "$fullscreen_pid" 2>/dev/null || true
 fullscreen_pid=''

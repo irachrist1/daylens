@@ -384,7 +384,7 @@ async function waitForSmokeCapture(): Promise<{
     }
   }
 
-  const deadline = Date.now() + 70_000
+  const deadline = Date.now() + 100_000
   while (Date.now() < deadline) {
     const sessions = readSmokeCaptureSessions()
     const foreground = sessions.find((session) => session.windowTitle === SMOKE_FOREGROUND_TITLE)

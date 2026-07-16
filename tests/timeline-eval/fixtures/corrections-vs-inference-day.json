@@ -158,7 +158,13 @@
       ]
     },
     "knownIssues": [
-      "DEV-215: wrap facts name activities from inferred subjects, ignoring the person's corrections"
+      {
+        "issue": "DEV-215",
+        "defectSignatures": [
+          "work activity \"Compare plans\" traces to no trusted work block",
+          "standout \"Compare plans\" traces to no trusted work block"
+        ]
+      }
     ]
   }
 }

@@ -244,7 +244,8 @@
         "Incognito",
         "RetroTool",
         "Sprint retro",
-        "old-forum"
+        "old-forum",
+        "Legacy forum"
       ],
       "prohibitedSurfaces": [
         "sessions",
@@ -255,6 +256,15 @@
         "search",
         "AI context"
       ]
-    }
+    },
+    "knownIssues": [
+      {
+        "issue": "DEV-214",
+        "defectSignatures": [
+          "privacy: \"Legacy forum\" remains in app_sessions.window_title",
+          "privacy: search for \"Legacy forum\" returns results"
+        ]
+      }
+    ]
   }
 }

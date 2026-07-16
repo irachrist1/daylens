@@ -191,21 +191,37 @@ test('a representative v25 database upgrades through every migration and keeps i
     const dayStartMs = msForClock(fixture.date, '00:00')
     const summaries = getCorrectedAppSummariesForRange(db, dayStartMs, dayStartMs + 86_400_000)
     for (const expectedApp of fixture.expected.apps ?? []) {
+      const summary = summaries.find(
+        (candidate) => normalize(candidate.appName) === normalize(expectedApp.appName),
+      )
       assert.ok(
-        summaries.some(
-          (summary) => normalize(summary.appName) === normalize(expectedApp.appName),
-        ),
+        summary,
         `Apps lost "${expectedApp.appName}" after upgrade (got ${summaries
           .map((summary) => summary.appName)
           .join(', ')})`,
       )
+      if (summary && expectedApp.durationMinutes != null) {
+        const tolerance = expectedApp.durationToleranceMinutes ?? 5
+        assert.ok(
+          Math.abs(summary.totalSeconds / 60 - expectedApp.durationMinutes) <= tolerance,
+          `Apps changed "${expectedApp.appName}" duration after upgrade`,
+        )
+      }
     }
-    const acme = searchAll(db, 'acme', {
-      startDate: fixture.date,
-      endDate: fixture.date,
-      limit: 20,
-    })
-    assert.ok(acme.length > 0, 'search finds nothing on the upgraded database')
+    for (const expectedSearch of fixture.expected.search ?? []) {
+      const rows = searchAll(db, expectedSearch.query, {
+        startDate: fixture.date,
+        endDate: fixture.date,
+        limit: 50,
+      })
+      const resultText = normalize(JSON.stringify(rows))
+      for (const fact of expectedSearch.requiredFacts ?? []) {
+        assert.ok(resultText.includes(normalize(fact)), `search lost "${fact}" after upgrade`)
+      }
+      for (const fact of expectedSearch.prohibitedFacts ?? []) {
+        assert.ok(!resultText.includes(normalize(fact)), `search leaked "${fact}" after upgrade`)
+      }
+    }
 
     // Legacy AI thread data survived the ladder.
     const thread = db

@@ -8,6 +8,7 @@ import type {
   WorkIntentRole,
   WorkKind,
 } from '../../src/shared/types.ts'
+import { isWorkIntentRole } from '../../src/shared/types.ts'
 
 export const DAY_FIXTURE_SCHEMA_VERSION = 1 as const
 
@@ -90,6 +91,27 @@ export interface ExpectedDayAnswer {
   prohibitedDisclosures?: string[]
 }
 
+export const DAY_FIXTURE_PRIVACY_SURFACES = [
+  'sessions',
+  'pending evidence',
+  'canonical evidence',
+  'Timeline',
+  'Apps',
+  'search',
+  'wrap',
+  'memory',
+  'AI context',
+  'MCP',
+  'sync',
+] as const
+
+export type DayFixturePrivacySurface = typeof DAY_FIXTURE_PRIVACY_SURFACES[number]
+
+export interface KnownIssueDeferral {
+  issue: string
+  defectSignatures: string[]
+}
+
 export interface DayFixtureExpected {
   episodes?: ExpectedDayEpisode[]
   wrap?: ExpectedDayWrap
@@ -115,12 +137,9 @@ export interface DayFixtureExpected {
   answers?: ExpectedDayAnswer[]
   privacy?: {
     prohibitedTerms?: string[]
-    prohibitedSurfaces?: string[]
+    prohibitedSurfaces?: DayFixturePrivacySurface[]
   }
-  /** Tracked defects this fixture is allowed to exhibit, one issue reference
-   *  each (e.g. "DEV-215: …"). Downgrades the always-on wrap-groundedness
-   *  invariants to reported-but-passing for this fixture only. */
-  knownIssues?: string[]
+  knownIssues?: KnownIssueDeferral[]
 }
 
 export interface CorrectBlockMutation {
@@ -323,13 +342,21 @@ export function normalizeDayFixture(value: unknown, filePath = '<memory>'): DayF
         }
         for (const field of [
           'correctedLabel',
-          'correctedIntentRole',
           'correctedIntentSubject',
           'correctedCategory',
         ] as const) {
           if (mutation[field] != null && typeof mutation[field] !== 'string') {
             throw fixtureError(filePath, `correctBlock ${field} must be a string`)
           }
+        }
+        if (
+          mutation.correctedIntentRole != null &&
+          !isWorkIntentRole(mutation.correctedIntentRole)
+        ) {
+          throw fixtureError(
+            filePath,
+            `correctBlock correctedIntentRole must be one of execution, research, communication, review, coordination, ambient, ambiguous`,
+          )
         }
       }
       if (
@@ -341,6 +368,46 @@ export function normalizeDayFixture(value: unknown, filePath = '<memory>'): DayF
       }
       if (mutation.kind === 'excludeAndPurgeSite' && typeof mutation.domain !== 'string') {
         throw fixtureError(filePath, 'excludeAndPurgeSite mutation requires domain')
+      }
+    }
+  }
+
+  if (value.expected != null) {
+    if (!isRecord(value.expected)) throw fixtureError(filePath, 'expected must be an object')
+    if (value.expected.privacy != null) {
+      if (!isRecord(value.expected.privacy)) {
+        throw fixtureError(filePath, 'expected.privacy must be an object')
+      }
+      const surfaces = value.expected.privacy.prohibitedSurfaces
+      if (surfaces != null) {
+        if (!Array.isArray(surfaces)) {
+          throw fixtureError(filePath, 'expected.privacy.prohibitedSurfaces must be an array')
+        }
+        const allowed = new Set<string>(DAY_FIXTURE_PRIVACY_SURFACES)
+        for (const surface of surfaces) {
+          if (typeof surface !== 'string' || !allowed.has(surface)) {
+            throw fixtureError(filePath, `unsupported prohibited surface ${JSON.stringify(surface)}`)
+          }
+        }
+      }
+    }
+    if (value.expected.knownIssues != null) {
+      if (!Array.isArray(value.expected.knownIssues)) {
+        throw fixtureError(filePath, 'expected.knownIssues must be an array')
+      }
+      for (const deferral of value.expected.knownIssues) {
+        if (
+          !isRecord(deferral) ||
+          typeof deferral.issue !== 'string' ||
+          deferral.issue.trim() === '' ||
+          !Array.isArray(deferral.defectSignatures) ||
+          deferral.defectSignatures.length === 0 ||
+          deferral.defectSignatures.some(
+            (signature) => typeof signature !== 'string' || signature.trim() === '',
+          )
+        ) {
+          throw fixtureError(filePath, 'knownIssues entries require issue and non-empty defectSignatures')
+        }
       }
     }
   }

@@ -71,6 +71,22 @@ export function deleteHistoryForApp(input: { bundleId?: string | null; appName?:
   const params = [bundle, bundle, name, name]
   const affected = new Set<string>()
   let deletedRows = 0
+  const identifiers = new Set([bundle, name].filter((value) => value.length >= 3))
+  try {
+    const rows = db.prepare(`
+      SELECT app_instance_id, bundle_id, canonical_app_id, raw_app_name, display_name
+      FROM app_identities
+      WHERE (? <> '' AND lower(bundle_id) = lower(?))
+         OR (? <> '' AND (lower(raw_app_name) = lower(?) OR lower(display_name) = lower(?)))
+    `).all(bundle, bundle, name, name, name) as Array<Record<string, string | null>>
+    for (const row of rows) {
+      for (const value of Object.values(row)) {
+        if (typeof value === 'string' && value.trim().length >= 3) identifiers.add(value.trim())
+      }
+    }
+  } catch {
+    // Older databases may not have identity observations yet.
+  }
 
   const purge = db.transaction(() => {
     const rows = db.prepare(`SELECT start_time FROM app_sessions ${where}`).all(...params) as { start_time: number }[]
@@ -137,6 +153,81 @@ export function deleteHistoryForApp(input: { bundleId?: string | null; appName?:
       `).run(...params).changes
     } catch {
       // Derived projection tables are optional on older installs.
+    }
+
+    const patterns = [...identifiers].map((value) => `%${value.toLowerCase()}%`)
+    if (patterns.length > 0) {
+      const dateColumns: Record<string, string> = {
+        website_visits: 'visit_time',
+        focus_events: 'ts_ms',
+        app_sessions: 'start_time',
+        raw_window_sessions: 'started_at',
+        derived_sessions: 'start_ts_ms',
+        browser_context_events: 'started_at',
+        activity_segments: 'started_at',
+      }
+      const artifactFiles: string[] = []
+      try {
+        const rows = db
+          .prepare('SELECT file_path, title, inline_content, summary FROM ai_artifacts')
+          .all() as Array<Record<string, string | null>>
+        for (const row of rows) {
+          const text = Object.values(row)
+            .filter((value): value is string => typeof value === 'string')
+            .join(' ')
+            .toLowerCase()
+          if (
+            patterns.some((pattern) => text.includes(pattern.slice(1, -1))) &&
+            row.file_path
+          ) {
+            artifactFiles.push(row.file_path)
+          }
+        }
+      } catch {
+        // Table absent on older installs.
+      }
+
+      const tables = db.prepare(`
+        SELECT name FROM sqlite_master
+        WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '%_fts%'
+      `).all() as Array<{ name: string }>
+      for (const { name: table } of tables) {
+        if (table === 'schema_version') continue
+        try {
+          const columns = db
+            .prepare(`PRAGMA table_info("${table}")`)
+            .all() as Array<{ name: string; type: string }>
+          const textColumns = columns
+            .filter((column) => !/INT|REAL|BLOB/i.test(column.type ?? ''))
+            .map((column) => column.name)
+          if (textColumns.length === 0) continue
+          const clauses = textColumns.flatMap((column) =>
+            patterns.map(() => `lower(CAST("${column}" AS TEXT)) LIKE ?`),
+          )
+          const clauseParams = textColumns.flatMap(() => patterns)
+          const clause = clauses.join(' OR ')
+          const timeColumn = dateColumns[table]
+          if (timeColumn) {
+            const timeRows = db
+              .prepare(`SELECT "${timeColumn}" AS t FROM "${table}" WHERE ${clause}`)
+              .all(...clauseParams) as Array<{ t: number }>
+            for (const date of distinctLocalDates(timeRows.map((row) => row.t))) affected.add(date)
+          }
+          deletedRows += db
+            .prepare(`DELETE FROM "${table}" WHERE ${clause}`)
+            .run(...clauseParams).changes
+        } catch {
+          // Virtual tables and legacy schema variants are best-effort.
+        }
+      }
+      for (const filePath of artifactFiles) {
+        try { fs.unlinkSync(filePath) } catch { /* already gone */ }
+      }
+      for (const fts of ['website_visits_fts', 'app_sessions_fts', 'timeline_blocks_fts', 'ai_artifacts_fts']) {
+        try {
+          db.prepare(`INSERT INTO ${fts}(${fts}) VALUES ('rebuild')`).run()
+        } catch { /* absent */ }
+      }
     }
   })
   purge()

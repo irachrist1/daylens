@@ -36,6 +36,9 @@ import { putExternalSignal } from '../src/main/services/externalSignals.ts'
 import { addWorkMemoryFact } from '../src/main/services/workMemoryProfile.ts'
 import { searchAll } from '../src/main/db/queries.ts'
 import { buildDaylensTools } from '../src/main/agent/daylensTools.ts'
+import { findDatabaseTextMatches } from './support/dayFixturePrivacy.ts'
+import { effectiveBlockKind } from '../src/shared/workKind.ts'
+import { inferWorkIntent } from '../src/shared/workIntent.ts'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURES = loadDayFixtures(path.join(HERE, 'timeline-eval', 'fixtures'))
@@ -132,14 +135,32 @@ async function runFixture(fixture: CaptureEventsDayFixture): Promise<void> {
         `${fixture.id}: no block overlaps episode ${expected.id} (${expected.start}-${expected.end})`,
       )
       const labelTerms = expected.labelIncludes ?? [expected.label]
+      const block = overlapping.find((candidate) =>
+        labelTerms.some((term) => includesTerm(userVisibleLabelForBlock(candidate), term)),
+      )
       assert.ok(
-        overlapping.some((block) =>
-          labelTerms.some((term) => includesTerm(userVisibleLabelForBlock(block), term)),
-        ),
+        block,
         `${fixture.id}: episode ${expected.id} labels [${overlapping
           .map((block) => userVisibleLabelForBlock(block))
           .join(' | ')}] match none of [${labelTerms.join(', ')}]`,
       )
+      if (expected.startToleranceMinutes != null) {
+        assert.ok(
+          Math.abs(block.startTime - startMs) <= expected.startToleranceMinutes * 60_000,
+          `${fixture.id}: ${expected.id} start boundary drifted`,
+        )
+      }
+      if (expected.endToleranceMinutes != null) {
+        assert.ok(
+          Math.abs(block.endTime - endMs) <= expected.endToleranceMinutes * 60_000,
+          `${fixture.id}: ${expected.id} end boundary drifted`,
+        )
+      }
+      if (expected.category) assert.equal(block.dominantCategory, expected.category)
+      if (expected.kind) assert.equal(effectiveBlockKind(block), expected.kind)
+      if (expected.intentRole) {
+        assert.equal(block.review?.correctedIntentRole ?? inferWorkIntent(block).role, expected.intentRole)
+      }
     }
 
     const appSummaries = getCorrectedAppSummariesForRange(db, dayStartMs, dayEndMs)
@@ -184,66 +205,79 @@ async function runFixture(fixture: CaptureEventsDayFixture): Promise<void> {
 
     const prohibitedTerms = fixture.expected?.privacy?.prohibitedTerms ?? []
     if (prohibitedTerms.length > 0) {
-      const rawTables = [
-        ['app_sessions', 'app_name', 'window_title'],
-        ['focus_events', 'app_name', 'window_title'],
-        ['derived_sessions', 'app_name', 'window_title'],
-        ['website_visits', 'domain', 'page_title'],
-        ['website_visits_pending', 'domain', 'page_title'],
-      ] as const
-      for (const term of prohibitedTerms) {
-        const like = `%${term}%`
-        for (const [table, first, second] of rawTables) {
-          const row = db
-            .prepare(
-              `SELECT COUNT(*) AS n FROM ${table} WHERE ${first} LIKE ? OR ${second} LIKE ?`,
-            )
-            .get(like, like) as { n: number }
-          assert.equal(
-            row.n,
-            0,
-            `${fixture.id}: "${term}" still present in ${table} (${row.n} rows)`,
+      const deferrals = fixture.expected?.knownIssues ?? []
+      const matchedDeferrals = new Set<string>()
+      const observedPrivacyIssues: string[] = []
+      const checkDatabaseMatches = (term: string, tables?: ReadonlySet<string>) => {
+        for (const match of findDatabaseTextMatches(db, term, tables)) {
+          observedPrivacyIssues.push(
+            `privacy: "${term}" remains in ${match.table}.${match.column}`,
           )
         }
-
-        const timelineHaystack = JSON.stringify(
-          timeline.blocks.map((block) => [
-            userVisibleLabelForBlock(block),
-            block.label.current,
-            block.topApps.map((app) => app.appName),
-            block.websites.map((site) => [site.domain, site.title]),
-            block.pageRefs.map((page) => page.displayTitle),
-          ]),
-        )
-        assert.ok(
-          !includesTerm(timelineHaystack, term),
-          `${fixture.id}: "${term}" leaked into Timeline`,
-        )
-        assert.ok(
-          !appSummaries.some((summary) => includesTerm(summary.appName, term)),
-          `${fixture.id}: "${term}" leaked into Apps`,
-        )
-        const rows = searchAll(db, term, {
-          startDate: fixture.date,
-          endDate: fixture.date,
-          limit: 20,
-        })
-        assert.equal(rows.length, 0, `${fixture.id}: search for "${term}" returns results`)
       }
-
-      const tools = buildDaylensTools(db)
-      const overview = await (
-        tools.get_day_overview as {
-          execute: (input: unknown, options: unknown) => Promise<unknown>
-        }
-      ).execute({ date: fixture.date }, {})
-      const overviewText = JSON.stringify(overview)
+      const surfaces = new Set(fixture.expected?.privacy?.prohibitedSurfaces ?? [
+        'sessions',
+        'pending evidence',
+        'canonical evidence',
+        'Timeline',
+        'Apps',
+        'search',
+        'AI context',
+      ])
+      const timelineHaystack = JSON.stringify(timeline.blocks)
+      const appsHaystack = JSON.stringify(appSummaries)
+      const tools = surfaces.has('AI context') ? buildDaylensTools(db) : null
+      const overview = tools
+        ? await (tools.get_day_overview as {
+            execute: (input: unknown, options: unknown) => Promise<unknown>
+          }).execute({ date: fixture.date }, {})
+        : null
       for (const term of prohibitedTerms) {
-        assert.ok(
-          !includesTerm(overviewText, term),
-          `${fixture.id}: "${term}" leaked into the AI day overview`,
-        )
+        if (surfaces.has('sessions')) {
+          checkDatabaseMatches(term, new Set(['app_sessions']))
+        }
+        if (surfaces.has('pending evidence')) {
+          checkDatabaseMatches(term, new Set(['website_visits_pending']))
+        }
+        if (surfaces.has('canonical evidence')) {
+          checkDatabaseMatches(term)
+        }
+        if (surfaces.has('Timeline') && includesTerm(timelineHaystack, term)) {
+          observedPrivacyIssues.push(`privacy: "${term}" leaked into Timeline`)
+        }
+        if (surfaces.has('Apps') && includesTerm(appsHaystack, term)) {
+          observedPrivacyIssues.push(`privacy: "${term}" leaked into Apps`)
+        }
+        if (surfaces.has('search')) {
+          const rows = searchAll(db, term, {
+            startDate: fixture.date,
+            endDate: fixture.date,
+            limit: 20,
+          })
+          if (rows.length > 0) {
+            observedPrivacyIssues.push(`privacy: search for "${term}" returns results`)
+          }
+        }
+        if (surfaces.has('AI context') && includesTerm(JSON.stringify(overview), term)) {
+          observedPrivacyIssues.push(`privacy: "${term}" leaked into AI context`)
+        }
       }
+      const unexpectedPrivacyIssues: string[] = []
+      for (const signature of new Set(observedPrivacyIssues)) {
+        const deferral = deferrals.find((candidate) => candidate.defectSignatures.includes(signature))
+        if (deferral) matchedDeferrals.add(`${deferral.issue}\0${signature}`)
+        else unexpectedPrivacyIssues.push(signature)
+      }
+      const staleDeferrals = deferrals.flatMap((deferral) =>
+        deferral.defectSignatures
+          .filter((signature) => !matchedDeferrals.has(`${deferral.issue}\0${signature}`))
+          .map((signature) => `${deferral.issue}: stale deferral did not occur: ${signature}`),
+      )
+      assert.deepEqual(
+        [...new Set([...unexpectedPrivacyIssues, ...staleDeferrals])],
+        [],
+        `${fixture.id}: privacy defects must match one exact tracked deferral`,
+      )
     }
   } finally {
     __resetSettings()
