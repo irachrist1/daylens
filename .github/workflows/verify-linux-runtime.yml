@@ -132,7 +132,7 @@ jobs:
             fedora:40 \
             bash -lc '
               set -euo pipefail
-              dnf install -y nodejs npm findutils grep sed xorg-x11-server-Xvfb xdotool wmctrl xprop xterm openbox xorg-x11-apps dbus-daemon gtk3 libnotify libXScrnSaver libXtst nss libsecret xdg-utils
+              dnf install -y nodejs npm findutils grep sed xorg-x11-server-Xvfb xdotool wmctrl xprop xmessage xwininfo xterm openbox dbus-daemon gtk3 libnotify libXScrnSaver libXtst nss libsecret xdg-utils
               PACKAGE_FILE="dist-release/Daylens-'"${VERSION}"'.rpm"
               dnf install --nogpgcheck -y "$PACKAGE_FILE"
               PACKAGE_NAME="$(rpm -qp --queryformat "%{NAME}" "$PACKAGE_FILE")"
