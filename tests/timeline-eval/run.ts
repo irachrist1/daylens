@@ -366,13 +366,14 @@ function evaluateDayFacts(
   const actualMeetings = [
     ...(calendar?.events ?? []).map((event) => {
       const resolved = resolvedMeetings.find((item) =>
-        item.title != null && containsAny(item.title, [event.title]),
+        item.title != null &&
+        (containsAny(item.title, [event.title]) || containsAny(event.title, [item.title])),
       )
       return {
         source: 'calendar',
-        title: resolved?.title ?? '',
+        title: resolved?.title ?? event.title,
         startMinutes: calendarClockToMinutes(event.startClock),
-        minutes: formattedDurationMinutes(resolved?.scheduled),
+        minutes: formattedDurationMinutes(resolved?.scheduled) ?? event.durationMinutes,
       }
     }),
     ...payload.blocks
