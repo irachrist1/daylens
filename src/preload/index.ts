@@ -70,6 +70,7 @@ import type {
   WrapPreflightResult,
   WrapProviderState,
   EnrichmentSourcesState,
+  RendererCrashReport,
 } from '@shared/types'
 import { IPC } from '@shared/types'
 import type { McpServerConfig } from '../main/services/mcpServer'
@@ -401,6 +402,12 @@ const api = {
   analytics: {
     capture: (event: string, properties: Record<string, unknown>) =>
       ipcRenderer.send('analytics:capture', event, properties),
+  },
+  errors: {
+    // Forward a render crash caught by an ErrorBoundary to the main process,
+    // which reports it to Sentry the same way main-process errors are.
+    reportRenderCrash: (report: RendererCrashReport) =>
+      ipcRenderer.send(IPC.ERRORS.RENDERER_CRASH, report),
   },
   navigation: {
     // Subscribe to main-process navigation requests (e.g. notification click → route).

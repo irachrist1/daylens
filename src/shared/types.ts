@@ -2262,7 +2262,21 @@ export const IPC = {
   MCP: {
     GET_CONFIG: 'mcp:get-config',
   },
+  ERRORS: {
+    RENDERER_CRASH: 'errors:renderer-crash',
+  },
   SYSTEM: {
     THEME_CHANGED: 'system:theme-changed',
   },
 } as const
+
+// A render crash caught by the renderer's ErrorBoundary, forwarded to the main
+// process for Sentry reporting. Code-level context only (error identity plus
+// React component names) — never captured activity, titles, or page content.
+export interface RendererCrashReport {
+  name: string
+  message: string
+  stack: string | null
+  componentStack: string | null
+  boundary: string
+}
