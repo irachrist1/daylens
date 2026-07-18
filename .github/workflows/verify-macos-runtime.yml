@@ -76,10 +76,3 @@ jobs:
             builder-debug.yml
             electron-builder-debug.yml
             npm-debug.log*
-
-      - name: Print macOS smoke report
-        if: always()
-        shell: bash
-        run: |
-          test ! -f "$RUNNER_TEMP/daylens-macos-smoke.json" || cat "$RUNNER_TEMP/daylens-macos-smoke.json"
-          test ! -f "$RUNNER_TEMP/daylens-macos-window-state.json" || cat "$RUNNER_TEMP/daylens-macos-window-state.json"

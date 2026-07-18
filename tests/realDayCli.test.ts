@@ -25,7 +25,6 @@ test('real-day harness refuses CI and repository-local private data', () => {
   try {
     process.env.CI = '1'
     assert.throws(() => assertLocalOnly('/tmp/private', '/repo'), /refuse to run in CI/)
-
     delete process.env.CI
     assert.throws(
       () => assertLocalOnly('/repo/private/real-day', '/repo'),

@@ -1009,17 +1009,6 @@ function resolveWindowIdentity(win: ActiveWinResult): ActiveWinResult & { bundle
   return { ...win, bundleId, appName }
 }
 
-function resolveHarnessWindowIdentity(
-  win: ActiveWinResult,
-): ActiveWinResult & { bundleId: string; appName: string } {
-  const appName = win.application?.trim() || windowsAwareBasename(win.path) || 'Unknown app'
-  return {
-    ...win,
-    bundleId: win.path?.trim() || appName,
-    appName,
-  }
-}
-
 function windowsAwareBasename(filePath: string): string {
   return process.platform === 'win32' ? path.win32.basename(filePath) : path.basename(filePath)
 }
@@ -1619,9 +1608,8 @@ function nowMs(): number {
 }
 
 function getIdleSeconds(): number {
-  if (fsmTestHarness) return fsmTestHarness.idleSeconds()
-  if (process.env.DAYLENS_SMOKE_TEST === '1') return 0
-  return powerMonitor.getSystemIdleTime()
+  if (!fsmTestHarness && process.env.DAYLENS_SMOKE_TEST === '1') return 0
+  return fsmTestHarness ? fsmTestHarness.idleSeconds() : powerMonitor.getSystemIdleTime()
 }
 
 async function poll(): Promise<void> {
@@ -1845,9 +1833,7 @@ async function poll(): Promise<void> {
       uwpPackage: win.windows?.uwpPackage ?? '',
     }
 
-    const resolvedWin = fsmTestHarness && process.platform === 'linux'
-      ? resolveHarnessWindowIdentity(win)
-      : resolveWindowIdentity(win)
+    const resolvedWin = resolveWindowIdentity(win)
     const browserApplication = resolveBrowserApplication({
       bundleId: resolvedWin.bundleId,
       appName: resolvedWin.appName,

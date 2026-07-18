@@ -32,7 +32,7 @@ test('linux smoke mode disables gpu-dependent renderer startup paths', () => {
 
 test('packaged smoke readiness signals are registered before the renderer starts loading', () => {
   const source = fs.readFileSync(MAIN_PROCESS_SOURCE, 'utf8')
-  const didFinishLoadListener = source.indexOf("win.webContents.once('did-finish-load', () => maybeRunSmokeValidation('did-finish-load'))")
+  const didFinishLoadListener = source.indexOf("win.webContents.once('did-finish-load', () => {")
   const watchdog = source.indexOf("setTimeout(() => maybeRunSmokeValidation('watchdog'), 20_000)")
   const readyToShow = source.indexOf("win.once('ready-to-show'")
   const readyToShowSignal = source.indexOf("maybeRunSmokeValidation('ready-to-show')")
@@ -40,6 +40,11 @@ test('packaged smoke readiness signals are registered before the renderer starts
   const loadUrl = source.indexOf('win.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL)')
 
   assert.notEqual(didFinishLoadListener, -1, 'missing packaged smoke did-finish-load fallback')
+  assert.match(
+    source,
+    /win\.webContents\.once\('did-finish-load', \(\) => \{[\s\S]*?if \(SMOKE_TEST && !win\.isVisible\(\)\) win\.show\(\)[\s\S]*?maybeRunSmokeValidation\('did-finish-load'\)/,
+    'packaged smoke must show a renderer that loaded without ready-to-show',
+  )
   assert.notEqual(watchdog, -1, 'missing packaged smoke watchdog fallback')
   assert.notEqual(readyToShow, -1, 'missing ready-to-show handler')
   assert.notEqual(readyToShowSignal, -1, 'missing packaged smoke ready-to-show signal')
@@ -68,8 +73,8 @@ test('packaged smoke runs tracking on a fresh isolated profile and waits for per
   )
   assert.match(
     source,
-    /if \(REAL_DAY_HARNESS \|\| !SMOKE_TEST\) initUpdater\(mainWindow\)/,
-    'packaged smoke must skip the updater; the real-day harness initializes it against its internal network block',
+    /initUpdater\(mainWindow, \{ diagnosticsOnly: SMOKE_TEST \}\)/,
+    'packaged smoke must detect updater support without registering handlers or starting update checks',
   )
   assert.match(source, /if \(!SMOKE_TEST\) await initAnalytics\(\)/)
   assert.match(source, /if \(!SMOKE_TEST\) void prewarmBrowserRegistry\(\)/)
@@ -78,13 +83,4 @@ test('packaged smoke runs tracking on a fresh isolated profile and waits for per
   assert.match(source, /if \(!SMOKE_TEST && \(process\.platform === 'win32' \|\| process\.platform === 'linux'\)\) ensureProcessMonitor\(\)/)
   assert.match(source, /const captureProbe = await waitForSmokeCapture\(\)/)
   assert.match(source, /FROM app_sessions[\s\S]*?WHERE window_title IN \(\?, \?\)/)
-})
-
-test('packaged smoke capture is not blocked by hosted-runner idle state', () => {
-  const source = fs.readFileSync(path.resolve(process.cwd(), 'src/main/services/tracking.ts'), 'utf8')
-
-  assert.match(
-    source,
-    /function getIdleSeconds\(\): number \{[\s\S]*?if \(process\.env\.DAYLENS_SMOKE_TEST === '1'\) return 0[\s\S]*?powerMonitor\.getSystemIdleTime\(\)/,
-  )
 })

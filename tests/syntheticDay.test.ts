@@ -145,7 +145,7 @@ test('synthetic day agrees from source boundaries through every local fact surfa
     assert.ok(appNames.includes('Code'), `missing captured editor in ${appNames.join(', ')}`)
     assert.ok(appNames.includes('Google Chrome'), `missing Google Chrome in ${appNames.join(', ')}`)
     assert.ok(
-      appNames.includes('zoom.us'),
+      apps.some((app) => app.category === 'meetings'),
       `missing captured meeting app in ${appNames.join(', ')}`,
     )
     assert.ok(

@@ -16,30 +16,56 @@ shift
 app_pid=''
 normal_pid=''
 fullscreen_pid=''
+openbox_pid=''
 
 cleanup() {
   [ -z "$normal_pid" ] || kill "$normal_pid" 2>/dev/null || true
   [ -z "$fullscreen_pid" ] || kill "$fullscreen_pid" 2>/dev/null || true
   [ -z "$app_pid" ] || kill "$app_pid" 2>/dev/null || true
+  [ -z "$openbox_pid" ] || kill "$openbox_pid" 2>/dev/null || true
 }
 trap cleanup EXIT
 
 openbox >/tmp/daylens-smoke-openbox.log 2>&1 &
+openbox_pid=$!
+for _ in $(seq 1 15); do
+  wmctrl -m >/dev/null 2>&1 && break
+  if ! kill -0 "$openbox_pid" 2>/dev/null; then
+    wait "$openbox_pid" || true
+    echo "Openbox exited before the smoke desktop was ready." >&2
+    cat /tmp/daylens-smoke-openbox.log >&2 || true
+    exit 1
+  fi
+  sleep 1
+done
+if ! wmctrl -m >/dev/null 2>&1; then
+  echo "The smoke window manager did not become ready." >&2
+  cat /tmp/daylens-smoke-openbox.log >&2 || true
+  exit 1
+fi
 
 "$app_path" "$@" &
 app_pid=$!
 
-for _ in $(seq 1 30); do
+for _ in $(seq 1 60); do
   daylens_window="$(xdotool search --onlyvisible --name 'Daylens' 2>/dev/null | head -n 1 || true)"
   [ -z "$daylens_window" ] || break
+  if ! kill -0 "$app_pid" 2>/dev/null; then
+    wait "$app_pid" || app_status=$?
+    echo "Daylens exited before creating a visible window (status ${app_status:-0})." >&2
+    exit 1
+  fi
   sleep 1
 done
 if [ -z "${daylens_window:-}" ]; then
   echo "Daylens did not create a visible window." >&2
+  wmctrl -lx >&2 || true
+  xwininfo -root -tree >&2 || true
+  cat /tmp/daylens-smoke-openbox.log >&2 || true
   exit 1
 fi
 
-xterm -T "$DAYLENS_SMOKE_EXPECT_FOREGROUND_TITLE" -geometry 100x30+80+80 -e sleep 45 &
+xterm -T "$DAYLENS_SMOKE_EXPECT_FOREGROUND_TITLE" -geometry 100x30+80+80 -e sleep 60 &
 normal_pid=$!
 for _ in $(seq 1 15); do
   normal_window="$(xdotool search --onlyvisible --name "$DAYLENS_SMOKE_EXPECT_FOREGROUND_TITLE" 2>/dev/null | head -n 1 || true)"
@@ -52,7 +78,7 @@ if [ -z "${normal_window:-}" ]; then
 fi
 xdotool windowactivate --sync "$normal_window"
 xdotool mousemove_relative -- 1 1
-sleep 18
+sleep 30
 kill "$normal_pid"
 wait "$normal_pid" 2>/dev/null || true
 normal_pid=''
@@ -69,7 +95,7 @@ if [ -z "${fullscreen_window:-}" ]; then
   exit 1
 fi
 xdotool windowactivate --sync "$fullscreen_window"
-wmctrl -ir "$fullscreen_window" -b add,fullscreen
+wmctrl -i -r "$fullscreen_window" -b add,fullscreen
 sleep 2
 fullscreen_state="$(xprop -id "$fullscreen_window" _NET_WM_STATE 2>/dev/null || true)"
 if [[ "$fullscreen_state" != *"_NET_WM_STATE_FULLSCREEN"* ]]; then
@@ -86,7 +112,7 @@ node -e '
   }, null, 2) + "\n");
 '
 
-sleep 18
+sleep 30
 kill "$fullscreen_pid"
 wait "$fullscreen_pid" 2>/dev/null || true
 fullscreen_pid=''
