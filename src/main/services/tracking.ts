@@ -1613,6 +1613,7 @@ function nowMs(): number {
 }
 
 function getIdleSeconds(): number {
+  if (!fsmTestHarness && process.env.DAYLENS_SMOKE_TEST === '1') return 0
   return fsmTestHarness ? fsmTestHarness.idleSeconds() : powerMonitor.getSystemIdleTime()
 }
 

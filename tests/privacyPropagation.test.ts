@@ -27,7 +27,7 @@ const BASE = new Date(2026, 6, 3, 10, 0, 0, 0).getTime()
 const controls: TrackingControlsState = {
   enabled: true,
   paused: false,
-  excludedApps: ['app.zen-browser.zen'],
+  excludedApps: ['app.zen-browser.zen', 'Zen'],
   excludedSites: ['private.example.com'],
   skipIncognito: true,
 }

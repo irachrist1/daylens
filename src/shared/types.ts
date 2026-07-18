@@ -1923,6 +1923,9 @@ export interface TrackingDiagnosticsPayload {
       safariHistoryAccess: SafariHistoryAccessStatus
     }
     captureHelperRunning?: boolean | null
+    // Events dropped before persistence (malformed payloads, unsupported
+    // schema versions), keyed by adapter. Counts only — never event content.
+    rejectedEvents?: Record<string, { total: number; byReason: Record<string, number> }>
   }
   linuxTracking: LinuxTrackingDiagnostics | null
   linuxDesktop: LinuxDesktopDiagnostics | null

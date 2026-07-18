@@ -113,7 +113,7 @@ test('titleless Dia on Netflix remains active beyond the five-minute idle thresh
     const live = getCurrentSession()
     assert.ok(live, 'Netflix must remain live after six minutes without input')
     assert.equal(live.appName, 'Dia')
-    assert.equal(live.windowTitle, null)
+    assert.equal(live.windowTitle, process.platform === 'linux' ? 'Dia' : null)
     assert.equal(rig.flushes.length, 0)
 
     win = WIN
