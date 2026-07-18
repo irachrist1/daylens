@@ -22,13 +22,12 @@ case "${1:-}" in
     if command -v update-desktop-database >/dev/null 2>&1; then
         update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
     fi
-    # The app registers launch-on-login as a per-user XDG autostart entry
-    # (~/.config/autostart/daylens.desktop). Drop it for every local user so an
-    # uninstall never leaves a login item pointing at a removed binary. User
-    # DATA stays untouched here — maintainer scripts must not delete
-    # home-directory data; the in-app "Reset and uninstall" action owns that
-    # explicit choice.
+    # Maintainer scripts remove login entries but never user data.
     rm -f /home/*/.config/autostart/daylens.desktop /root/.config/autostart/daylens.desktop 2>/dev/null || true
+    if [ -n "${XDG_CONFIG_HOME:-}" ]; then
+        rm -f "${XDG_CONFIG_HOME}/autostart/daylens.desktop" 2>/dev/null || true
+    fi
+    find /home /root -type f -path '*/autostart/daylens.desktop' -delete 2>/dev/null || true
     ;;
 esac
 

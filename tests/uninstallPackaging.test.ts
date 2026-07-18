@@ -38,9 +38,10 @@ test('NSIS uninstall hook only deletes data on an explicit choice, never silentl
   const source = fs.readFileSync(NSIS_INCLUDE, 'utf8')
   // Interactive uninstalls must ASK; the /SD default keeps data.
   assert.match(source, /MessageBox MB_YESNO[^\n]*\/SD IDNO/)
-  assert.match(source, /\$\{ifNot\} \$\{Silent\}/)
+  assert.match(source, /\$\{GetOptions\} \$R0 "\/S" \$R1/)
+  assert.match(source, /SetSilent normal/)
   // The in-app flow's --delete-app-data path also clears the legacy directory.
-  assert.match(source, /\$\{if\} \$isDeleteAppData == "1"/)
+  assert.match(source, /\$\{GetOptions\} \$R0 "--delete-app-data" \$R1/)
   assert.ok(source.includes('RMDir /r "$APPDATA\\DaylensWindows"'))
 })
 
@@ -50,5 +51,7 @@ test('linux after-remove drops per-user autostart entries but never user data', 
     source.includes('rm -f /home/*/.config/autostart/daylens.desktop /root/.config/autostart/daylens.desktop'),
     'after-remove must delete the XDG autostart entry for local users',
   )
+  assert.ok(source.includes('${XDG_CONFIG_HOME}/autostart/daylens.desktop'))
+  assert.match(source, /find \/home \/root -type f -path '\*\/autostart\/daylens\.desktop' -delete/)
   assert.ok(!/\.config\/Daylens/.test(source), 'after-remove must not delete user data directories')
 })

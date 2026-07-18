@@ -1,10 +1,6 @@
-# Uninstall cleanup for Daylens (electron-builder customUnInstall hook).
-#
 # Electron's app.setLoginItemSettings registers launch-on-login as an HKCU Run
-# value named after the AppUserModelId. Without this hook a Windows uninstall
-# leaves that value pointing at a deleted exe — the stale-login-item pattern
-# DEV-213 removes. The value names cover the current AUMID, the pre-rename
-# AUMID, and the product name as a safety net for older installs.
+# value named after the AppUserModelId. The value names cover the current AUMID,
+# the pre-rename AUMID, and the product name for older installs.
 #
 # Data: electron-builder's uninstaller only deletes app data when launched with
 # --delete-app-data (the in-app "Reset and uninstall" flow passes it after the
@@ -21,18 +17,27 @@
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run" "dev.christiantonny.daylens"
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run" "Daylens"
 
-    ${if} $isDeleteAppData == "1"
+    ClearErrors
+    ${GetParameters} $R0
+    ${GetOptions} $R0 "--delete-app-data" $R1
+    ${ifNot} ${Errors}
       # The built-in block already removed $APPDATA\Daylens and $APPDATA\daylens;
       # also remove the legacy data directory older installs used.
       RMDir /r "$APPDATA\DaylensWindows"
     ${else}
-      ${ifNot} ${Silent}
+      ClearErrors
+      ${GetOptions} $R0 "/S" $R1
+      ${if} ${Errors}
+        # One-click uninstalls switch to silent mode after their initial
+        # confirmation. Restore dialog mode for the explicit data choice.
+        SetSilent normal
         MessageBox MB_YESNO|MB_ICONQUESTION "Also delete your local Daylens data (timeline database and settings)?$\r$\n$\r$\nChoose No to keep it for a future install." /SD IDNO IDYES daylensDeleteData IDNO daylensKeepData
         daylensDeleteData:
           RMDir /r "$APPDATA\Daylens"
           RMDir /r "$APPDATA\daylens"
           RMDir /r "$APPDATA\DaylensWindows"
         daylensKeepData:
+        SetSilent silent
       ${endif}
     ${endif}
   ${endif}

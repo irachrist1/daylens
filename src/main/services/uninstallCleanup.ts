@@ -141,4 +141,9 @@ export async function performUninstallCleanup(options: { deleteLocalData: boolea
     // it to the Trash to finish the uninstall.
     shell.showItemInFolder(path.resolve(process.execPath, '..', '..', '..'))
   }
+
+  if (platform === 'linux' && app.isPackaged) {
+    const appImagePath = process.env.APPIMAGE?.trim()
+    if (appImagePath && fs.existsSync(appImagePath)) shell.showItemInFolder(appImagePath)
+  }
 }
