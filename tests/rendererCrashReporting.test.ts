@@ -100,6 +100,8 @@ test('a render error forwarded over IPC reaches Sentry with component context', 
     const { error, context } = harness.sentryCaptures[0]
     assert.equal(error.name, 'TypeError')
     assert.equal(error.message, "Cannot read properties of undefined (reading 'blocks')")
+    assert.ok(error.stack?.includes('errors.handlers'))
+    assert.ok(!error.stack?.includes('at Timeline'))
     assert.equal(context.tags?.process_type, 'renderer')
     assert.equal(context.tags?.reason, 'render_error')
     assert.equal(context.tags?.boundary, 'Timeline')
@@ -134,7 +136,7 @@ test('a malformed payload from a compromised renderer is dropped, never reported
   }
 })
 
-test('sanitize keeps only bounded error identity and component names', () => {
+test('sanitize keeps only bounded error identity and known component names', () => {
   const report = sanitizeRendererCrashReport({
     name: 'RangeError',
     message: `m${'x'.repeat(10_000)}`,
@@ -149,7 +151,7 @@ test('sanitize keeps only bounded error identity and component names', () => {
   assert.ok(report)
   assert.equal(report.name, 'RangeError')
   assert.equal(report.message.length, 512)
-  assert.equal(report.stack?.length, 8_192)
+  assert.equal(report.stack, null)
   assert.equal(report.componentStack, '\n    at Apps')
   assert.equal(report.boundary, 'Apps')
   assert.deepEqual(
@@ -165,4 +167,22 @@ test('missing optional fields fall back to safe defaults', () => {
   assert.equal(report.stack, null)
   assert.equal(report.componentStack, null)
   assert.equal(report.boundary, 'unknown')
+})
+
+test('empty messages are reported with a safe fallback', () => {
+  const report = sanitizeRendererCrashReport({ message: '', boundary: 'Timeline' })
+  assert.ok(report)
+  assert.equal(report.message, 'Unknown renderer error')
+  assert.equal(report.boundary, 'Timeline')
+})
+
+test('unknown boundary names and renderer stacks cannot reach telemetry', () => {
+  const report = sanitizeRendererCrashReport({
+    message: 'boom',
+    boundary: 'private document contents',
+    stack: 'secret renderer content',
+  })
+  assert.ok(report)
+  assert.equal(report.boundary, 'unknown')
+  assert.equal(report.stack, null)
 })

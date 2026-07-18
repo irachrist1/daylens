@@ -4,13 +4,9 @@ import { IPC, type RendererCrashReport } from '@shared/types'
 import { capture, captureException } from '../services/analytics'
 import { isRealDayHarness } from '../lib/realDayHarness'
 
-// The renderer's ErrorBoundary catches render crashes for display, but until
-// this handler existed the error never left the renderer — a broken screen
-// could sit invisible indefinitely. This forwards it to Sentry the same way
-// main-process errors are reported (same captureException, same redaction).
-
 const MAX_IDENTITY_LENGTH = 512
-const MAX_STACK_LENGTH = 8_192
+const MAX_COMPONENT_STACK_LENGTH = 8_192
+const RENDERER_BOUNDARIES = new Set(['Timeline', 'Apps', 'AI', 'Settings'])
 
 function clampedString(value: unknown, maxLength: number): string | null {
   if (typeof value !== 'string' || value.length === 0) return null
@@ -23,14 +19,14 @@ function clampedString(value: unknown, maxLength: number): string | null {
 export function sanitizeRendererCrashReport(payload: unknown): RendererCrashReport | null {
   if (typeof payload !== 'object' || payload === null) return null
   const candidate = payload as Record<string, unknown>
-  const message = clampedString(candidate.message, MAX_IDENTITY_LENGTH)
-  if (!message) return null
+  if (typeof candidate.message !== 'string') return null
+  const boundary = clampedString(candidate.boundary, MAX_IDENTITY_LENGTH)
   return {
     name: clampedString(candidate.name, MAX_IDENTITY_LENGTH) ?? 'Error',
-    message,
-    stack: clampedString(candidate.stack, MAX_STACK_LENGTH),
-    componentStack: clampedString(candidate.componentStack, MAX_STACK_LENGTH),
-    boundary: clampedString(candidate.boundary, MAX_IDENTITY_LENGTH) ?? 'unknown',
+    message: clampedString(candidate.message, MAX_IDENTITY_LENGTH) ?? 'Unknown renderer error',
+    stack: null,
+    componentStack: clampedString(candidate.componentStack, MAX_COMPONENT_STACK_LENGTH),
+    boundary: boundary && RENDERER_BOUNDARIES.has(boundary) ? boundary : 'unknown',
   }
 }
 
@@ -53,7 +49,6 @@ export function registerErrorHandlers(): void {
 
     const error = new Error(report.message)
     error.name = report.name
-    if (report.stack) error.stack = report.stack
     captureException(error, {
       extra: {
         boundary: report.boundary,
