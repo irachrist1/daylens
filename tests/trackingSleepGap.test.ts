@@ -70,6 +70,7 @@ function makeRig(activeWindow = () => WIN): Rig {
   const flushes: FlushInfo[] = []
   const clock = { now: BASE, lastInput: BASE }
   __setTrackingFsmTestHarness({
+    platform: 'darwin',
     now: () => clock.now,
     idleSeconds: () => Math.max(0, (clock.now - clock.lastInput) / 1_000),
     activeWindow,
@@ -206,14 +207,17 @@ test('normal poll cadence never triggers a gap flush', async () => {
 test('recovered live snapshot splits at local midnight', () => {
   const db = setupDb()
   try {
-    // Reset FSM module state (also clears any live session from prior tests).
-    __setTrackingFsmTestHarness(null)
-
     // The real shape: a session opened at 23:57 whose snapshot was last
     // bumped at 03:08 the next day (then the app died). Recovery must persist
     // one slice per calendar day, not a single cross-midnight row.
     const start = new Date(2026, 6, 5, 23, 57, 0, 0).getTime()
     const lastSeen = new Date(2026, 6, 6, 3, 8, 0, 0).getTime()
+    __setTrackingFsmTestHarness({
+      platform: 'darwin',
+      now: () => lastSeen,
+      idleSeconds: () => 0,
+      activeWindow: () => null,
+    })
     db.prepare(`
       INSERT INTO live_app_session_snapshot (
         singleton, bundle_id, app_name, window_title, raw_app_name,
