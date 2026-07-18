@@ -71,6 +71,7 @@ function makeRig(activeWindow = () => WIN): Rig {
   const flushes: FlushInfo[] = []
   const clock = { now: BASE, lastInput: BASE }
   __setTrackingFsmTestHarness({
+    platform: 'darwin',
     now: () => clock.now,
     // Idle seconds = wall-clock time since the last real input, exactly like the
     // OS idle timer the FSM reads in production.
@@ -100,10 +101,12 @@ function makeRig(activeWindow = () => WIN): Rig {
 
 test('titleless Dia on Netflix remains active beyond the five-minute idle threshold', async () => {
   let win: typeof DIA_WIN | typeof WIN = DIA_WIN
-  __setActiveBrowserContextTrackerForTest(new ActiveBrowserContextTracker(
-    () => ({ url: 'https://www.netflix.com/watch/81234567', title: 'Netflix', modeKnown: true }),
-    () => win.application === 'Dia',
-  ))
+  __setActiveBrowserContextTrackerForTest(
+    new ActiveBrowserContextTracker(
+      () => ({ url: 'https://www.netflix.com/watch/81234567', title: 'Netflix', modeKnown: true }),
+      () => win.application === 'Dia',
+    ),
+  )
   const rig = makeRig(() => win)
   try {
     await rig.poll(BASE, { input: true })
@@ -118,17 +121,23 @@ test('titleless Dia on Netflix remains active beyond the five-minute idle thresh
     win = WIN
     await rig.poll(BASE + 365_000, { input: true })
 
-    const row = rig.db.prepare(`
+    const row = rig.db
+      .prepare(
+        `
       SELECT app_name, start_time, end_time, duration_sec, ended_reason
       FROM app_sessions
       WHERE app_name = 'Dia'
-    `).get() as {
-      app_name: string
-      start_time: number
-      end_time: number
-      duration_sec: number
-      ended_reason: string | null
-    } | undefined
+    `,
+      )
+      .get() as
+      | {
+          app_name: string
+          start_time: number
+          end_time: number
+          duration_sec: number
+          ended_reason: string | null
+        }
+      | undefined
     assert.ok(row)
     assert.equal(row?.start_time, BASE)
     assert.equal(row?.end_time, BASE + 365_000)
@@ -140,10 +149,12 @@ test('titleless Dia on Netflix remains active beyond the five-minute idle thresh
 })
 
 test('titleless Dia on a non-media domain still flushes under normal idle handling', async () => {
-  __setActiveBrowserContextTrackerForTest(new ActiveBrowserContextTracker(
-    () => ({ url: 'https://example.com/article', title: 'Article', modeKnown: true }),
-    () => true,
-  ))
+  __setActiveBrowserContextTrackerForTest(
+    new ActiveBrowserContextTracker(
+      () => ({ url: 'https://example.com/article', title: 'Article', modeKnown: true }),
+      () => true,
+    ),
+  )
   const rig = makeRig(() => DIA_WIN)
   try {
     await rig.poll(BASE, { input: true })
@@ -151,11 +162,15 @@ test('titleless Dia on a non-media domain still flushes under normal idle handli
     await pollThrough(rig, BASE + 60_000, BASE + 365_000)
 
     assert.equal(getCurrentSession(), null)
-    const row = rig.db.prepare(`
+    const row = rig.db
+      .prepare(
+        `
       SELECT end_time, duration_sec, ended_reason
       FROM app_sessions
       WHERE app_name = 'Dia'
-    `).get() as { end_time: number; duration_sec: number; ended_reason: string | null } | undefined
+    `,
+      )
+      .get() as { end_time: number; duration_sec: number; ended_reason: string | null } | undefined
     assert.ok(row)
     assert.equal(row?.end_time, BASE + 60_000)
     assert.equal(row?.duration_sec, 60)
@@ -167,10 +182,12 @@ test('titleless Dia on a non-media domain still flushes under normal idle handli
 
 test('losing active-window permission clears the browser passive-presence signal', async () => {
   let win: typeof DIA_WIN | null = DIA_WIN
-  __setActiveBrowserContextTrackerForTest(new ActiveBrowserContextTracker(
-    () => ({ url: 'https://netflix.com/watch/81234567', title: 'Netflix', modeKnown: true }),
-    () => true,
-  ))
+  __setActiveBrowserContextTrackerForTest(
+    new ActiveBrowserContextTracker(
+      () => ({ url: 'https://netflix.com/watch/81234567', title: 'Netflix', modeKnown: true }),
+      () => true,
+    ),
+  )
   const rig = makeRig(() => win)
   try {
     await rig.poll(BASE, { input: true })
@@ -178,12 +195,18 @@ test('losing active-window permission clears the browser passive-presence signal
     win = null
     await rig.poll(BASE + 245_000)
 
-    const live = getCurrentSession() as (ReturnType<typeof getCurrentSession> & { passivePresence?: boolean })
+    const live = getCurrentSession() as ReturnType<typeof getCurrentSession> & {
+      passivePresence?: boolean
+    }
     assert.ok(live)
     assert.equal(live?.passivePresence, false)
 
     await rig.poll(BASE + 305_000)
-    assert.equal(getCurrentSession(), null, 'stale Netflix presence must not survive permission loss')
+    assert.equal(
+      getCurrentSession(),
+      null,
+      'stale Netflix presence must not survive permission loss',
+    )
   } finally {
     rig.teardown()
   }
@@ -278,7 +301,11 @@ test('positive control: return + second input ~34s later writes a real short awa
       | undefined
 
     assert.ok(s1, 'expected a persisted session starting at the return-input time')
-    assert.equal(s1?.start_time, returnTouch, 'start is the true return-input time, not poll wall-clock')
+    assert.equal(
+      s1?.start_time,
+      returnTouch,
+      'start is the true return-input time, not poll wall-clock',
+    )
     assert.equal(s1?.end_time, secondTouch, 'end is the input-derived idle-start (second touch)')
     assert.equal(s1?.duration_sec, 34, 'duration spans exactly the ~34s of activity')
     assert.equal(s1?.ended_reason, 'away')
