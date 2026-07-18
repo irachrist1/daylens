@@ -45,6 +45,7 @@ interface ActiveWinResult {
   title: string
   application: string
   path: string
+  bundleId?: string
   pid: number
   icon: string
   windows?: {
@@ -1008,7 +1009,7 @@ function resolveWindowIdentity(
   const appName = isWindowsUwp
     ? windowsUwpDisplayName(uwpPackage, normalizedWindowsAppName || exeName)
     : (normalizedWindowsAppName || exeName || uwpPackage || 'Unknown app')
-  const bundleId = isWindowsUwp ? uwpPackage : (win.path || uwpPackage || appName)
+  const bundleId = win.bundleId || (isWindowsUwp ? uwpPackage : (win.path || uwpPackage || appName))
   return { ...win, bundleId, appName }
 }
 
