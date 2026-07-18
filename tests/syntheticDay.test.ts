@@ -56,7 +56,6 @@ test('synthetic day agrees from source boundaries through every local fact surfa
     ),
   )
   __setTrackingFsmTestHarness({
-    platform: 'darwin',
     now: () => clock.now,
     idleSeconds: () => 0,
     activeWindow: () => ({

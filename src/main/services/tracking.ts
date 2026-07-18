@@ -85,11 +85,11 @@ interface LinuxProcessSnapshot {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const POLL_INTERVAL_MS = 5_000
+const POLL_INTERVAL_MS  = 5_000
 const SNAPSHOT_PERSIST_MS = 15_000
-const MIN_SESSION_SEC = 10 // discard sub-10s noise (5s/10s micro-fragments)
-const IDLE_THRESHOLD_SEC = 120 // 2 min of no input → hold the session open provisionally
-const AWAY_THRESHOLD_SEC = 300 // 5 min of no input → treat as away and flush
+const MIN_SESSION_SEC   = 10    // discard sub-10s noise (5s/10s micro-fragments)
+const IDLE_THRESHOLD_SEC = 120  // 2 min of no input → hold the session open provisionally
+const AWAY_THRESHOLD_SEC = 300  // 5 min of no input → treat as away and flush
 // A wall-clock hole between two poll ticks longer than this means the machine
 // was asleep (or the process frozen): interval timers do not run during sleep,
 // so the pre-sleep session would otherwise survive the gap and absorb it as
@@ -107,10 +107,13 @@ const GAP_FLUSH_MS = 60_000
 // window is safe. Explicit user actions (rebuild, label overrides, focus
 // start/stop) still invalidate immediately from their own handlers.
 const ACTIVITY_INVALIDATION_WINDOW_MS = 15_000
-const scheduleActivityProjectionInvalidation = createLeadingTrailingThrottle((date: string) => {
-  invalidateProjectionScope('timeline', 'activity_recorded', { date })
-  invalidateProjectionScope('insights', 'activity_recorded', { date })
-}, ACTIVITY_INVALIDATION_WINDOW_MS)
+const scheduleActivityProjectionInvalidation = createLeadingTrailingThrottle(
+  (date: string) => {
+    invalidateProjectionScope('timeline', 'activity_recorded', { date })
+    invalidateProjectionScope('insights', 'activity_recorded', { date })
+  },
+  ACTIVITY_INVALIDATION_WINDOW_MS,
+)
 
 interface NormalizationMap {
   aliases: Record<string, string>
@@ -253,8 +256,7 @@ function getLinuxTrackingSupportInfo(): LinuxTrackingDiagnostics {
   }
   const display = process.env.DISPLAY ?? null
   const waylandDisplay = process.env.WAYLAND_DISPLAY ?? null
-  const hyprlandSession =
-    Boolean(process.env.HYPRLAND_INSTANCE_SIGNATURE) || desktop.includes('hyprland')
+  const hyprlandSession = Boolean(process.env.HYPRLAND_INSTANCE_SIGNATURE) || desktop.includes('hyprland')
   const swaySession = Boolean(process.env.SWAYSOCK) || desktop.includes('sway')
   const plasmaSession = desktop.includes('kde') || desktop.includes('plasma')
   const gnomeSession = desktop.includes('gnome')
@@ -262,8 +264,7 @@ function getLinuxTrackingSupportInfo(): LinuxTrackingDiagnostics {
   if (sessionType === 'x11') {
     return {
       supportLevel: 'ready',
-      supportMessage:
-        'X11 session detected. Daylens can use the active-window backend plus xdotool and xprop fallbacks.',
+      supportMessage: 'X11 session detected. Daylens can use the active-window backend plus xdotool and xprop fallbacks.',
       sessionType,
       desktop,
       helperCommands,
@@ -338,8 +339,7 @@ function getLinuxTrackingSupportInfo(): LinuxTrackingDiagnostics {
 
   return {
     supportLevel: 'limited',
-    supportMessage:
-      'Linux tracking backends are only partially available in this session, so focused-window tracking may be incomplete.',
+    supportMessage: 'Linux tracking backends are only partially available in this session, so focused-window tracking may be incomplete.',
     sessionType,
     desktop,
     helperCommands,
@@ -372,7 +372,10 @@ function prettifyLinuxAppName(value: string): string {
     candidate = segments[segments.length - 1] ?? candidate
   }
 
-  return candidate.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim()
+  return candidate
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
 function canonicalLinuxBundleId(...values: string[]): string {
@@ -386,10 +389,7 @@ function canonicalLinuxBundleId(...values: string[]): string {
 }
 
 const PROCESS_SNAPSHOT_CACHE_MS = 30_000
-const processSnapshotCache = new Map<
-  number,
-  { expiresAt: number; snapshot: LinuxProcessSnapshot | null }
->()
+const processSnapshotCache = new Map<number, { expiresAt: number; snapshot: LinuxProcessSnapshot | null }>()
 const CMDLINE_IDENTITY_FLAG_PREFIXES = [
   '--app-id=',
   '--binary=',
@@ -449,8 +449,7 @@ function processName(pid: number): string {
 function processCommandLine(pid: number): string[] {
   if (!pid || process.platform !== 'linux') return []
   try {
-    return fs
-      .readFileSync(`/proc/${pid}/cmdline`, 'utf8')
+    return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8')
       .split('\u0000')
       .map((part) => part.trim())
       .filter(Boolean)
@@ -500,9 +499,7 @@ function linuxCmdlineIdentityTokens(cmdline: string[]): string[] {
     const cleanedEntry = cleanIdentityToken(entry)
     if (!cleanedEntry) continue
 
-    const matchedFlag = CMDLINE_IDENTITY_FLAG_PREFIXES.find((prefix) =>
-      cleanedEntry.startsWith(prefix),
-    )
+    const matchedFlag = CMDLINE_IDENTITY_FLAG_PREFIXES.find((prefix) => cleanedEntry.startsWith(prefix))
     if (matchedFlag) {
       const value = cleanIdentityToken(cleanedEntry.slice(matchedFlag.length))
       if (value) tokens.add(value)
@@ -564,8 +561,7 @@ function normalizedCatalogDisplayName(...values: string[]): string | null {
     .filter(Boolean)
 
   for (const candidate of candidates) {
-    const key =
-      map.aliases[candidate] ?? map.aliases[candidate.toLowerCase()] ?? candidate.toLowerCase()
+    const key = map.aliases[candidate] ?? map.aliases[candidate.toLowerCase()] ?? candidate.toLowerCase()
     const entry = map.catalog[key]
     if (entry?.displayName) return entry.displayName
   }
@@ -577,10 +573,7 @@ function finalizeLinuxWindowIdentity(
   win: ActiveWinResult,
 ): ActiveWinResult & { bundleId: string; appName: string } {
   const currentSnapshot = readLinuxProcessSnapshot(win.pid)
-  const exePath =
-    currentSnapshot?.exePath ||
-    processExecutablePath(win.pid) ||
-    (path.isAbsolute(win.path) ? win.path : '')
+  const exePath = currentSnapshot?.exePath || processExecutablePath(win.pid) || (path.isAbsolute(win.path) ? win.path : '')
   const procName = currentSnapshot?.name || processName(win.pid)
   const cmdline = currentSnapshot?.cmdline || processCommandLine(win.pid)
   const cmdlineCandidates = linuxCmdlineIdentityTokens(cmdline)
@@ -606,26 +599,24 @@ function finalizeLinuxWindowIdentity(
     )
   }
 
-  const appName =
-    desktopIdentity?.name ||
-    normalizedCatalogDisplayName(
+  const appName = desktopIdentity?.name
+    || normalizedCatalogDisplayName(
       desktopIdentity?.desktopId ?? '',
       exePath,
       win.path,
       procName,
       win.application,
       ...cmdlineCandidates,
-    ) ||
-    prettifyLinuxAppName(win.application) ||
-    prettifyLinuxAppName(procName) ||
-    prettifyLinuxAppName(cmdlineCandidates[0] ?? '') ||
-    prettifyLinuxAppName(exePath) ||
-    prettifyLinuxAppName(win.title) ||
-    'Unknown app'
+    )
+    || prettifyLinuxAppName(win.application)
+    || prettifyLinuxAppName(procName)
+    || prettifyLinuxAppName(cmdlineCandidates[0] ?? '')
+    || prettifyLinuxAppName(exePath)
+    || prettifyLinuxAppName(win.title)
+    || 'Unknown app'
 
-  const bundleId =
-    desktopIdentity?.desktopId ||
-    canonicalLinuxBundleId(
+  const bundleId = desktopIdentity?.desktopId
+    || canonicalLinuxBundleId(
       exePath,
       cmdlineCandidates[0] ?? '',
       win.path,
@@ -698,10 +689,9 @@ function swayActiveWindow(): ActiveWinResult | null {
     if (!focused) return null
 
     const pid = Number(focused.pid ?? 0)
-    const windowProps =
-      focused.window_properties && typeof focused.window_properties === 'object'
-        ? (focused.window_properties as Record<string, unknown>)
-        : null
+    const windowProps = (focused.window_properties && typeof focused.window_properties === 'object')
+      ? focused.window_properties as Record<string, unknown>
+      : null
     const title = typeof focused.name === 'string' ? focused.name : ''
     const appId = typeof focused.app_id === 'string' ? focused.app_id : ''
     const appClass = windowProps && typeof windowProps.class === 'string' ? windowProps.class : ''
@@ -739,7 +729,9 @@ function gnomeShellActiveWindow(): ActiveWinResult | null {
   const title = match?.[1]?.replace(/\\'/g, "'").trim()
   if (!title) return null
 
-  const application = title.includes(' - ') ? title.split(' - ').pop()?.trim() || title : title
+  const application = title.includes(' - ')
+    ? title.split(' - ').pop()?.trim() || title
+    : title
 
   return {
     title,
@@ -751,7 +743,9 @@ function gnomeShellActiveWindow(): ActiveWinResult | null {
 }
 
 function parseXpropField(output: string, field: string): string {
-  const line = output.split(/\r?\n/).find((entry) => entry.trim().startsWith(field))
+  const line = output
+    .split(/\r?\n/)
+    .find((entry) => entry.trim().startsWith(field))
   if (!line) return ''
   return line.slice(line.indexOf('=') + 1).trim()
 }
@@ -788,7 +782,8 @@ function x11WindowDetails(windowId: string): {
 
   const pid = Number(parseXpropField(output, '_NET_WM_PID').match(/\d+/)?.[0] ?? '0')
   const classTokens = parseXpropQuotedValues(parseXpropField(output, 'WM_CLASS'))
-  const titleField = parseXpropField(output, '_NET_WM_NAME') || parseXpropField(output, 'WM_NAME')
+  const titleField = parseXpropField(output, '_NET_WM_NAME')
+    || parseXpropField(output, 'WM_NAME')
 
   return {
     pid,
@@ -809,14 +804,13 @@ function xdotoolActiveWindow(): ActiveWinResult | null {
   const title = execText('xdotool', ['getwindowname', windowId]) ?? details?.title ?? ''
   const pid = Number(execText('xdotool', ['getwindowpid', windowId]) ?? String(details?.pid ?? 0))
   const exePath = processExecutablePath(pid)
-  const application =
-    details?.gtkApplicationId ||
-    path.basename(details?.bamfDesktopFile ?? '') ||
-    classTokens[classTokens.length - 1] ||
-    classTokens[0] ||
-    processName(pid) ||
-    title ||
-    'Unknown app'
+  const application = details?.gtkApplicationId
+    || path.basename(details?.bamfDesktopFile ?? '')
+    || classTokens[classTokens.length - 1]
+    || classTokens[0]
+    || processName(pid)
+    || title
+    || 'Unknown app'
 
   return {
     title: title || application,
@@ -839,14 +833,13 @@ function xpropActiveWindow(): ActiveWinResult | null {
 
   const pid = details.pid
   const exePath = processExecutablePath(pid)
-  const application =
-    details.gtkApplicationId ||
-    path.basename(details.bamfDesktopFile) ||
-    details.classTokens[details.classTokens.length - 1] ||
-    details.classTokens[0] ||
-    processName(pid) ||
-    details.title ||
-    'Unknown app'
+  const application = details.gtkApplicationId
+    || path.basename(details.bamfDesktopFile)
+    || details.classTokens[details.classTokens.length - 1]
+    || details.classTokens[0]
+    || processName(pid)
+    || details.title
+    || 'Unknown app'
 
   return {
     title: details.title || application,
@@ -859,79 +852,53 @@ function xpropActiveWindow(): ActiveWinResult | null {
 
 function linuxShouldPreferFallback(): boolean {
   const desktop = linuxDesktopName()
-  return (
-    linuxSessionType() === 'wayland' &&
-    (Boolean(process.env.HYPRLAND_INSTANCE_SIGNATURE) ||
-      Boolean(process.env.SWAYSOCK) ||
-      desktop.includes('hyprland') ||
-      desktop.includes('sway'))
-  )
+  return linuxSessionType() === 'wayland'
+    && (
+      Boolean(process.env.HYPRLAND_INSTANCE_SIGNATURE)
+      || Boolean(process.env.SWAYSOCK)
+      || desktop.includes('hyprland')
+      || desktop.includes('sway')
+    )
 }
 
-function windowHasMeaningfulIdentity(
-  win: Pick<ActiveWinResult, 'application' | 'path' | 'title'> | null,
-): boolean {
+function windowHasMeaningfulIdentity(win: Pick<ActiveWinResult, 'application' | 'path' | 'title'> | null): boolean {
   if (!win) return false
   return Boolean(win.application?.trim() || win.path?.trim() || win.title?.trim())
 }
 
-export function linuxFallbackActiveWindow(): {
-  source: Exclude<TrackingModuleSource, 'package' | 'unpacked'>
-  win: ActiveWinResult | null
-  trace: string[]
-} | null {
+export function linuxFallbackActiveWindow(): { source: Exclude<TrackingModuleSource, 'package' | 'unpacked'>; win: ActiveWinResult | null; trace: string[] } | null {
   const trace: string[] = []
   const desktop = linuxDesktopName()
-  const hyprlandSession =
-    Boolean(process.env.HYPRLAND_INSTANCE_SIGNATURE) || desktop.includes('hyprland')
+  const hyprlandSession = Boolean(process.env.HYPRLAND_INSTANCE_SIGNATURE) || desktop.includes('hyprland')
   const swaySession = Boolean(process.env.SWAYSOCK) || desktop.includes('sway')
 
   if (hyprlandSession) {
     const win = hyprlandActiveWindow()
     if (win) return { source: 'hyprctl', win, trace: ['hyprctl: focused window found'] }
-    trace.push(
-      commandAvailable('hyprctl')
-        ? 'hyprctl: no active window returned'
-        : 'hyprctl: command not found',
-    )
+    trace.push(commandAvailable('hyprctl') ? 'hyprctl: no active window returned' : 'hyprctl: command not found')
   }
 
   if (swaySession) {
     const win = swayActiveWindow()
     if (win) return { source: 'swaymsg', win, trace: ['swaymsg: focused window found'] }
-    trace.push(
-      commandAvailable('swaymsg')
-        ? 'swaymsg: no focused node returned'
-        : 'swaymsg: command not found',
-    )
+    trace.push(commandAvailable('swaymsg') ? 'swaymsg: no focused node returned' : 'swaymsg: command not found')
   }
 
   const gnomeSession = desktop.includes('gnome') && linuxSessionType() === 'wayland'
   if (gnomeSession) {
     const win = gnomeShellActiveWindow()
     if (win) return { source: 'xdotool', win, trace: ['gdbus: GNOME Shell focused window found'] }
-    trace.push(
-      commandAvailable('gdbus')
-        ? 'gdbus: GNOME Shell did not return a focused title'
-        : 'gdbus: command not found',
-    )
+    trace.push(commandAvailable('gdbus') ? 'gdbus: GNOME Shell did not return a focused title' : 'gdbus: command not found')
   }
 
   if (process.env.DISPLAY) {
     const xdotoolWin = xdotoolActiveWindow()
-    if (xdotoolWin)
-      return { source: 'xdotool', win: xdotoolWin, trace: ['xdotool: focused window found'] }
-    trace.push(
-      commandAvailable('xdotool')
-        ? 'xdotool: no active window returned'
-        : 'xdotool: command not found',
-    )
+    if (xdotoolWin) return { source: 'xdotool', win: xdotoolWin, trace: ['xdotool: focused window found'] }
+    trace.push(commandAvailable('xdotool') ? 'xdotool: no active window returned' : 'xdotool: command not found')
 
     const xpropWin = xpropActiveWindow()
     if (xpropWin) return { source: 'xprop', win: xpropWin, trace: ['xprop: focused window found'] }
-    trace.push(
-      commandAvailable('xprop') ? 'xprop: no active window returned' : 'xprop: command not found',
-    )
+    trace.push(commandAvailable('xprop') ? 'xprop: no active window returned' : 'xprop: command not found')
   }
 
   return trace.length > 0 ? { source: 'xprop', win: null, trace } : null
@@ -942,10 +909,7 @@ export function linuxFallbackActiveWindow(): {
 // Linux capture path can be verified without a Linux host. Pass null to restore
 // the real execFileSync-backed implementation.
 export function __setLinuxCaptureTestHarness(
-  harness: {
-    exec: (command: string, args: string[]) => string | null
-    availableCommands: string[]
-  } | null,
+  harness: { exec: (command: string, args: string[]) => string | null; availableCommands: string[] } | null,
 ): void {
   commandAvailabilityCache.clear()
   if (!harness) {
@@ -993,8 +957,7 @@ function getActiveWindowModule(): typeof import('@paymoapp/active-window').defau
   if (_activeWindowInitFailed) return null
   if (!_activeWindowMod) {
     if (process.platform === 'linux' && !process.env.DISPLAY) {
-      trackingStatus.loadError =
-        'The active-window backend needs X11/XWayland (DISPLAY). Daylens will use compositor-specific Linux trackers when available.'
+      trackingStatus.loadError = 'The active-window backend needs X11/XWayland (DISPLAY). Daylens will use compositor-specific Linux trackers when available.'
       _activeWindowInitFailed = true
       return null
     }
@@ -1004,9 +967,7 @@ function getActiveWindowModule(): typeof import('@paymoapp/active-window').defau
       ActiveWindow.initialize()
       _activeWindowMod = ActiveWindow
       trackingStatus.loadError = null
-      console.log(
-        `[tracking] active-window loaded via ${trackingStatus.moduleSource ?? 'unknown source'}`,
-      )
+      console.log(`[tracking] active-window loaded via ${trackingStatus.moduleSource ?? 'unknown source'}`)
     } catch (err) {
       trackingStatus.loadError = formatError(err)
       console.warn('[tracking] @paymoapp/active-window failed to load:', err)
@@ -1029,46 +990,40 @@ export function requestTrackingPermission(): boolean | null {
   }
 }
 
-function resolveWindowIdentity(
-  win: ActiveWinResult,
-  platform: NodeJS.Platform = process.platform,
-): ActiveWinResult & { bundleId: string; appName: string } {
-  if (platform === 'linux') {
+function resolveWindowIdentity(win: ActiveWinResult): ActiveWinResult & { bundleId: string; appName: string } {
+  if (process.platform === 'linux') {
     return finalizeLinuxWindowIdentity(win)
   }
 
-  const exeName = win.path ? windowsAwareBasename(win.path, platform) : ''
+  const exeName = win.path ? windowsAwareBasename(win.path) : ''
   const uwpPackage = win.windows?.isUWPApp ? win.windows.uwpPackage : ''
   const reportedAppName = win.application || ''
-  const normalizedWindowsAppName =
-    platform === 'win32'
-      ? windowsBrowserExecutableAppName(reportedAppName, exeName)
-      : reportedAppName
-  const isWindowsUwp = platform === 'win32' && Boolean(win.windows?.isUWPApp && uwpPackage)
+  const normalizedWindowsAppName = process.platform === 'win32'
+    ? windowsBrowserExecutableAppName(reportedAppName, exeName)
+    : reportedAppName
+  const isWindowsUwp = process.platform === 'win32' && Boolean(win.windows?.isUWPApp && uwpPackage)
   const appName = isWindowsUwp
     ? windowsUwpDisplayName(uwpPackage, normalizedWindowsAppName || exeName)
-    : normalizedWindowsAppName || exeName || uwpPackage || 'Unknown app'
-  const bundleId = isWindowsUwp ? uwpPackage : win.path || uwpPackage || appName
+    : (normalizedWindowsAppName || exeName || uwpPackage || 'Unknown app')
+  const bundleId = isWindowsUwp ? uwpPackage : (win.path || uwpPackage || appName)
   return { ...win, bundleId, appName }
 }
 
-function windowsAwareBasename(filePath: string, platform: NodeJS.Platform): string {
-  return platform === 'win32' ? path.win32.basename(filePath) : path.basename(filePath)
+function windowsAwareBasename(filePath: string): string {
+  return process.platform === 'win32' ? path.win32.basename(filePath) : path.basename(filePath)
 }
 
 function windowsBrowserExecutableAppName(reportedAppName: string, exeName: string): string {
   if (!reportedAppName || !exeName) return reportedAppName
   const exeStem = exeName.replace(/\.exe$/i, '')
   if (reportedAppName.toLowerCase() !== exeStem.toLowerCase()) return reportedAppName
-  if (!/^(?:msedge|chrome|firefox|brave|zen|arc|dia|comet|opera|vivaldi)$/i.test(exeStem))
-    return reportedAppName
+  if (!/^(?:msedge|chrome|firefox|brave|zen|arc|dia|comet|opera|vivaldi)$/i.test(exeStem)) return reportedAppName
   return exeName
 }
 
 function windowsUwpDisplayName(packageFamily: string, fallback: string): string {
   const trimmedFallback = fallback.trim()
-  if (trimmedFallback && !/^applicationframehost(?:\.exe)?$/i.test(trimmedFallback))
-    return trimmedFallback
+  if (trimmedFallback && !/^applicationframehost(?:\.exe)?$/i.test(trimmedFallback)) return trimmedFallback
 
   const packageName = packageFamily.split('_')[0] || packageFamily
   const segments = packageName
@@ -1081,22 +1036,18 @@ function windowsUwpDisplayName(packageFamily: string, fallback: string): string 
       return lower !== 'windows'
     })
   const labelParts = segments.length > 0 ? segments : [packageName]
-  return (
-    labelParts
-      .map((part) => part.replace(/([a-z])([A-Z])/g, '$1 $2'))
-      .join(' ')
-      .replace(/[_-]+/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim() || packageName
-  )
+  return labelParts
+    .map((part) => part.replace(/([a-z])([A-Z])/g, '$1 $2'))
+    .join(' ')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim() || packageName
 }
 
 function recentMacFocusEventWindow(maxAgeMs = 15 * 60_000): MacFocusEventWindow | null {
   if (process.platform !== 'darwin') return null
   try {
-    const row = getDb()
-      .prepare(
-        `
+    const row = getDb().prepare(`
       SELECT ts_ms, app_bundle_id, app_name, pid, window_title
       FROM focus_events
       WHERE (
@@ -1106,26 +1057,23 @@ function recentMacFocusEventWindow(maxAgeMs = 15 * 60_000): MacFocusEventWindow 
         AND (app_bundle_id IS NOT NULL OR app_name IS NOT NULL)
       ORDER BY ts_ms DESC, id DESC
       LIMIT 1
-    `,
-      )
-      .get() as
-      | {
-          ts_ms: number
-          app_bundle_id: string | null
-          app_name: string | null
-          pid: number | null
-          window_title: string | null
-        }
-      | undefined
+    `).get() as {
+      ts_ms: number
+      app_bundle_id: string | null
+      app_name: string | null
+      pid: number | null
+      window_title: string | null
+    } | undefined
 
     if (!row || Date.now() - row.ts_ms > maxAgeMs) return null
     const application = row.app_name?.trim() || row.app_bundle_id?.trim() || 'Unknown app'
     const bundleId = row.app_bundle_id?.trim() || application
-    const matchingCurrentSession =
-      currentSession &&
-      (currentSession.bundleId === bundleId ||
-        currentSession.appName === application ||
-        currentSession.rawAppName === application)
+    const matchingCurrentSession = currentSession
+      && (
+        currentSession.bundleId === bundleId
+        || currentSession.appName === application
+        || currentSession.rawAppName === application
+      )
     const stablePath = matchingCurrentSession && currentSession ? currentSession.bundleId : bundleId
     return {
       title: row.window_title?.trim() || application,
@@ -1143,8 +1091,7 @@ function recentMacFocusEventWindow(maxAgeMs = 15 * 60_000): MacFocusEventWindow 
 function normalizedMacAppToken(value: string | null | undefined): string {
   const trimmed = value?.trim()
   if (!trimmed) return ''
-  return path
-    .basename(trimmed)
+  return path.basename(trimmed)
     .replace(/\.app$/i, '')
     .replace(/\s+/g, ' ')
     .toLowerCase()
@@ -1152,10 +1099,7 @@ function normalizedMacAppToken(value: string | null | undefined): string {
 
 export function shouldPreferMacFocusEventWindow(
   activeWindow: Pick<ActiveWinResult, 'application' | 'path' | 'pid' | 'title'> | null,
-  focusWindow: Pick<
-    MacFocusEventWindow,
-    'application' | 'path' | 'pid' | 'title' | 'observedAt'
-  > | null,
+  focusWindow: Pick<MacFocusEventWindow, 'application' | 'path' | 'pid' | 'title' | 'observedAt'> | null,
 ): boolean {
   if (!focusWindow) return false
   if (!windowHasMeaningfulIdentity(activeWindow)) return true
@@ -1184,8 +1128,8 @@ const SELF_NOISE_EXE_NAMES = new Set([
   'daylens.exe',
   'daylens windows.exe',
   'daylenswindows.exe',
-  'electron.exe', // dev mode — raw electron runner, not a user app
-  'electron', // same runner on macOS (node_modules/electron/dist/Electron.app)
+  'electron.exe',      // dev mode — raw electron runner, not a user app
+  'electron',          // same runner on macOS (node_modules/electron/dist/Electron.app)
 ])
 
 const DAYLENS_SELF_BUNDLE_IDS = new Set([
@@ -1217,12 +1161,7 @@ function normalizedSelfIdentity(value: string | null | undefined): string {
     .toLowerCase()
 }
 
-function isDaylensSelfIdentity(
-  bundleId: string,
-  appName: string,
-  rawAppName?: string | null,
-  winPath?: string | null,
-): boolean {
+function isDaylensSelfIdentity(bundleId: string, appName: string, rawAppName?: string | null, winPath?: string | null): boolean {
   const lowerBundleId = bundleId.trim().toLowerCase()
   if (DAYLENS_SELF_BUNDLE_IDS.has(lowerBundleId)) return true
 
@@ -1247,18 +1186,9 @@ function looksLikePassiveMediaSession(session: InFlightSession): boolean {
 }
 
 function trackedForegroundSessionExclusionReason(
-  session: Pick<Omit<AppSession, 'id'>, 'bundleId' | 'appName' | 'windowTitle' | 'rawAppName'> & {
-    executablePath?: string | null
-  },
+  session: Pick<Omit<AppSession, 'id'>, 'bundleId' | 'appName' | 'windowTitle' | 'rawAppName'> & { executablePath?: string | null },
 ): string | null {
-  if (
-    isDaylensSelfIdentity(
-      session.bundleId,
-      session.appName,
-      session.rawAppName,
-      session.executablePath,
-    )
-  ) {
+  if (isDaylensSelfIdentity(session.bundleId, session.appName, session.rawAppName, session.executablePath)) {
     return 'daylens_self_capture'
   }
   if (session.windowTitle?.trimStart().startsWith('Daylens:')) {
@@ -1375,10 +1305,7 @@ function scheduleAttributionRefreshForSession(startTime: number, endTime: number
     pendingAttributionDates.add(date)
   }
   if (attributionRefreshTimer) return
-  attributionRefreshTimer = setTimeout(
-    flushPendingAttributionRefresh,
-    ATTRIBUTION_REFRESH_DEBOUNCE_MS,
-  )
+  attributionRefreshTimer = setTimeout(flushPendingAttributionRefresh, ATTRIBUTION_REFRESH_DEBOUNCE_MS)
 }
 
 function persistLiveSnapshot(force = false): void {
@@ -1439,16 +1366,12 @@ function recoverPersistedLiveSnapshot(): void {
     for (const slice of slices) {
       const durationSeconds = Math.max(0, Math.round((slice.endMs - slice.startMs) / 1_000))
       if (durationSeconds < MIN_SESSION_SEC) continue
-      const duplicate = db
-        .prepare(
-          `
+      const duplicate = db.prepare(`
         SELECT 1
         FROM app_sessions
         WHERE bundle_id = ? AND start_time = ?
         LIMIT 1
-      `,
-        )
-        .get(snapshot.bundleId, slice.startMs)
+      `).get(snapshot.bundleId, slice.startMs)
       if (duplicate) continue
 
       const { isFocused, category } = classifyResult(snapshot.bundleId, snapshot.appName)
@@ -1499,10 +1422,9 @@ function recoverPersistedLiveSnapshot(): void {
 }
 
 function handleLockScreen(): void {
-  const endMs =
-    currentSession && looksLikePassiveMediaSession(currentSession)
-      ? undefined
-      : (provisionalIdleStart ?? undefined)
+  const endMs = currentSession && looksLikePassiveMediaSession(currentSession)
+    ? undefined
+    : provisionalIdleStart ?? undefined
   if (currentSession) {
     // Ordinary idle ends at the last input; passive media ends at the lock.
     flushCurrent(endMs, 'lock_screen')
@@ -1515,10 +1437,9 @@ function handleLockScreen(): void {
 }
 
 function handleSuspend(): void {
-  const endMs =
-    currentSession && looksLikePassiveMediaSession(currentSession)
-      ? undefined
-      : (provisionalIdleStart ?? undefined)
+  const endMs = currentSession && looksLikePassiveMediaSession(currentSession)
+    ? undefined
+    : provisionalIdleStart ?? undefined
   if (currentSession) {
     flushCurrent(endMs, 'suspend')
     console.log('[tracking] system suspended — session flushed')
@@ -1537,8 +1458,8 @@ function handleSuspend(): void {
 function cutSessionAfterWake(reason: 'unlock_screen' | 'resume'): void {
   if (!currentSession) return
   const endMs = looksLikePassiveMediaSession(currentSession)
-    ? (lastPollTickMs ?? undefined)
-    : (provisionalIdleStart ?? lastPollTickMs ?? undefined)
+    ? lastPollTickMs ?? undefined
+    : provisionalIdleStart ?? lastPollTickMs ?? undefined
   flushCurrent(endMs, reason)
   flushActiveBrowserContext(getDb(), endMs)
   idleState = 'away'
@@ -1557,15 +1478,7 @@ function handleResume(): void {
 }
 
 function recordActivityEvent(
-  eventType:
-    | 'idle_start'
-    | 'idle_end'
-    | 'away_start'
-    | 'away_end'
-    | 'lock_screen'
-    | 'unlock_screen'
-    | 'suspend'
-    | 'resume',
+  eventType: 'idle_start' | 'idle_end' | 'away_start' | 'away_end' | 'lock_screen' | 'unlock_screen' | 'suspend' | 'resume',
   metadata: Record<string, unknown> = {},
   // Backdated events (a sleep gap discovered on the first poll after wake)
   // pass the true boundary; live events default to now.
@@ -1652,7 +1565,6 @@ interface TrackingFsmTestHarness {
   now: () => number
   idleSeconds: () => number
   activeWindow: () => ActiveWinResult | null
-  platform?: NodeJS.Platform
   recordFlush?: (info: {
     startTime: number
     endTime: number
@@ -1711,24 +1623,17 @@ async function poll(): Promise<void> {
     // suspend/lock events have been observed not to fire on lid-close.
     const tickMs = nowMs()
     if (lastPollTickMs != null && tickMs - lastPollTickMs > GAP_FLUSH_MS) {
-      const gapStartMs =
-        currentSession && looksLikePassiveMediaSession(currentSession)
-          ? lastPollTickMs
-          : (provisionalIdleStart ?? lastPollTickMs)
+      const gapStartMs = currentSession && looksLikePassiveMediaSession(currentSession)
+        ? lastPollTickMs
+        : provisionalIdleStart ?? lastPollTickMs
       if (currentSession) {
         flushCurrent(gapStartMs, 'sleep_gap')
-        console.log(
-          `[tracking] ${Math.round((tickMs - gapStartMs) / 1000)}s poll gap — session flushed at last activity`,
-        )
+        console.log(`[tracking] ${Math.round((tickMs - gapStartMs) / 1000)}s poll gap — session flushed at last activity`)
       }
       flushActiveBrowserContext(getDb(), gapStartMs)
       // Backdate the absence start to where activity really ended; the normal
       // return-from-away path below emits the matching away_end this tick.
-      recordActivityEvent(
-        'away_start',
-        { inferredFrom: 'poll_gap', gapMs: tickMs - lastPollTickMs },
-        gapStartMs,
-      )
+      recordActivityEvent('away_start', { inferredFrom: 'poll_gap', gapMs: tickMs - lastPollTickMs }, gapStartMs)
       idleState = 'away'
       provisionalIdleStart = null
     }
@@ -1741,17 +1646,12 @@ async function poll(): Promise<void> {
         if (idleState === 'active') {
           provisionalIdleStart = nowMs() - Math.round(idleSec) * 1_000
           idleState = 'provisional_idle'
-          recordActivityEvent('idle_start', {
-            idleSeconds: Math.round(idleSec),
-            heldForMediaPlayback: true,
-          })
-          console.log(
-            `[tracking] idle ${Math.round(idleSec)}s during media playback — session held open`,
-          )
+          recordActivityEvent('idle_start', { idleSeconds: Math.round(idleSec), heldForMediaPlayback: true })
+          console.log(`[tracking] idle ${Math.round(idleSec)}s during media playback — session held open`)
         }
       } else {
         if (idleState !== 'away' && currentSession) {
-          const idleStartMs = provisionalIdleStart ?? nowMs() - Math.round(idleSec) * 1_000
+          const idleStartMs = provisionalIdleStart ?? (nowMs() - Math.round(idleSec) * 1_000)
           if (idleState !== 'provisional_idle') {
             recordActivityEvent('away_start', { idleSeconds: Math.round(idleSec) })
           }
@@ -1823,14 +1723,10 @@ async function poll(): Promise<void> {
               backend = trackingStatus.moduleSource ?? 'unknown'
               backendTrace.push(`active-window (${backend}): focused window found`)
             } else {
-              backendTrace.push(
-                `active-window (${trackingStatus.moduleSource ?? 'unknown'}): returned an incomplete window`,
-              )
+              backendTrace.push(`active-window (${trackingStatus.moduleSource ?? 'unknown'}): returned an incomplete window`)
             }
           } catch (err) {
-            backendTrace.push(
-              `active-window (${trackingStatus.moduleSource ?? 'unknown'}): ${formatError(err)}`,
-            )
+            backendTrace.push(`active-window (${trackingStatus.moduleSource ?? 'unknown'}): ${formatError(err)}`)
           }
         } else if (trackingStatus.loadError) {
           backendTrace.push(`active-window: ${trackingStatus.loadError}`)
@@ -1841,10 +1737,7 @@ async function poll(): Promise<void> {
 
       if (!win) {
         fallback = fallback ?? linuxFallbackActiveWindow()
-        if (
-          fallback &&
-          (!preferFallback || !fallback.trace.every((entry) => backendTrace.includes(entry)))
-        ) {
+        if (fallback && (!preferFallback || !fallback.trace.every((entry) => backendTrace.includes(entry)))) {
           backendTrace.push(...fallback.trace)
         }
         if (fallback?.win) {
@@ -1855,8 +1748,9 @@ async function poll(): Promise<void> {
         }
       }
 
-      trackingStatus.backendTrace =
-        backendTrace.length > 0 ? backendTrace.slice(-8) : support ? [support.supportMessage] : []
+      trackingStatus.backendTrace = backendTrace.length > 0
+        ? backendTrace.slice(-8)
+        : (support ? [support.supportMessage] : [])
     } else {
       const awMod = getActiveWindowModule()
       if (!awMod) {
@@ -1892,16 +1786,12 @@ async function poll(): Promise<void> {
             flushActiveBrowserContext(getDb())
             if (currentSession) currentSession.passivePresence = false
             trackingStatus.pollError = formatError(err)
-            captureRateLimited(
-              ANALYTICS_EVENT.TRACKING_ENGINE_HEALTH,
-              'tracking:get-active-window',
-              {
-                failure_kind: classifyFailureKind(err),
-                reason: 'poll',
-                status: 'error',
-                surface: 'tracking',
-              },
-            )
+            captureRateLimited(ANALYTICS_EVENT.TRACKING_ENGINE_HEALTH, 'tracking:get-active-window', {
+              failure_kind: classifyFailureKind(err),
+              reason: 'poll',
+              status: 'error',
+              surface: 'tracking',
+            })
             return
           }
         }
@@ -1917,16 +1807,15 @@ async function poll(): Promise<void> {
       return
     }
 
-    if (
-      process.platform === 'darwin' &&
-      (!win.title?.trim() || win.title.trim() === win.application.trim())
-    ) {
+    if (process.platform === 'darwin' && (!win.title?.trim() || win.title.trim() === win.application.trim())) {
       const nativeWindow = recentMacFocusEventWindow()
       if (
-        nativeWindow?.title?.trim() &&
-        (nativeWindow.application === win.application ||
-          nativeWindow.path === win.path ||
-          nativeWindow.pid === win.pid)
+        nativeWindow?.title?.trim()
+        && (
+          nativeWindow.application === win.application
+          || nativeWindow.path === win.path
+          || nativeWindow.pid === win.pid
+        )
       ) {
         win = { ...win, title: nativeWindow.title }
         backend = `${backend}+focus_title`
@@ -1943,7 +1832,7 @@ async function poll(): Promise<void> {
       uwpPackage: win.windows?.uwpPackage ?? '',
     }
 
-    const resolvedWin = resolveWindowIdentity(win, fsmTestHarness?.platform)
+    const resolvedWin = resolveWindowIdentity(win)
     const browserApplication = resolveBrowserApplication({
       bundleId: resolvedWin.bundleId,
       appName: resolvedWin.appName,
@@ -1956,9 +1845,8 @@ async function poll(): Promise<void> {
     // URL token, strip query/fragment (and the path for non-allowlisted hosts)
     // before it lands in app_sessions. The full URL still flows into
     // website_visits.url via the browser-history reader.
-    const isBrowserApp =
-      Boolean(browserApplication) ||
-      resolveCanonicalApp(bundleId, appName).defaultCategory === 'browsing'
+    const isBrowserApp = Boolean(browserApplication)
+      || resolveCanonicalApp(bundleId, appName).defaultCategory === 'browsing'
     const resolvedWindowTitle = stripBrowserUrlFromTitle(rawResolvedTitle, isBrowserApp)
     trackingStatus.lastResolvedWindow = {
       backend,
@@ -1969,15 +1857,14 @@ async function poll(): Promise<void> {
       path: resolvedWin.path,
     }
     const resolvedIdentity = resolveCanonicalApp(bundleId, appName)
-    const identity =
-      browserApplication && !resolvedIdentity.canonicalAppId
-        ? {
-            ...resolvedIdentity,
-            canonicalAppId: browserApplication.bundleId.toLowerCase(),
-            displayName: browserApplication.name,
-            defaultCategory: 'browsing' as const,
-          }
-        : resolvedIdentity
+    const identity = browserApplication && !resolvedIdentity.canonicalAppId
+      ? {
+          ...resolvedIdentity,
+          canonicalAppId: browserApplication.bundleId.toLowerCase(),
+          displayName: browserApplication.name,
+          defaultCategory: 'browsing' as const,
+        }
+      : resolvedIdentity
 
     const exclusionReason = trackedForegroundSessionExclusionReason({
       bundleId,
@@ -1997,12 +1884,10 @@ async function poll(): Promise<void> {
     // (capture unchanged). Otherwise a paused tracker, an excluded app, or an
     // incognito window (by title) is dropped exactly like the exclusions above —
     // no app session AND no browser context for this foreground window.
-    const trackingDecision = decideAppCapture(trackingControlsStateFromSettings(getSettings()), {
-      bundleId,
-      canonicalAppId: identity.canonicalAppId,
-      appName,
-      windowTitle: resolvedWindowTitle,
-    })
+    const trackingDecision = decideAppCapture(
+      trackingControlsStateFromSettings(getSettings()),
+      { bundleId, canonicalAppId: identity.canonicalAppId, appName, windowTitle: resolvedWindowTitle },
+    )
     if (!trackingDecision.capture) {
       if (currentSession) flushCurrent(undefined, `tracking_controls:${trackingDecision.reason}`)
       flushActiveBrowserContext(getDb())
@@ -2021,16 +1906,13 @@ async function poll(): Promise<void> {
       return
     }
 
-    if (
-      process.platform === 'win32' &&
-      getRecentWindowsPrivateWindowSignal({
-        bundleId,
-        appName,
-        pid: resolvedWin.pid,
-        windowTitle: resolvedWindowTitle,
-        nowMs: tickMs,
-      })
-    ) {
+    if (process.platform === 'win32' && getRecentWindowsPrivateWindowSignal({
+      bundleId,
+      appName,
+      pid: resolvedWin.pid,
+      windowTitle: resolvedWindowTitle,
+      nowMs: tickMs,
+    })) {
       if (currentSession) flushCurrent(undefined, 'incognito')
       flushActiveBrowserContext(getDb())
       clearPersistedLiveSnapshot()
@@ -2056,8 +1938,7 @@ async function poll(): Promise<void> {
       return
     }
     if (browserSample.captureBlockReason) {
-      if (currentSession)
-        flushCurrent(undefined, `tracking_controls:${browserSample.captureBlockReason}`)
+      if (currentSession) flushCurrent(undefined, `tracking_controls:${browserSample.captureBlockReason}`)
       clearPersistedLiveSnapshot()
       return
     }
@@ -2082,7 +1963,9 @@ async function poll(): Promise<void> {
       // Otherwise the away/idle end (input-derived) can predate a poll-stamped
       // start and the session gets silently discarded on flush.
       const bornOnIdleReturn = returnedAtMs != null
-      const startedAt = bornOnIdleReturn ? Math.max(returnedAtMs, lastFlushEndMs ?? 0) : nowMs()
+      const startedAt = bornOnIdleReturn
+        ? Math.max(returnedAtMs, lastFlushEndMs ?? 0)
+        : nowMs()
       const category = identity.defaultCategory ?? classifyApp(bundleId, appName)
       currentSession = {
         bundleId,
@@ -2091,10 +1974,9 @@ async function poll(): Promise<void> {
         rawAppName: appName,
         canonicalAppId: identity.canonicalAppId,
         appInstanceId: identity.appInstanceId,
-        captureSource:
-          process.platform === 'linux' && backend !== 'package' && backend !== 'unpacked'
-            ? `foreground_poll:${backend}`
-            : 'foreground_poll',
+        captureSource: process.platform === 'linux' && backend !== 'package' && backend !== 'unpacked'
+          ? `foreground_poll:${backend}`
+          : 'foreground_poll',
         startTime: startedAt,
         category,
         passivePresence: browserSample.passivePresence,
@@ -2131,10 +2013,10 @@ async function poll(): Promise<void> {
     }
 
     if (
-      idleSec >= AWAY_THRESHOLD_SEC &&
-      idleState === 'provisional_idle' &&
-      currentSession &&
-      !looksLikePassiveMediaSession(currentSession)
+      idleSec >= AWAY_THRESHOLD_SEC
+      && idleState === 'provisional_idle'
+      && currentSession
+      && !looksLikePassiveMediaSession(currentSession)
     ) {
       flushCurrent(nowMs(), 'away')
       flushActiveBrowserContext(getDb(), nowMs())
@@ -2172,13 +2054,14 @@ function flushCurrent(overrideEndTime?: number, endedReason: string | null = nul
   // collapses to zero length then dies at the explicit MIN_SESSION_SEC floor
   // (logged when it was born on a return), never via a silent negative-duration
   // discard. Wall-clock flushes (no override) are already monotonic.
-  const endTime =
-    overrideEndTime != null ? Math.max(overrideEndTime, currentSession.startTime) : nowMs()
+  const endTime = overrideEndTime != null
+    ? Math.max(overrideEndTime, currentSession.startTime)
+    : nowMs()
 
   // Split sessions that cross midnight into two records so that each calendar
   // day's totals only include time that actually fell within that day.
   const startDate = localDateString(new Date(currentSession.startTime))
-  const endDate = localDateString(new Date(endTime))
+  const endDate   = localDateString(new Date(endTime))
   if (startDate !== endDate) {
     const [, midnightMs] = localDayBounds(startDate)
     // Snapshot fields before the recursive call — flushCurrent sets
@@ -2217,21 +2100,18 @@ function flushCurrent(overrideEndTime?: number, endedReason: string | null = nul
   if (durationSeconds >= MIN_SESSION_SEC) {
     try {
       const db = getDb()
-      const { isFocused, category } = classifyResult(
-        currentSession.bundleId,
-        currentSession.appName,
-      )
+      const { isFocused, category } = classifyResult(currentSession.bundleId, currentSession.appName)
       const insertedId = persistTrackedForegroundSession(db, {
-        bundleId: currentSession.bundleId,
-        appName: currentSession.appName,
-        windowTitle: currentSession.windowTitle,
-        rawAppName: currentSession.rawAppName,
-        canonicalAppId: currentSession.canonicalAppId,
-        appInstanceId: currentSession.appInstanceId,
-        captureSource: currentSession.captureSource,
+        bundleId:        currentSession.bundleId,
+        appName:         currentSession.appName,
+        windowTitle:     currentSession.windowTitle,
+        rawAppName:      currentSession.rawAppName,
+        canonicalAppId:  currentSession.canonicalAppId,
+        appInstanceId:   currentSession.appInstanceId,
+        captureSource:   currentSession.captureSource,
         endedReason,
-        captureVersion: 2,
-        startTime: currentSession.startTime,
+        captureVersion:  2,
+        startTime:       currentSession.startTime,
         endTime,
         durationSeconds,
         category,
@@ -2286,6 +2166,7 @@ function flushCurrent(overrideEndTime?: number, endedReason: string | null = nul
   currentSession = null
 }
 
+
 // ─── Classifier ───────────────────────────────────────────────────────────────
 // Rules are matched in order — first match wins.
 // The target string is "<bundleId> <appName>" lowercased.
@@ -2299,17 +2180,11 @@ const RULES: [RegExp, AppCategory][] = [
 
   // ── Development ─────────────────────────────────────────────────────────────
   // Editors & IDEs
-  [
-    /\bcode\b|cursor|windsurf|zed|xcode|intellij|pycharm|webstorm|phpstorm|goland|rider|clion|rubymine|datagrip|android.?studio/i,
-    'development',
-  ],
+  [/\bcode\b|cursor|windsurf|zed|xcode|intellij|pycharm|webstorm|phpstorm|goland|rider|clion|rubymine|datagrip|android.?studio/i, 'development'],
   [/\bvim\b|neovim|\bnvim\b|sublime|emacs\b|nano\b|helix\b|fleet\b/i, 'development'],
   [/devenv|visual.?studio(?!.?code)|rust.?rover/i, 'development'],
   // Terminals (macOS + Windows — "windowsterminal" is the Windows Terminal process name)
-  [
-    /\bterminal\b|windowsterminal|iterm|wezterm|alacritty|warp|hyper|kitty|ghostty|powershell|pwsh\b/i,
-    'development',
-  ],
+  [/\bterminal\b|windowsterminal|iterm|wezterm|alacritty|warp|hyper|kitty|ghostty|powershell|pwsh\b/i, 'development'],
   // Version control GUIs
   [/github.?desktop|sourcetree|\btower\b|\bfork\b|gitkraken|lazygit/i, 'development'],
   // API / DB tools
@@ -2327,26 +2202,17 @@ const RULES: [RegExp, AppCategory][] = [
   [/\bmail\b|outlook|\bolk\b|\bgmail\b|thunderbird|spark|airmail|mimestream/i, 'email'],
 
   // ── Communication — messaging only (no video calls) ─────────────────────────
-  [
-    /slack|teams|discord|skype|telegram|signal|whatsapp|lark|google.?chat|mattermost/i,
-    'communication',
-  ],
+  [/slack|teams|discord|skype|telegram|signal|whatsapp|lark|google.?chat|mattermost/i, 'communication'],
 
   // ── Browsing ─────────────────────────────────────────────────────────────────
   [/safari|chrome|firefox|\bedge\b|msedge|arc|brave|opera|vivaldi|chromium/i, 'browsing'],
 
   // ── Writing / notes ──────────────────────────────────────────────────────────
-  [
-    /notion|obsidian|\bword\b|winword|pages|typora|ulysses|scrivener|\bbear\b|\bcraft\b/i,
-    'writing',
-  ],
+  [/notion|obsidian|\bword\b|winword|pages|typora|ulysses|scrivener|\bbear\b|\bcraft\b/i, 'writing'],
   [/evernote|logseq|roam.?research|day.?one|marktext|\bnotes\b/i, 'writing'],
 
   // ── Design ───────────────────────────────────────────────────────────────────
-  [
-    /figma|sketch|affinity|photoshop|illustrator|lightroom|capture.?one|luminar|canva|framer/i,
-    'design',
-  ],
+  [/figma|sketch|affinity|photoshop|illustrator|lightroom|capture.?one|luminar|canva|framer/i, 'design'],
   [/penpot|inkscape|blender|cinema.?4d|maya\b|pixelmator|acorn\b/i, 'design'],
 
   // ── AI tools ─────────────────────────────────────────────────────────────────
@@ -2356,10 +2222,7 @@ const RULES: [RegExp, AppCategory][] = [
   [/reader|readwise|pocket|instapaper|kindle|\bbooks\b|zotero|reeder|\bdash\b|kapeli/i, 'research'],
 
   // ── Productivity — task managers, calendars, office spreadsheets/slides ──────
-  [
-    /calendar|fantastical|things|todoist|omnifocus|linear|asana|jira|trello|basecamp/i,
-    'productivity',
-  ],
+  [/calendar|fantastical|things|todoist|omnifocus|linear|asana|jira|trello|basecamp/i, 'productivity'],
   [/\bexcel\b|xlsx|powerpoint|powerpnt|keynote|\bnumbers\b|airtable/i, 'productivity'],
   [/raycast|alfred\b|1password|bitwarden|reminders\b/i, 'productivity'],
 
@@ -2379,11 +2242,10 @@ const RULES: [RegExp, AppCategory][] = [
 // DB changes — this only affects the string the classifier sees.
 
 function normalizeForClassify(bundleId: string, appName: string): string {
-  const strip = (s: string) =>
-    s
-      .replace(/\.exe$/i, '')
-      .replace(/\.app$/i, '')
-      .trim()
+  const strip = (s: string) => s
+    .replace(/\.exe$/i, '')
+    .replace(/\.app$/i, '')
+    .trim()
   return `${strip(bundleId)} ${strip(appName)}`.toLowerCase()
 }
 
@@ -2392,10 +2254,7 @@ function normalizedCatalogCategory(bundleId: string, appName: string): AppCatego
   const candidates = [
     bundleId,
     path.basename(bundleId).toLowerCase(),
-    path
-      .basename(bundleId)
-      .replace(/\.exe$/i, '')
-      .toLowerCase(),
+    path.basename(bundleId).replace(/\.exe$/i, '').toLowerCase(),
     appName.toLowerCase(),
     appName.replace(/\.exe$/i, '').toLowerCase(),
   ].filter(Boolean)
