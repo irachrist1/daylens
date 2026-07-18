@@ -50,7 +50,9 @@ The failing 2026-07-13, 2026-07-16, and 2026-07-17 comparisons guide this work. 
 - Calendar-only, captured-only, and matched meetings are reported separately; no calendar event becomes claimed work without supporting evidence.
 - Correction, exclusion, and deletion update every consumer without resurrecting removed evidence.
 - Asked about a day whose surfaces or evidence conflict, the agent states the specific conflict.
-- The 2026-07-13 reconstruction passes review and is accepted as the private baseline.
+- A day with a chaired meeting is recognized as containing that meeting from captured meeting-application evidence alone, from calendar signal alone, and from both together; the reconstruction never reports "no meeting signal" when either source supports one.
+- The label voice has a recorded definition, and the labeling path is evaluated against it in the real-day review.
+- The 2026-07-13, 2026-07-16, and 2026-07-17 reconstructions pass review and are accepted as private baselines.
 
 ## Verification
 
