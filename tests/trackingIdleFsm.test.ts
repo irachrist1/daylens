@@ -71,6 +71,7 @@ function makeRig(activeWindow = () => WIN): Rig {
   const flushes: FlushInfo[] = []
   const clock = { now: BASE, lastInput: BASE }
   __setTrackingFsmTestHarness({
+    platform: 'darwin',
     now: () => clock.now,
     // Idle seconds = wall-clock time since the last real input, exactly like the
     // OS idle timer the FSM reads in production.
@@ -112,7 +113,7 @@ test('titleless Dia on Netflix remains active beyond the five-minute idle thresh
     const live = getCurrentSession()
     assert.ok(live, 'Netflix must remain live after six minutes without input')
     assert.equal(live.appName, 'Dia')
-    assert.equal(live.windowTitle, process.platform === 'linux' ? 'Dia' : null)
+    assert.equal(live.windowTitle, null)
     assert.equal(rig.flushes.length, 0)
 
     win = WIN

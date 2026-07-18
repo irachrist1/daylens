@@ -2223,6 +2223,7 @@ export const IPC = {
     RELAUNCH: 'app:relaunch',
     COMPLETE_ONBOARDING: 'app:complete-onboarding',
     GET_COMPUTER_NAME: 'app:get-computer-name',
+    RESET_AND_UNINSTALL: 'app:reset-and-uninstall',
   },
   INTERCOM: {
     GET_IDENTITY: 'intercom:get-identity',
