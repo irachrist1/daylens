@@ -10,7 +10,7 @@ function issue(overrides: Record<string, unknown> = {}) {
     title: 'Target issue',
     description: '**Specification** — `docs/specs/accepted.md`.',
     state: { type: 'backlog' },
-    inverseRelations: { nodes: [] },
+    inverseRelations: { nodes: [], pageInfo: { hasNextPage: false } },
     ...overrides,
   }
 }
@@ -32,6 +32,48 @@ test('promotes a Backlog issue with no open blockers and an accepted specificati
   )
 })
 
+test('accepts the recorded V2 product gate used by DEV-207', async () => {
+  const candidate = issue({
+    identifier: 'DEV-207',
+    description: '**Specification** — `docs/product/v2.md` (Version 2 release gate).',
+  })
+
+  assert.deepEqual(pipeline.specificationPaths(candidate.description), ['docs/product/v2.md'])
+  assert.equal(
+    await pipeline.hasAcceptedSpecification(candidate, {
+      repositoryRoot: '/repo',
+      readFile: async (file: string) => {
+        assert.equal(file, '/repo/docs/product/v2.md')
+        return '# V2 direction\n\n**Status:** Accepted product direction.\n'
+      },
+    }),
+    true,
+  )
+})
+
+test('requires every specification cited by a multi-spec issue to be accepted', async () => {
+  const candidate = issue({
+    identifier: 'DEV-175',
+    description:
+      '**Specification** — `docs/specs/privacy-retention-and-sync.md` (deletion); `docs/specs/capture-and-evidence.md` (deletion and retention); the canonical-deletion ticket in `docs/tickets/`.',
+  })
+
+  assert.deepEqual(pipeline.specificationPaths(candidate.description), [
+    'docs/specs/privacy-retention-and-sync.md',
+    'docs/specs/capture-and-evidence.md',
+  ])
+  assert.equal(
+    await pipeline.hasAcceptedSpecification(candidate, {
+      repositoryRoot: '/repo',
+      readFile: async (file: string) =>
+        file.endsWith('privacy-retention-and-sync.md')
+          ? '# Privacy\n\n**Status:** Ready for review.\n'
+          : acceptedSpecification,
+    }),
+    false,
+  )
+})
+
 test('does not promote while any blocker remains open', async () => {
   const blocked = issue({
     inverseRelations: {
@@ -41,6 +83,7 @@ test('does not promote while any blocker remains open', async () => {
           issue: { identifier: 'DEV-998', state: { type: 'started' } },
         },
       ],
+      pageInfo: { hasNextPage: false },
     },
   })
 
@@ -64,10 +107,19 @@ test('treats completed and canceled blockers as closed', () => {
             issue: { identifier: 'DEV-998', state: { type: stateType } },
           },
         ],
+        pageInfo: { hasNextPage: false },
       },
     })
     assert.equal(pipeline.hasOpenBlockers(unblocked), false)
   }
+})
+
+test('fails closed when incoming relations are truncated', () => {
+  const truncated = issue({
+    inverseRelations: { nodes: [], pageInfo: { hasNextPage: true } },
+  })
+
+  assert.equal(pipeline.hasOpenBlockers(truncated), true)
 })
 
 test('fails closed when a specification is missing or not accepted', async () => {

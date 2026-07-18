@@ -5,19 +5,27 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const LINEAR_ENDPOINT = 'https://api.linear.app/graphql'
+const LINEAR_REQUEST_TIMEOUT_MS = 15_000
 const CLOSED_STATE_TYPES = new Set(['completed', 'canceled'])
-const SPECIFICATION_PATH_PATTERN = /\*\*Specification\*\*[^\n]*`(docs\/specs\/[^`\n]+\.md)`/g
-const ACCEPTED_STATUS_PATTERN = /^\*\*Status:\*\*\s*Accepted\.\s*$/m
+const SPECIFICATION_LINE_PATTERN = /^\*\*Specification\*\*[^\n]*$/gm
+const SPECIFICATION_PATH_PATTERN = /`(docs\/specs\/[^`\n]+\.md|docs\/product\/v2\.md)`/g
+const ACCEPTED_STATUS_PATTERNS = new Map([
+  ['docs/specs', /^\*\*Status:\*\*\s*Accepted\.\s*$/m],
+  ['docs/product/v2.md', /^\*\*Status:\*\*\s*Accepted product direction\.\s*$/m],
+])
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 export function specificationPaths(description = '') {
-  return [...String(description ?? '').matchAll(SPECIFICATION_PATH_PATTERN)].map(
-    (match) => match[1],
+  const lines = String(description ?? '').match(SPECIFICATION_LINE_PATTERN) ?? []
+  return lines.flatMap((line) =>
+    [...line.matchAll(SPECIFICATION_PATH_PATTERN)].map((match) => match[1]),
   )
 }
 
 export function hasOpenBlockers(issue) {
+  if (issue.inverseRelations.pageInfo?.hasNextPage !== false) return true
+
   return issue.inverseRelations.nodes.some(
     (relation) =>
       relation.type === 'blocks' &&
@@ -35,7 +43,13 @@ export async function hasAcceptedSpecification(issue, options = {}) {
   for (const relativePath of paths) {
     const absolutePath = path.resolve(root, relativePath)
     const specificationsRoot = path.resolve(root, 'docs/specs') + path.sep
-    if (!absolutePath.startsWith(specificationsRoot)) return false
+    const productGate = path.resolve(root, 'docs/product/v2.md')
+    const acceptedStatusPattern = absolutePath.startsWith(specificationsRoot)
+      ? ACCEPTED_STATUS_PATTERNS.get('docs/specs')
+      : absolutePath === productGate
+        ? ACCEPTED_STATUS_PATTERNS.get('docs/product/v2.md')
+        : null
+    if (!acceptedStatusPattern) return false
 
     let content
     try {
@@ -43,7 +57,7 @@ export async function hasAcceptedSpecification(issue, options = {}) {
     } catch {
       return false
     }
-    if (!ACCEPTED_STATUS_PATTERN.test(content)) return false
+    if (!acceptedStatusPattern.test(content)) return false
   }
 
   return true
@@ -71,6 +85,7 @@ export function createLinearClient(apiKey, fetchImpl = fetch) {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ query, variables }),
+      signal: AbortSignal.timeout(LINEAR_REQUEST_TIMEOUT_MS),
     })
 
     if (!response.ok) {
@@ -109,6 +124,7 @@ export async function fetchProjectIssues(request, projectId) {
                   state { type }
                 }
               }
+              pageInfo { hasNextPage }
             }
           }
           pageInfo {
