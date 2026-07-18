@@ -163,6 +163,52 @@ export function deleteHistoryForSite(input: { domain: string }): PurgeResult {
   const urlPatterns = [`%://${domain}/%`, `%://%.${domain}/%`, `%://${domain}`, `%://%.${domain}`]
 
   const purge = db.transaction(() => {
+    db.exec(`
+      CREATE TEMP TABLE IF NOT EXISTS purge_site_pages (
+        title TEXT NOT NULL,
+        bundle_id TEXT NOT NULL,
+        PRIMARY KEY (title, bundle_id)
+      );
+      DELETE FROM purge_site_pages;
+    `)
+    const collectPages = (
+      table: string,
+      condition: string,
+      conditionParams: unknown[],
+      browserExpression: string,
+    ): void => {
+      for (const column of ['page_title', 'window_title']) {
+        try {
+          db.prepare(`
+            INSERT OR IGNORE INTO purge_site_pages (title, bundle_id)
+            SELECT lower(trim(${column})), lower(${browserExpression})
+            FROM ${table}
+            WHERE (${condition})
+              AND ${column} IS NOT NULL AND trim(${column}) <> ''
+              AND ${browserExpression} IS NOT NULL AND trim(${browserExpression}) <> ''
+          `).run(...conditionParams)
+        } catch {
+          // Optional legacy tables do not all carry both title columns.
+        }
+      }
+    }
+
+    const domainCondition = 'lower(domain) = ? OR lower(domain) LIKE ?'
+    const rawBrowser = `CASE
+      WHEN instr(browser_bundle_id, ':') > 0
+        THEN substr(browser_bundle_id, 1, instr(browser_bundle_id, ':') - 1)
+      ELSE browser_bundle_id
+    END`
+    collectPages('website_visits', domainCondition, params, rawBrowser)
+    collectPages('website_visits', domainCondition, params, 'canonical_browser_id')
+    collectPages('derived_sessions', domainCondition, params, 'app_bundle_id')
+    collectPages(
+      'focus_events',
+      '(lower(url) LIKE ? OR lower(url) LIKE ? OR lower(url) LIKE ? OR lower(url) LIKE ?)',
+      urlPatterns,
+      'app_bundle_id',
+    )
+
     const rows = db.prepare(`SELECT visit_time FROM website_visits ${where}`).all(...params) as { visit_time: number }[]
     for (const date of distinctLocalDates(rows.map((row) => row.visit_time))) affected.add(date)
     deletedRows += db.prepare(`DELETE FROM website_visits ${where}`).run(...params).changes
@@ -204,6 +250,60 @@ export function deleteHistoryForSite(input: { domain: string }): PurgeResult {
         DELETE FROM derived_sessions
         WHERE lower(domain) = ? OR lower(domain) LIKE ?
       `).run(...params).changes
+    } catch {
+      // Derived projection tables are optional on older installs.
+    }
+
+    const appTitleRows = db.prepare(`
+      UPDATE app_sessions
+      SET window_title = NULL
+      WHERE window_title IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM purge_site_pages
+          WHERE title = lower(trim(app_sessions.window_title))
+            AND bundle_id IN (
+              lower(app_sessions.bundle_id),
+              lower(coalesce(app_sessions.canonical_app_id, ''))
+            )
+        )
+      RETURNING start_time
+    `).all() as { start_time: number }[]
+    for (const date of distinctLocalDates(appTitleRows.map((row) => row.start_time))) affected.add(date)
+    deletedRows += appTitleRows.length
+
+    const focusTitleRows = db.prepare(`
+      UPDATE focus_events
+      SET window_title = NULL, page_title = NULL
+      WHERE EXISTS (
+          SELECT 1 FROM purge_site_pages
+          WHERE bundle_id = lower(focus_events.app_bundle_id)
+            AND (
+              title = lower(trim(focus_events.window_title))
+              OR title = lower(trim(focus_events.page_title))
+            )
+        )
+      RETURNING ts_ms
+    `).all() as { ts_ms: number }[]
+    for (const date of distinctLocalDates(focusTitleRows.map((row) => row.ts_ms))) affected.add(date)
+    deletedRows += focusTitleRows.length
+
+    try {
+      const derivedTitleRows = db.prepare(`
+        UPDATE derived_sessions
+        SET window_title = NULL, page_title = NULL
+        WHERE is_browser = 1
+          AND EXISTS (
+            SELECT 1 FROM purge_site_pages
+            WHERE bundle_id = lower(derived_sessions.app_bundle_id)
+              AND (
+                title = lower(trim(derived_sessions.window_title))
+                OR title = lower(trim(derived_sessions.page_title))
+              )
+          )
+        RETURNING date
+      `).all() as { date: string }[]
+      for (const row of derivedTitleRows) affected.add(row.date)
+      deletedRows += derivedTitleRows.length
     } catch {
       // Derived projection tables are optional on older installs.
     }
@@ -283,6 +383,8 @@ export function deleteHistoryForSite(input: { domain: string }): PurgeResult {
         }
       }
     }
+
+    db.exec('DELETE FROM purge_site_pages')
   })
   purge()
   if (deletedRows > 0) clearGeneratedActivitySummaries(db)
