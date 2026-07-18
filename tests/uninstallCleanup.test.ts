@@ -7,6 +7,7 @@ import {
   buildPosixDataCleanupScript,
   buildWindowsDataCleanupScript,
   collectLocalDataTargets,
+  removalCommandForPackageType,
   windowsUninstallerPath,
 } from '../src/main/services/uninstallCleanup'
 import { listUserDataCandidatePaths } from '../src/main/services/userData'
@@ -81,6 +82,19 @@ test('windows cleanup script polls the parent pid with a bounded loop and remove
   assert.match(script, /if !tries! gtr 120 goto clean/)
   assert.ok(script.includes('rd /s /q "C:\\Users\\me\\AppData\\Roaming\\Daylens"'))
   assert.ok(script.includes('del "%~f0"'))
+})
+
+test('linux removal command matches the package manager that owns the install', () => {
+  assert.equal(removalCommandForPackageType('deb', 'daylens'), 'sudo apt remove daylens')
+  assert.equal(removalCommandForPackageType('rpm', 'daylens'), 'sudo dnf remove daylens')
+  assert.equal(removalCommandForPackageType('pacman', 'daylens'), 'sudo pacman -R daylens')
+  // Unowned installs (AppImage, tar.gz, unknown) are finished by deleting the
+  // file, not by a package manager command.
+  assert.equal(removalCommandForPackageType('appimage', null), null)
+  assert.equal(removalCommandForPackageType('unknown', null), null)
+  assert.equal(removalCommandForPackageType(null, null), null)
+  // A missing owner falls back to the published package name.
+  assert.equal(removalCommandForPackageType('deb', null), 'sudo apt remove daylens')
 })
 
 test('windows uninstaller path sits next to the executable with the product name', () => {

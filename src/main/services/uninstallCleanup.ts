@@ -6,9 +6,9 @@ import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { app, shell } from 'electron'
+import { app, dialog, shell } from 'electron'
 import { APP_DISPLAY_NAME, listUserDataCandidatePaths } from './userData'
-import { syncLinuxLaunchOnLogin } from './linuxDesktop'
+import { getLinuxPackageDiagnostics, syncLinuxLaunchOnLogin } from './linuxDesktop'
 import { clearApiKey } from './settings'
 import type { AIProviderMode } from '@shared/types'
 
@@ -143,7 +143,36 @@ export async function performUninstallCleanup(options: { deleteLocalData: boolea
   }
 
   if (platform === 'linux' && app.isPackaged) {
+    // The app cannot remove its own deb/rpm (a root package operation), so hand
+    // the person the exact finishing step — otherwise relaunching the still-
+    // installed app would recreate fresh data and the default login item.
+    const removalCommand = linuxPackageRemovalCommand()
+    if (removalCommand) {
+      await dialog.showMessageBox({
+        type: 'info',
+        title: 'Finish uninstalling Daylens',
+        message: 'One step left to finish uninstalling.',
+        detail: `Daylens has stopped launching at login and is quitting now. To remove the application itself, run:\n\n${removalCommand}`,
+        buttons: ['OK'],
+      })
+    }
     const appImagePath = process.env.APPIMAGE?.trim()
     if (appImagePath && fs.existsSync(appImagePath)) shell.showItemInFolder(appImagePath)
   }
+}
+
+export function removalCommandForPackageType(packageType: string | null, owner: string | null): string | null {
+  const packageName = owner?.trim() || 'daylens'
+  if (packageType === 'deb') return `sudo apt remove ${packageName}`
+  if (packageType === 'rpm') return `sudo dnf remove ${packageName}`
+  if (packageType === 'pacman') return `sudo pacman -R ${packageName}`
+  // AppImage and tar.gz installs are removed by deleting the file, which the
+  // caller handles by revealing it.
+  return null
+}
+
+function linuxPackageRemovalCommand(): string | null {
+  const diagnostics = getLinuxPackageDiagnostics()
+  if (!diagnostics) return null
+  return removalCommandForPackageType(diagnostics.packageType, diagnostics.owner)
 }
