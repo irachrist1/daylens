@@ -359,6 +359,7 @@ const api = {
     getDefaultUserName: (): Promise<string> => Promise.resolve(os.userInfo().username),
     getComputerName: (): Promise<string> => ipcRenderer.invoke(IPC.APP.GET_COMPUTER_NAME),
     relaunch: (): Promise<void> => ipcRenderer.invoke(IPC.APP.RELAUNCH),
+    resetAndUninstall: (): Promise<{ started: boolean }> => ipcRenderer.invoke(IPC.APP.RESET_AND_UNINSTALL),
     completeOnboarding: (): Promise<void> => ipcRenderer.invoke(IPC.APP.COMPLETE_ONBOARDING),
     // Record the explicit capture-consent decision; granting starts capture,
     // declining leaves the app running with capture off.

@@ -2227,6 +2227,7 @@ export const IPC = {
     COMPLETE_ONBOARDING: 'app:complete-onboarding',
     SET_CAPTURE_CONSENT: 'app:set-capture-consent',
     GET_COMPUTER_NAME: 'app:get-computer-name',
+    RESET_AND_UNINSTALL: 'app:reset-and-uninstall',
   },
   INTERCOM: {
     GET_IDENTITY: 'intercom:get-identity',
