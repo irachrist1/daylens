@@ -15,8 +15,9 @@ export const SUPPORTED_FOCUS_EVENT_SCHEMA_VERSIONS: ReadonlySet<number> = new Se
 
 // The version of the capture policy (exclusions, pause, private-window rules)
 // that events are admitted under today. Recorded as provenance on every new
-// row; rows that predate provenance carry policy_version 0.
-export const CAPTURE_POLICY_VERSION = 1
+// row; rows that predate provenance carry policy_version 0. Defined next to
+// the consent state it gates — consent is given per policy version.
+export { CAPTURE_POLICY_VERSION } from '@shared/captureConsent'
 
 export const FOCUS_EVENT_TYPES = [
   'app_activated',

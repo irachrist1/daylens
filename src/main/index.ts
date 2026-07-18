@@ -137,6 +137,7 @@ import { shouldStartTrackingForSettings } from './lib/onboardingState'
 import { assertIsolatedRealDayUserData, isRealDayHarness } from './lib/realDayHarness'
 import { resolvePreloadPath } from './lib/preloadPath'
 import { IPC } from '@shared/types'
+import { grantedCaptureConsent, declinedCaptureConsent } from '@shared/captureConsent'
 import {
   APP_DISPLAY_NAME,
   chooseUserDataPath,
@@ -1010,8 +1011,46 @@ ipcMain.handle(IPC.APP.RESET_AND_UNINSTALL, async (event): Promise<{ started: bo
 })
 
 ipcMain.handle(IPC.APP.COMPLETE_ONBOARDING, async () => {
+  // Completing onboarding through any flow (including legacy paths that never
+  // hit the explicit consent call) is a consent act — record it rather than
+  // leaving a completed install gated off. Explicit decisions are never
+  // overwritten here.
+  if (getSettings().captureConsent.status === 'unset') {
+    await setSettings({ captureConsent: grantedCaptureConsent(Date.now()) })
+  }
   ensureTray()
   startBackgroundServices()
+})
+
+// The explicit capture-consent decision. Granting starts capture immediately —
+// including mid-onboarding, where the proof step needs real capture before
+// completion. Declining stops every capture adapter and leaves the rest of the
+// app running; the per-sample consent gate in @shared/trackingControls blocks
+// any straggler in between.
+ipcMain.handle(IPC.APP.SET_CAPTURE_CONSENT, async (_e, granted: unknown) => {
+  const decision = granted === true
+  await setSettings({
+    captureConsent: decision ? grantedCaptureConsent(Date.now()) : declinedCaptureConsent(Date.now()),
+  })
+  if (decision) {
+    startBackgroundServices()
+    // Re-grant after services already started once (decline→grant, policy
+    // re-consent): startBackgroundServices is a one-shot, so restart the
+    // capture adapters directly — each start is idempotent.
+    if (backgroundServicesStarted && !SMOKE_TEST && !REAL_DAY_HARNESS && shouldStartTrackingForSettings(getSettings())) {
+      startTracking()
+      if (process.platform === 'darwin') startFocusCapture()
+      if (process.platform === 'win32') startWindowsFocusCapture()
+      startBrowserTracking()
+    }
+  } else {
+    stopTracking()
+    stopFocusCapture()
+    stopWindowsFocusCapture()
+    stopBrowserTracking()
+    stopProcessMonitor()
+  }
+  return getSettings().captureConsent
 })
 
 // The friendly computer name ("Christian's MacBook Pro") used to seed the
@@ -1097,6 +1136,12 @@ app.whenReady()
     // backup if NSIS wiped userData during the update, before electron-store reads it.
     if (!REAL_DAY_HARNESS) await recoverFromUpdateIfNeeded()
     await initSettings()
+    // The smoke and real-day harnesses exist to exercise capture itself, on
+    // isolated profiles, run deliberately by an operator — that run IS the
+    // consent. Seed it so the consent gate doesn't blind the harness.
+    if (SMOKE_TEST || REAL_DAY_HARNESS) {
+      await setSettings({ captureConsent: grantedCaptureConsent(Date.now()) })
+    }
     if (!REAL_DAY_HARNESS && !SMOKE_TEST) {
       initNotificationPermissions()
       void detectCLITools().catch(() => undefined)
