@@ -990,18 +990,21 @@ export function requestTrackingPermission(): boolean | null {
   }
 }
 
-function resolveWindowIdentity(win: ActiveWinResult): ActiveWinResult & { bundleId: string; appName: string } {
-  if (process.platform === 'linux') {
+function resolveWindowIdentity(
+  win: ActiveWinResult,
+  platform: NodeJS.Platform = process.platform,
+): ActiveWinResult & { bundleId: string; appName: string } {
+  if (platform === 'linux') {
     return finalizeLinuxWindowIdentity(win)
   }
 
-  const exeName = win.path ? windowsAwareBasename(win.path) : ''
+  const exeName = win.path ? windowsAwareBasename(win.path, platform) : ''
   const uwpPackage = win.windows?.isUWPApp ? win.windows.uwpPackage : ''
   const reportedAppName = win.application || ''
-  const normalizedWindowsAppName = process.platform === 'win32'
+  const normalizedWindowsAppName = platform === 'win32'
     ? windowsBrowserExecutableAppName(reportedAppName, exeName)
     : reportedAppName
-  const isWindowsUwp = process.platform === 'win32' && Boolean(win.windows?.isUWPApp && uwpPackage)
+  const isWindowsUwp = platform === 'win32' && Boolean(win.windows?.isUWPApp && uwpPackage)
   const appName = isWindowsUwp
     ? windowsUwpDisplayName(uwpPackage, normalizedWindowsAppName || exeName)
     : (normalizedWindowsAppName || exeName || uwpPackage || 'Unknown app')
@@ -1009,8 +1012,8 @@ function resolveWindowIdentity(win: ActiveWinResult): ActiveWinResult & { bundle
   return { ...win, bundleId, appName }
 }
 
-function windowsAwareBasename(filePath: string): string {
-  return process.platform === 'win32' ? path.win32.basename(filePath) : path.basename(filePath)
+function windowsAwareBasename(filePath: string, platform: NodeJS.Platform): string {
+  return platform === 'win32' ? path.win32.basename(filePath) : path.basename(filePath)
 }
 
 function windowsBrowserExecutableAppName(reportedAppName: string, exeName: string): string {
@@ -1565,6 +1568,7 @@ interface TrackingFsmTestHarness {
   now: () => number
   idleSeconds: () => number
   activeWindow: () => ActiveWinResult | null
+  platform?: NodeJS.Platform
   recordFlush?: (info: {
     startTime: number
     endTime: number
@@ -1832,7 +1836,7 @@ async function poll(): Promise<void> {
       uwpPackage: win.windows?.uwpPackage ?? '',
     }
 
-    const resolvedWin = resolveWindowIdentity(win)
+    const resolvedWin = resolveWindowIdentity(win, fsmTestHarness?.platform)
     const browserApplication = resolveBrowserApplication({
       bundleId: resolvedWin.bundleId,
       appName: resolvedWin.appName,

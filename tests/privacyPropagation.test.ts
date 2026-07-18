@@ -66,6 +66,7 @@ test('private and excluded observations cannot reach storage or downstream produ
     ),
   )
   __setTrackingFsmTestHarness({
+    platform: 'darwin',
     now: () => clock.now,
     idleSeconds: () => 0,
     activeWindow: () => {
