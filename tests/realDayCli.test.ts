@@ -22,15 +22,20 @@ function tempDir(): string {
 
 test('real-day harness refuses CI and repository-local private data', () => {
   const previous = process.env.CI
-  process.env.CI = '1'
-  assert.throws(() => assertLocalOnly('/tmp/private', '/repo'), /refuse to run in CI/)
-  if (previous == null) delete process.env.CI
-  else process.env.CI = previous
-  assert.throws(
-    () => assertLocalOnly('/repo/private/real-day', '/repo'),
-    /outside the Git workspace/,
-  )
-  assert.doesNotThrow(() => assertLocalOnly('/tmp/daylens-private', '/repo'))
+  try {
+    process.env.CI = '1'
+    assert.throws(() => assertLocalOnly('/tmp/private', '/repo'), /refuse to run in CI/)
+
+    delete process.env.CI
+    assert.throws(
+      () => assertLocalOnly('/repo/private/real-day', '/repo'),
+      /outside the Git workspace/,
+    )
+    assert.doesNotThrow(() => assertLocalOnly('/tmp/daylens-private', '/repo'))
+  } finally {
+    if (previous == null) delete process.env.CI
+    else process.env.CI = previous
+  }
 })
 
 test('private manifest uses the shared day-fixture format', () => {

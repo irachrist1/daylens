@@ -33,6 +33,13 @@ test('linux smoke workflows launch Electron inside a DBus session', () => {
     )
     assert.match(source, /DAYLENS_SMOKE_EXPECT_FOREGROUND_TITLE="Runtime Capture Foreground"/)
     assert.match(source, /DAYLENS_SMOKE_EXPECT_FULLSCREEN_TITLE="Runtime Capture Fullscreen"/)
+    assert.match(source, /xdotool wmctrl/)
     assert.match(source, /--window-state/)
   }
+
+  const harness = fs.readFileSync(
+    path.resolve(process.cwd(), 'scripts/run-linux-capture-smoke.sh'),
+    'utf8',
+  )
+  assert.match(harness, /wmctrl -ir "\$fullscreen_window" -b add,fullscreen/)
 })

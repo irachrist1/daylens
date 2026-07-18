@@ -69,7 +69,7 @@ if [ -z "${fullscreen_window:-}" ]; then
   exit 1
 fi
 xdotool windowactivate --sync "$fullscreen_window"
-xdotool windowstate --add FULLSCREEN "$fullscreen_window"
+wmctrl -ir "$fullscreen_window" -b add,fullscreen
 sleep 2
 fullscreen_state="$(xprop -id "$fullscreen_window" _NET_WM_STATE 2>/dev/null || true)"
 if [[ "$fullscreen_state" != *"_NET_WM_STATE_FULLSCREEN"* ]]; then

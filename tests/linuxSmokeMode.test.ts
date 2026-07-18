@@ -79,3 +79,12 @@ test('packaged smoke runs tracking on a fresh isolated profile and waits for per
   assert.match(source, /const captureProbe = await waitForSmokeCapture\(\)/)
   assert.match(source, /FROM app_sessions[\s\S]*?WHERE window_title IN \(\?, \?\)/)
 })
+
+test('packaged smoke capture is not blocked by hosted-runner idle state', () => {
+  const source = fs.readFileSync(path.resolve(process.cwd(), 'src/main/services/tracking.ts'), 'utf8')
+
+  assert.match(
+    source,
+    /function getIdleSeconds\(\): number \{[\s\S]*?if \(process\.env\.DAYLENS_SMOKE_TEST === '1'\) return 0[\s\S]*?powerMonitor\.getSystemIdleTime\(\)/,
+  )
+})

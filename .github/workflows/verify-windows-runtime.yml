@@ -85,3 +85,10 @@ jobs:
             builder-debug.yml
             electron-builder-debug.yml
             npm-debug.log*
+
+      - name: Print Windows smoke report
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path "$env:RUNNER_TEMP/daylens-windows-smoke.json") { Get-Content "$env:RUNNER_TEMP/daylens-windows-smoke.json" }
+          if (Test-Path "$env:RUNNER_TEMP/daylens-windows-window-state.json") { Get-Content "$env:RUNNER_TEMP/daylens-windows-window-state.json" }
