@@ -11,7 +11,7 @@ const SPECIFICATION_LINE_PATTERN = /^\*\*Specification\*\*[^\n]*$/gm
 const SPECIFICATION_PATH_PATTERN = /`(docs\/specs\/[^`\n]+\.md|docs\/product\/v2\.md)`/g
 const ACCEPTED_STATUS_PATTERNS = new Map([
   ['docs/specs', /^\*\*Status:\*\*\s*Accepted\.\s*$/m],
-  ['docs/product/v2.md', /^\*\*Status:\*\*\s*Accepted product direction\.\s*$/m],
+  ['docs/product/v2.md', /^\*\*Status:\*\*\s*Accepted product direction\./m],
 ])
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')

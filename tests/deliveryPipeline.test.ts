@@ -41,11 +41,7 @@ test('accepts the recorded V2 product gate used by DEV-207', async () => {
   assert.deepEqual(pipeline.specificationPaths(candidate.description), ['docs/product/v2.md'])
   assert.equal(
     await pipeline.hasAcceptedSpecification(candidate, {
-      repositoryRoot: '/repo',
-      readFile: async (file: string) => {
-        assert.equal(file, '/repo/docs/product/v2.md')
-        return '# V2 direction\n\n**Status:** Accepted product direction.\n'
-      },
+      repositoryRoot: process.cwd(),
     }),
     true,
   )
