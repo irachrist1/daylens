@@ -22,6 +22,7 @@ import {
   __setTrackingFsmTestHarness,
   __pollForTest,
   flushCurrentSession,
+  recordTrackingPauseTransition,
 } from '../src/main/services/tracking.ts'
 import { rebuildPollForegroundSessions } from '../src/main/services/captureEvidence.ts'
 
@@ -50,18 +51,24 @@ interface Rig {
   db: Database.Database
   poll: (nowMs: number, opts?: { input?: boolean }) => Promise<void>
   setWindow: (win: typeof WIN_A) => void
+  failWindow: (error: Error | null) => void
   teardown: () => void
 }
 
-function makeRig(): Rig {
+function makeRig(platform: NodeJS.Platform = 'darwin'): Rig {
   const db = createProductionTestDatabase()
   setTestDb(db)
   const clock = { now: BASE, lastInput: BASE }
   let activeWin = WIN_A
+  let activeWindowError: Error | null = null
   __setTrackingFsmTestHarness({
     now: () => clock.now,
     idleSeconds: () => Math.max(0, (clock.now - clock.lastInput) / 1_000),
-    activeWindow: () => activeWin,
+    activeWindow: () => {
+      if (activeWindowError) throw activeWindowError
+      return activeWin
+    },
+    platform,
   })
   return {
     db,
@@ -71,6 +78,7 @@ function makeRig(): Rig {
       return __pollForTest()
     },
     setWindow: (win) => { activeWin = win },
+    failWindow: (error) => { activeWindowError = error },
     teardown: () => {
       __setTrackingFsmTestHarness(null)
       clearTestDb()
@@ -196,6 +204,89 @@ test('pause prevents canonical persistence exactly like legacy', async () => {
     assert.equal(pollEvents(rig.db).length, 0, 'no canonical foreground rows while paused')
     const legacy = rig.db.prepare('SELECT COUNT(*) AS c FROM app_sessions').get() as { c: number }
     assert.equal(legacy.c, 0, 'no legacy rows while paused')
+  } finally {
+    rig.teardown()
+  }
+})
+
+test('pausing closes the canonical interval at the toggle boundary', async () => {
+  __resetSettings()
+  const rig = makeRig()
+  try {
+    await rig.poll(BASE, { input: true })
+    recordTrackingPauseTransition(true, 'settings', BASE + 30_000)
+
+    const rebuilt = rebuildPollForegroundSessions(rig.db, BASE - 1, BASE + 60_000)
+    assert.equal(rebuilt.length, 1)
+    assert.equal(rebuilt[0].endMs, BASE + 30_000)
+    assert.deepEqual(
+      supervisorEvents(rig.db).map((event) => event.event_type),
+      ['capture_paused'],
+    )
+  } finally {
+    rig.teardown()
+  }
+})
+
+test('committing provisional idle emits idle_started at the true idle boundary', async () => {
+  __resetSettings()
+  const rig = makeRig()
+  try {
+    await rig.poll(BASE, { input: true })
+    await rig.poll(BASE + 120_000)
+    await rig.poll(BASE + 300_000)
+
+    const idleStarted = supervisorEvents(rig.db).find((event) => event.event_type === 'idle_started')
+    assert.ok(idleStarted)
+    assert.equal(idleStarted.ts_ms, BASE)
+  } finally {
+    rig.teardown()
+  }
+})
+
+test('a capture failure closes the foreground interval before recording the gap', async () => {
+  __resetSettings()
+  const rig = makeRig()
+  try {
+    await rig.poll(BASE, { input: true })
+    rig.failWindow(new Error('permission lost'))
+    await rig.poll(BASE + 30_000, { input: true })
+
+    const rebuilt = rebuildPollForegroundSessions(rig.db, BASE - 1, BASE + 60_000)
+    assert.equal(rebuilt.length, 1)
+    assert.equal(rebuilt[0].endMs, BASE + 30_000)
+    assert.ok(supervisorEvents(rig.db).some((event) => event.event_type === 'capture_failed'))
+  } finally {
+    rig.teardown()
+  }
+})
+
+test('a midnight legacy split emits one canonical deactivation', async () => {
+  __resetSettings()
+  const rig = makeRig()
+  try {
+    const beforeMidnight = new Date(2026, 6, 3, 23, 59, 50, 0).getTime()
+    const afterMidnight = beforeMidnight + 20_000
+    await rig.poll(beforeMidnight, { input: true })
+    await rig.poll(afterMidnight, { input: true })
+    flushCurrentSession()
+
+    const deactivations = pollEvents(rig.db).filter((event) => event.event_type === 'app_deactivated')
+    assert.equal(deactivations.length, 1)
+    assert.equal(deactivations[0].ts_ms, afterMidnight)
+  } finally {
+    rig.teardown()
+  }
+})
+
+test('Linux polling remains outside the macOS and Windows canonical adapter', async () => {
+  __resetSettings()
+  const rig = makeRig('linux')
+  try {
+    await rig.poll(BASE, { input: true })
+    await rig.poll(BASE + 30_000, { input: true })
+    flushCurrentSession()
+    assert.equal(pollEvents(rig.db).length, 0)
   } finally {
     rig.teardown()
   }

@@ -35,7 +35,7 @@ import { resolveCanonicalApp } from '../lib/appIdentity'
 import { stripBrowserUrlFromTitle } from '@shared/aiSanitize'
 import { localDateString, localDayBounds } from '../lib/localDate'
 import { looksLikePassivePresenceSession } from '../lib/passivePresence'
-import { capture, captureException, captureRateLimited } from './analytics'
+import { capture, captureException, captureRateLimited, captureTrackingPauseTransition } from './analytics'
 import { resolveLinuxDesktopIdentity } from './linuxDesktop'
 import { flushActiveBrowserContext, recordActiveBrowserContextSample } from './browserContext'
 import { resolveBrowserApplication } from './browserRegistry'
@@ -191,9 +191,11 @@ function setPollHealth(error: string | null): void {
   const previous = trackingStatus.pollError
   trackingStatus.pollError = error
   if (error !== null && previous === null) {
-    recordSupervisorEvent('capture_failed', Date.now())
+    const eventTs = nowMs()
+    if (currentSession) flushCurrent(eventTs, 'capture_failed')
+    recordSupervisorEvent('capture_failed', eventTs)
   } else if (error === null && previous !== null) {
-    recordSupervisorEvent('capture_recovered', Date.now())
+    recordSupervisorEvent('capture_recovered', nowMs())
   }
 }
 
@@ -1437,7 +1439,16 @@ function recoverPersistedLiveSnapshot(): void {
         scheduleAttributionRefreshForSession(slice.startMs, slice.endMs)
       }
     }
-    if (recovered) console.log('[tracking] recovered live session snapshot after restart')
+    if (recovered) {
+      recordPollForegroundEvent('app_deactivated', {
+        tsMs: endTime,
+        bundleId: snapshot.bundleId,
+        appName: snapshot.appName,
+        pid: null,
+        windowTitle: snapshot.windowTitle,
+      }, trackingPlatform())
+      console.log('[tracking] recovered live session snapshot after restart')
+    }
 
     clearPersistedLiveSnapshot()
   } catch (err) {
@@ -1531,7 +1542,7 @@ function recordActivityEvent(
   }
   const machineState = CANONICAL_MACHINE_STATE[eventType]
   if (machineState) {
-    recordPollMachineStateEvent(machineState, eventTs)
+    recordPollMachineStateEvent(machineState, eventTs, trackingPlatform())
   } else if (eventType === 'away_start') {
     recordSupervisorEvent('idle_started', eventTs)
   } else if (eventType === 'away_end') {
@@ -1561,6 +1572,25 @@ export function startTracking(): void {
     surface: 'tracking',
   })
   console.log('[tracking] started')
+}
+
+export function recordTrackingPauseTransition(
+  paused: boolean,
+  source: 'settings' | 'tray',
+  eventTs: number = Date.now(),
+): void {
+  if (paused && currentSession) flushCurrent(eventTs, 'tracking_paused')
+  try {
+    recordActivityStateEvent(getDb(), {
+      eventTs,
+      eventType: paused ? 'tracking_paused' : 'tracking_resumed',
+      source,
+    })
+  } catch {
+    // The persisted setting still gates capture if evidence storage is unavailable.
+  }
+  recordSupervisorEvent(paused ? 'capture_paused' : 'capture_resumed', eventTs)
+  captureTrackingPauseTransition(paused, 'user')
 }
 
 export function stopTracking(): void {
@@ -1656,6 +1686,10 @@ function nowMs(): number {
   return fsmTestHarness ? fsmTestHarness.now() : Date.now()
 }
 
+function trackingPlatform(): NodeJS.Platform {
+  return fsmTestHarness?.platform ?? process.platform
+}
+
 function getIdleSeconds(): number {
   if (!fsmTestHarness && process.env.DAYLENS_SMOKE_TEST === '1') return 0
   return fsmTestHarness ? fsmTestHarness.idleSeconds() : powerMonitor.getSystemIdleTime()
@@ -1703,7 +1737,9 @@ async function poll(): Promise<void> {
         if (idleState !== 'away' && currentSession) {
           const idleStartMs = provisionalIdleStart ?? (nowMs() - Math.round(idleSec) * 1_000)
           if (idleState !== 'provisional_idle') {
-            recordActivityEvent('away_start', { idleSeconds: Math.round(idleSec) })
+            recordActivityEvent('away_start', { idleSeconds: Math.round(idleSec) }, idleStartMs)
+          } else {
+            recordSupervisorEvent('idle_started', idleStartMs)
           }
           flushCurrent(idleStartMs, 'away')
           flushActiveBrowserContext(getDb(), idleStartMs)
@@ -2049,7 +2085,7 @@ async function poll(): Promise<void> {
           appName: identity.displayName,
           pid: resolvedWin.pid ?? null,
           windowTitle: resolvedWindowTitle,
-        })
+        }, trackingPlatform())
       }
       upsertAppIdentityObservation(getDb(), {
         bundleId,
@@ -2081,7 +2117,7 @@ async function poll(): Promise<void> {
           appName: currentSession.appName,
           pid: resolvedWin.pid ?? null,
           windowTitle: resolvedWindowTitle,
-        })
+        }, trackingPlatform())
       }
       currentSession.windowTitle = resolvedWindowTitle
       currentSession.passivePresence = browserSample.passivePresence
@@ -2144,11 +2180,24 @@ function flushCurrent(overrideEndTime?: number, endedReason: string | null = nul
     ? Math.max(overrideEndTime, currentSession.startTime)
     : nowMs()
 
-  // Canonical mirror of the deactivation. Brief switches under the legacy
-  // MIN_SESSION_SEC floor still deactivate here — they remain evidence, and
-  // Timeline decides later whether they belong inside a larger block. The
-  // midnight split below is a legacy-storage concern, not an observation, so
-  // only the outermost flush deactivates.
+  // Split sessions that cross midnight into two records so that each calendar
+  // day's totals only include time that actually fell within that day.
+  const startDate = localDateString(new Date(currentSession.startTime))
+  const endDate   = localDateString(new Date(endTime))
+  if (startDate !== endDate && endedReason !== 'midnight_split') {
+    const [, midnightMs] = localDayBounds(startDate)
+    // Snapshot fields before the recursive call — flushCurrent sets
+    // currentSession = null so we can't read it afterwards.
+    const snapshot = { ...currentSession }
+    flushCurrent(midnightMs, 'midnight_split')
+    // Restore for the second slice (midnight → endTime).
+    currentSession = { ...snapshot, startTime: midnightMs }
+    flushCurrent(endTime, endedReason)
+    return
+  }
+
+  // A midnight split is a legacy-storage detail, so only the final slice emits
+  // the observed deactivation.
   if (endedReason !== 'midnight_split' && !trackedForegroundSessionExclusionReason({
     bundleId: currentSession.bundleId,
     appName: currentSession.appName,
@@ -2161,23 +2210,7 @@ function flushCurrent(overrideEndTime?: number, endedReason: string | null = nul
       appName: currentSession.appName,
       pid: null,
       windowTitle: currentSession.windowTitle,
-    })
-  }
-
-  // Split sessions that cross midnight into two records so that each calendar
-  // day's totals only include time that actually fell within that day.
-  const startDate = localDateString(new Date(currentSession.startTime))
-  const endDate   = localDateString(new Date(endTime))
-  if (startDate !== endDate) {
-    const [, midnightMs] = localDayBounds(startDate)
-    // Snapshot fields before the recursive call — flushCurrent sets
-    // currentSession = null so we can't read it afterwards.
-    const snapshot = { ...currentSession }
-    flushCurrent(midnightMs, 'midnight_split')
-    // Restore for the second slice (midnight → endTime).
-    currentSession = { ...snapshot, startTime: midnightMs }
-    flushCurrent(endTime, endedReason)
-    return
+    }, trackingPlatform())
   }
 
   if (currentSession.windowTitles && currentSession.windowTitles.length > 0) {

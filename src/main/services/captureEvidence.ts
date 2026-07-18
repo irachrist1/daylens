@@ -42,7 +42,7 @@ export interface PollForegroundObservation {
 
 let emissionFailureLogged = false
 
-function baseEvent(eventType: FocusEventType, tsMs: number): FocusEventInsert {
+function baseEvent(eventType: FocusEventType, tsMs: number, platform: NodeJS.Platform = process.platform): FocusEventInsert {
   return {
     ts_ms: tsMs,
     mono_ns: Number(process.hrtime.bigint()),
@@ -55,7 +55,7 @@ function baseEvent(eventType: FocusEventType, tsMs: number): FocusEventInsert {
     page_title: null,
     source: POLL_FOCUS_EVENT_SOURCE,
     confidence: 'observed',
-    platform: process.platform,
+    platform,
     schema_ver: FOCUS_EVENT_SCHEMA_VERSION,
   }
 }
@@ -77,9 +77,11 @@ function persist(events: FocusEventInsert[]): void {
 export function recordPollForegroundEvent(
   eventType: PollForegroundEventType,
   observation: PollForegroundObservation,
+  platform: NodeJS.Platform = process.platform,
 ): void {
+  if (platform === 'linux') return
   persist([{
-    ...baseEvent(eventType, observation.tsMs),
+    ...baseEvent(eventType, observation.tsMs, platform),
     app_bundle_id: observation.bundleId,
     app_name: observation.appName,
     pid: observation.pid,
@@ -89,8 +91,13 @@ export function recordPollForegroundEvent(
 
 // Machine-state transitions observed by the poll adapter (powerMonitor). They
 // carry no application content — the transition itself is the fact.
-export function recordPollMachineStateEvent(eventType: PollMachineStateEventType, tsMs: number): void {
-  persist([baseEvent(eventType, tsMs)])
+export function recordPollMachineStateEvent(
+  eventType: PollMachineStateEventType,
+  tsMs: number,
+  platform: NodeJS.Platform = process.platform,
+): void {
+  if (platform === 'linux') return
+  persist([baseEvent(eventType, tsMs, platform)])
 }
 
 // Idle and capture-health transitions. The capture_supervisor source is
