@@ -88,6 +88,25 @@ test('quarantine moves the database and its sidecars aside', () => {
   assert.ok(fs.existsSync(`${quarantinePath}-shm`))
 })
 
+test('quarantine never overwrites an earlier database with the same timestamp', () => {
+  const dir = makeTempDir()
+  const dbPath = path.join(dir, 'daylens.sqlite')
+  const now = new Date('2026-07-18T00:00:00.000Z')
+  corruptFile(dbPath)
+
+  const firstPath = quarantineCorruptDatabase(dbPath, now)
+  assert.ok(firstPath)
+  const firstBytes = fs.readFileSync(firstPath!)
+
+  fs.writeFileSync(dbPath, 'different corrupt backup bytes')
+  const secondPath = quarantineCorruptDatabase(dbPath, now)
+
+  assert.ok(secondPath)
+  assert.notEqual(secondPath, firstPath)
+  assert.ok(firstBytes.equals(fs.readFileSync(firstPath!)))
+  assert.equal(fs.readFileSync(secondPath!, 'utf8'), 'different corrupt backup bytes')
+})
+
 test('choosing restore recovers the backup copy and keeps the damaged file', () => {
   const dir = makeTempDir()
   const dbPath = path.join(dir, 'daylens.sqlite')

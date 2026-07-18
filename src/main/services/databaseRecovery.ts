@@ -51,9 +51,15 @@ export function checkDatabaseIntegrity(dbPath: string): DatabaseIntegrityResult 
 // Move the corrupt database (and its WAL/SHM sidecars) aside instead of
 // deleting it — the person may want to attempt manual recovery later, and a
 // rename cannot half-fail the way an in-place overwrite can.
-export function quarantineCorruptDatabase(dbPath: string): string | null {
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-  const quarantinePath = `${dbPath}.corrupt-${stamp}`
+export function quarantineCorruptDatabase(dbPath: string, now = new Date()): string | null {
+  const stamp = now.toISOString().replace(/[:.]/g, '-')
+  const basePath = `${dbPath}.corrupt-${stamp}`
+  let quarantinePath = basePath
+  let attempt = 1
+  while (DB_SIDECAR_SUFFIXES.some((suffix) => fs.existsSync(`${quarantinePath}${suffix}`))) {
+    quarantinePath = `${basePath}-${attempt}`
+    attempt += 1
+  }
   let quarantined = false
   for (const suffix of DB_SIDECAR_SUFFIXES) {
     const source = `${dbPath}${suffix}`
