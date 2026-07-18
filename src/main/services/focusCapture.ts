@@ -160,6 +160,9 @@ export function shouldCaptureFocusEvent(
   ev: Pick<HelperEvent, 'app_bundle_id' | 'app_name' | 'window_title' | 'url'>,
   controls: TrackingControlsState,
 ): boolean {
+  // Consent gates every event unconditionally — including machine-state
+  // events with no app or url, which the per-candidate gates below never see.
+  if (!controls.consented) return false
   // Private/incognito windows are never tracked, regardless of any setting.
   // The gates below also check this, but the title check runs here first so
   // a private tab URL never even reaches the event queue.

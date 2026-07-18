@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import os from 'node:os'
 import type { PaywallTrigger } from '@shared/analytics'
+import type { CaptureConsentState } from '@shared/captureConsent'
 import type { ProjectionInvalidationEvent } from '@shared/core'
 import type {
   AppCategory,
@@ -359,6 +360,10 @@ const api = {
     getComputerName: (): Promise<string> => ipcRenderer.invoke(IPC.APP.GET_COMPUTER_NAME),
     relaunch: (): Promise<void> => ipcRenderer.invoke(IPC.APP.RELAUNCH),
     completeOnboarding: (): Promise<void> => ipcRenderer.invoke(IPC.APP.COMPLETE_ONBOARDING),
+    // Record the explicit capture-consent decision; granting starts capture,
+    // declining leaves the app running with capture off.
+    setCaptureConsent: (granted: boolean): Promise<CaptureConsentState> =>
+      ipcRenderer.invoke(IPC.APP.SET_CAPTURE_CONSENT, granted),
   },
   sync: {
     getStatus: (): Promise<SyncStatus> => ipcRenderer.invoke(IPC.SYNC.GET_STATUS),

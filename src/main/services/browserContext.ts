@@ -10,7 +10,7 @@ import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { localDateString } from '../lib/localDate'
 import { getBrowserEntries, type BrowserEntry } from './browser'
 import { getSettings } from './settings'
-import { decideSiteCapture, detectIncognitoFromTitle, trackingControlsStateFromSettings } from '@shared/trackingControls'
+import { decideSiteCapture, detectIncognitoFromTitle, trackingControlsStateFromSettings, type CaptureBlockReason } from '@shared/trackingControls'
 import { categoryForDomain } from '@shared/domainCategories'
 import {
   resolveBrowserApplication,
@@ -53,7 +53,7 @@ export type ActiveBrowserTabReader = (snapshot: ActiveBrowserWindowSnapshot) => 
 export interface ActiveBrowserContextSample {
   isPrivate: boolean
   passivePresence: boolean
-  captureBlockReason?: 'paused' | 'excluded_app' | 'excluded_site' | 'incognito'
+  captureBlockReason?: CaptureBlockReason
 }
 
 interface InFlightBrowserContext {

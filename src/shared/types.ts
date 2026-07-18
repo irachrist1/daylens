@@ -1647,6 +1647,9 @@ export interface AppSettings {
   theme: AppTheme
   onboardingComplete: boolean
   onboardingState: OnboardingState
+  /** Explicit capture consent — the state that gates every capture adapter.
+   *  See src/shared/captureConsent.ts. */
+  captureConsent: import('./captureConsent').CaptureConsentState
   userName: string
   userGoals: string[]
   userIntent: string            // why the user is here, captured in onboarding; fed to AI suggestions
@@ -2222,6 +2225,7 @@ export const IPC = {
   APP: {
     RELAUNCH: 'app:relaunch',
     COMPLETE_ONBOARDING: 'app:complete-onboarding',
+    SET_CAPTURE_CONSENT: 'app:set-capture-consent',
     GET_COMPUTER_NAME: 'app:get-computer-name',
   },
   INTERCOM: {
