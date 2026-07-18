@@ -198,16 +198,55 @@ test('machine-state and capture-state events are first-class canonical evidence'
   }
 })
 
-test('a capture-state event carrying content is rejected before persistence', () => {
+test('a supervisor event carrying content is rejected before persistence', () => {
   const db = createProductionTestDatabase()
   resetCaptureEventRejectionsForTest()
   try {
     const result = insertFocusEvents(db, [
       event(100, 'Leaky', { event_type: 'capture_failed', source: 'capture_supervisor' }),
+      event(200, 'Idle Leak', { event_type: 'idle_started', source: 'capture_supervisor' }),
     ])
     assert.equal(result.inserted, 0)
-    assert.deepEqual(result.rejectedReasons, ['capture_state_content'])
+    assert.deepEqual(result.rejectedReasons, ['supervisor_content', 'supervisor_content'])
     assert.equal(countFocusEventsInRange(db, 0, 1_000), 0)
+  } finally {
+    resetCaptureEventRejectionsForTest()
+    db.close()
+  }
+})
+
+test('a supervisor idle row carrying content violates the storage constraints too', () => {
+  const db = createProductionTestDatabase()
+  try {
+    assert.throws(() => {
+      db.prepare(`
+        INSERT INTO focus_events
+          (ts_ms, mono_ns, event_type, app_bundle_id, app_name, pid, window_title,
+           url, page_title, source, confidence, platform)
+        VALUES (100, 100000000, 'idle_started', NULL, 'Leaky App', NULL, NULL,
+                NULL, NULL, 'capture_supervisor', 'observed', 'darwin')
+      `).run()
+    }, /CHECK/)
+  } finally {
+    db.close()
+  }
+})
+
+test('a value outside the storage allowlists is a counted rejection, not a duplicate', () => {
+  const db = createProductionTestDatabase()
+  resetCaptureEventRejectionsForTest()
+  try {
+    const result = insertFocusEvents(db, [
+      event(100, 'Typo Kind', { event_type: 'app_actived' as never }),
+      event(200, 'Typo Confidence', { confidence: 'certain' as never }),
+      event(300, 'Typo Source', { source: 'unknown_helper' as never }),
+    ])
+    assert.equal(result.inserted, 0)
+    assert.equal(result.duplicates, 0)
+    assert.equal(result.rejected, 3)
+    assert.deepEqual(result.rejectedReasons, ['unknown_event_type', 'unknown_confidence', 'unknown_source'])
+    assert.equal(countFocusEventsInRange(db, 0, 1_000), 0)
+    assert.equal(getCaptureEventRejections().focus_repository.total, 3)
   } finally {
     resetCaptureEventRejectionsForTest()
     db.close()

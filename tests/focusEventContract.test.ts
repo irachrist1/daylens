@@ -3,11 +3,12 @@ import assert from 'node:assert/strict'
 import {
   FOCUS_EVENT_SCHEMA_VERSION,
   SUPPORTED_FOCUS_EVENT_SCHEMA_VERSIONS,
-  captureStateEventCarriesContent,
   evidenceKindForFocusEventType,
   isFocusEventConfidence,
+  isFocusEventSource,
   isFocusEventType,
   isMacFocusEventSource,
+  supervisorEventCarriesContent,
   isSupportedFocusEventSchemaVersion,
   isWindowsFocusEventSource,
   provenanceForFocusEventSource,
@@ -33,6 +34,10 @@ test('focus event contract identifies platform sources and schema values', () =>
   assert.equal(isMacFocusEventSource('uia_foreground'), false)
   assert.equal(isWindowsFocusEventSource('uia_tab'), true)
   assert.equal(isWindowsFocusEventSource('apple_events_tab'), false)
+  assert.equal(isFocusEventSource('nsworkspace_event'), true)
+  assert.equal(isFocusEventSource('uia_tab'), true)
+  assert.equal(isFocusEventSource('capture_supervisor'), true)
+  assert.equal(isFocusEventSource('unknown_helper'), false)
 })
 
 test('focus event contract keeps foreground and tab events on compatible sources', () => {
@@ -55,7 +60,7 @@ test('machine-state and capture-state kinds belong to the capture supervisor onl
   assert.equal(sourceAcceptsFocusEventType('uia_foreground', 'idle_ended'), false)
 })
 
-test('capture-state events must not carry application names, titles, or URLs', () => {
+test('supervisor events must not carry application names, titles, or URLs', () => {
   const clean = {
     event_type: 'capture_paused' as const,
     app_bundle_id: null,
@@ -64,11 +69,23 @@ test('capture-state events must not carry application names, titles, or URLs', (
     url: null,
     page_title: null,
   }
-  assert.equal(captureStateEventCarriesContent(clean), false)
-  assert.equal(captureStateEventCarriesContent({ ...clean, app_name: 'Figma' }), true)
-  assert.equal(captureStateEventCarriesContent({ ...clean, url: 'https://example.com' }), true)
+  assert.equal(supervisorEventCarriesContent(clean), false)
+  assert.equal(supervisorEventCarriesContent({ ...clean, app_name: 'Figma' }), true)
+  assert.equal(supervisorEventCarriesContent({ ...clean, url: 'https://example.com' }), true)
   assert.equal(
-    captureStateEventCarriesContent({ ...clean, event_type: 'app_activated', app_name: 'Figma' }),
+    supervisorEventCarriesContent({ ...clean, event_type: 'idle_started' }),
+    false,
+  )
+  assert.equal(
+    supervisorEventCarriesContent({ ...clean, event_type: 'idle_started', app_name: 'Figma' }),
+    true,
+  )
+  assert.equal(
+    supervisorEventCarriesContent({ ...clean, event_type: 'idle_ended', window_title: 'notes.md' }),
+    true,
+  )
+  assert.equal(
+    supervisorEventCarriesContent({ ...clean, event_type: 'app_activated', app_name: 'Figma' }),
     false,
   )
 })
@@ -125,11 +142,37 @@ test('insert validation rejects unsupported schema versions and contract violati
       app_name: 'Leaky App',
       pid: null,
     })),
-    'capture_state_content',
+    'supervisor_content',
+  )
+  assert.equal(
+    validateFocusEventForInsert(baseEvent({
+      event_type: 'idle_started',
+      source: 'capture_supervisor',
+      app_bundle_id: null,
+      app_name: null,
+      pid: null,
+      window_title: 'notes.md',
+    })),
+    'supervisor_content',
   )
   assert.equal(
     validateFocusEventForInsert(baseEvent({ sensitivity: 'secret' as never })),
     'invalid_sensitivity',
+  )
+})
+
+test('insert validation rejects values outside the storage allowlists', () => {
+  assert.equal(
+    validateFocusEventForInsert(baseEvent({ event_type: 'app_actived' as never })),
+    'unknown_event_type',
+  )
+  assert.equal(
+    validateFocusEventForInsert(baseEvent({ confidence: 'certain' as never })),
+    'unknown_confidence',
+  )
+  assert.equal(
+    validateFocusEventForInsert(baseEvent({ source: 'unknown_helper' as never })),
+    'unknown_source',
   )
 })
 

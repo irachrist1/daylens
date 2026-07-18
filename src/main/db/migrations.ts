@@ -2173,14 +2173,7 @@ const migrations: Migration[] = [
             'capture_failed',
             'capture_recovered'
           ) OR source = 'capture_supervisor'),
-          CHECK(event_type NOT IN (
-            'capture_started',
-            'capture_stopped',
-            'capture_paused',
-            'capture_resumed',
-            'capture_failed',
-            'capture_recovered'
-          ) OR (
+          CHECK(source <> 'capture_supervisor' OR (
             app_bundle_id IS NULL AND app_name IS NULL AND window_title IS NULL
             AND url IS NULL AND page_title IS NULL
           ))

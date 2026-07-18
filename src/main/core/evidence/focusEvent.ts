@@ -112,6 +112,14 @@ export function isWindowsFocusEventSource(value: unknown): value is WindowsFocus
   return typeof value === 'string' && WINDOWS_FOCUS_EVENT_SOURCE_SET.has(value)
 }
 
+export function isFocusEventSource(value: unknown): value is FocusEventSource {
+  return (
+    isMacFocusEventSource(value) ||
+    isWindowsFocusEventSource(value) ||
+    value === SUPERVISOR_FOCUS_EVENT_SOURCE
+  )
+}
+
 export function isSupportedFocusEventSchemaVersion(value: unknown): value is number {
   return typeof value === 'number' && SUPPORTED_FOCUS_EVENT_SCHEMA_VERSIONS.has(value)
 }
@@ -126,13 +134,15 @@ export function sourceAcceptsFocusEventType(source: FocusEventSource, eventType:
   return !TAB_EVENT_TYPES.has(eventType) && !SUPERVISOR_EVENT_TYPES.has(eventType)
 }
 
-// Capture-health events explain missing data. They must never carry
-// application names, titles, URLs, or any personal content.
-export function captureStateEventCarriesContent(event: Pick<
+// Supervisor events — idle transitions and capture health — explain missing
+// data. The capture_supervisor source is content-free: none of its events may
+// carry application names, titles, URLs, or any personal content, even when
+// one is derived from a foreground event.
+export function supervisorEventCarriesContent(event: Pick<
   FocusEvent,
   'event_type' | 'app_bundle_id' | 'app_name' | 'window_title' | 'url' | 'page_title'
 >): boolean {
-  if (!CAPTURE_STATE_EVENT_TYPES.has(event.event_type)) return false
+  if (!SUPERVISOR_EVENT_TYPES.has(event.event_type)) return false
   return (
     event.app_bundle_id !== null ||
     event.app_name !== null ||
@@ -173,8 +183,11 @@ export type FocusEventInsert = FocusEvent & Partial<FocusEventEvidenceFields>
 
 export type FocusEventRejectionReason =
   | 'unsupported_schema_version'
+  | 'unknown_source'
+  | 'unknown_event_type'
+  | 'unknown_confidence'
   | 'source_kind_mismatch'
-  | 'capture_state_content'
+  | 'supervisor_content'
   | 'invalid_sensitivity'
   | 'page_content_violation'
 
@@ -193,10 +206,16 @@ function violatesPageContentRules(event: FocusEventInsert): boolean {
   return false
 }
 
+// Values outside the storage allowlists are rejected here as well: the
+// idempotent INSERT OR IGNORE would otherwise swallow their CHECK violations
+// and miscount the lost rows as duplicates.
 export function validateFocusEventForInsert(event: FocusEventInsert): FocusEventRejectionReason | null {
   if (!isSupportedFocusEventSchemaVersion(event.schema_ver)) return 'unsupported_schema_version'
+  if (!isFocusEventSource(event.source)) return 'unknown_source'
+  if (!isFocusEventType(event.event_type)) return 'unknown_event_type'
+  if (!isFocusEventConfidence(event.confidence)) return 'unknown_confidence'
   if (!sourceAcceptsFocusEventType(event.source, event.event_type)) return 'source_kind_mismatch'
-  if (captureStateEventCarriesContent(event)) return 'capture_state_content'
+  if (supervisorEventCarriesContent(event)) return 'supervisor_content'
   if (violatesPageContentRules(event)) return 'page_content_violation'
   if (event.sensitivity !== undefined && !isEvidenceSensitivity(event.sensitivity)) return 'invalid_sensitivity'
   return null
