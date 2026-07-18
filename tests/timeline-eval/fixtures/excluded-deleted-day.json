@@ -261,7 +261,16 @@
       {
         "issue": "DEV-214",
         "defectSignatures": [
+          "privacy: \"Legacy forum\" leaked into Timeline",
           "privacy: \"Legacy forum\" remains in app_sessions.window_title",
+          "privacy: \"Legacy forum\" remains in derived_blocks.label",
+          "privacy: \"Legacy forum\" remains in derived_sessions.window_title",
+          "privacy: \"Legacy forum\" remains in focus_events.window_title",
+          "privacy: \"Legacy forum\" remains in timeline_block_labels.label",
+          "privacy: \"Legacy forum\" remains in timeline_block_reviews.original_block_json",
+          "privacy: \"Legacy forum\" remains in timeline_blocks.evidence_summary_json",
+          "privacy: \"Legacy forum\" remains in timeline_blocks.label_current",
+          "privacy: \"Legacy forum\" remains in workflow_signatures.signature_key",
           "privacy: search for \"Legacy forum\" returns results"
         ]
       }

@@ -40,6 +40,8 @@ test('linux smoke workflows launch Electron inside a DBus session', () => {
     assert.match(source, /--window-state/)
     assert.doesNotMatch(source, /xorg-x11-apps/)
     assert.match(source, /dnf install[^\n]*\bxmessage\b[^\n]*\bxwininfo\b/)
+    assert.match(source, /apt-get install -y[^\n]*\bwmctrl\b/)
+    assert.match(source, /dnf install -y[^\n]*\bwmctrl\b/)
     assert.match(RUN_SCRIPT, /wmctrl -m[\s\S]*?"\$app_path" "\$@"/)
     assert.match(RUN_SCRIPT, /kill -0 "\$app_pid"/)
     assert.match(RUN_SCRIPT, /xwininfo -root -tree/)
