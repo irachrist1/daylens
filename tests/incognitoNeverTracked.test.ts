@@ -119,7 +119,12 @@ test('poll: a private window creates no app session and cuts the one before it',
     assert.equal(sessions[0].ended_reason, 'incognito')
     assert.equal(sessions[0].end_time, BASE + 60_000)
     assert.equal((db.prepare('SELECT COUNT(*) AS n FROM website_visits_pending').get() as { n: number }).n, 0)
-    assert.equal((db.prepare('SELECT COUNT(*) AS n FROM focus_events').get() as { n: number }).n, 0)
+    // The canonical store carries exactly the normal session's activation and
+    // deactivation — the private window contributed nothing, not even a title.
+    const focusRows = db.prepare('SELECT event_type, window_title FROM focus_events ORDER BY id').all() as
+      Array<{ event_type: string; window_title: string | null }>
+    assert.deepEqual(focusRows.map((row) => row.event_type), ['app_activated', 'app_deactivated'])
+    assert.doesNotMatch(JSON.stringify(focusRows), /Private page/)
 
     // Still private on later polls: still no session.
     await poll(BASE + 90_000)

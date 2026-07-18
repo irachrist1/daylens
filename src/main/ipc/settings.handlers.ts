@@ -8,6 +8,7 @@ import {
   clearApiKey,
 } from '../services/settings'
 import { capture, captureTrackingPauseTransition } from '../services/analytics'
+import { recordSupervisorEvent } from '../services/captureEvidence'
 import { syncLinuxLaunchOnLogin } from '../services/linuxDesktop'
 import { validateProviderConnection } from '../services/providerValidation'
 import { getMcpServerConfig, isMcpServerRunning, startMcpServer, stopMcpServer } from '../services/mcpServer'
@@ -71,6 +72,9 @@ export function registerSettingsHandlers(): void {
         // The event is best-effort telemetry for gap labeling; the pause
         // itself is already persisted in settings.
       }
+      // Pause and resume are durable capture-state evidence — the canonical
+      // explanation for the gap that follows.
+      recordSupervisorEvent(partial.trackingPaused ? 'capture_paused' : 'capture_resumed', Date.now())
       captureTrackingPauseTransition(Boolean(partial.trackingPaused), 'user')
     }
 

@@ -197,10 +197,14 @@ test('private and excluded observations cannot reach storage or downstream produ
     )
     assert.doesNotMatch(JSON.stringify(storedSessions), /Zen|Private|Dia/i)
 
-    for (const table of ['website_visits_pending', 'focus_events']) {
-      const row = db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }
-      assert.equal(row.count, 0, `${table} must contain no blocked evidence`)
+    {
+      const row = db.prepare('SELECT COUNT(*) AS count FROM website_visits_pending').get() as { count: number }
+      assert.equal(row.count, 0, 'website_visits_pending must contain no blocked evidence')
     }
+    // The canonical store now mirrors allowed foreground observations, so it
+    // is not empty — the invariant is that nothing blocked reaches it.
+    const focusRows = db.prepare('SELECT event_type, app_name, window_title, url, page_title FROM focus_events').all()
+    assert.doesNotMatch(JSON.stringify(focusRows), /Zen|private\.example|Private quarterly|Dia/i)
     const visits = db.prepare('SELECT domain, page_title, url FROM website_visits').all()
     assert.deepEqual(visits, [
       { domain: 'github.com', page_title: 'Daylens', url: 'https://github.com/daylens/daylens' },

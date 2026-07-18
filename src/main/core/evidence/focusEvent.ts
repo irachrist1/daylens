@@ -45,16 +45,23 @@ export const WINDOWS_FOCUS_EVENT_SOURCES = ['uia_foreground', 'uia_tab'] as cons
 // Machine-derived idle and capture-health transitions come from Daylens
 // itself, not a platform helper.
 export const SUPERVISOR_FOCUS_EVENT_SOURCE = 'capture_supervisor' as const
+// The interval-based active-window sampler in tracking.ts. It observes the
+// same foreground/window/machine facts as the native helpers, on both macOS
+// and Windows, so its canonical rows carry their own source identity and the
+// projection can weigh the two adapters against each other.
+export const POLL_FOCUS_EVENT_SOURCE = 'foreground_poll' as const
 
 export type FocusEventType = typeof FOCUS_EVENT_TYPES[number]
 export type FocusEventConfidence = typeof FOCUS_EVENT_CONFIDENCES[number]
 export type MacFocusEventSource = typeof MAC_FOCUS_EVENT_SOURCES[number]
 export type WindowsFocusEventSource = typeof WINDOWS_FOCUS_EVENT_SOURCES[number]
 export type SupervisorFocusEventSource = typeof SUPERVISOR_FOCUS_EVENT_SOURCE
+export type PollFocusEventSource = typeof POLL_FOCUS_EVENT_SOURCE
 export type FocusEventSource =
   | MacFocusEventSource
   | WindowsFocusEventSource
   | SupervisorFocusEventSource
+  | PollFocusEventSource
 
 const FOCUS_EVENT_TYPE_SET = new Set<string>(FOCUS_EVENT_TYPES)
 const FOCUS_EVENT_CONFIDENCE_SET = new Set<string>(FOCUS_EVENT_CONFIDENCES)
@@ -116,7 +123,8 @@ export function isFocusEventSource(value: unknown): value is FocusEventSource {
   return (
     isMacFocusEventSource(value) ||
     isWindowsFocusEventSource(value) ||
-    value === SUPERVISOR_FOCUS_EVENT_SOURCE
+    value === SUPERVISOR_FOCUS_EVENT_SOURCE ||
+    value === POLL_FOCUS_EVENT_SOURCE
   )
 }
 
@@ -131,6 +139,8 @@ export function isCaptureStateFocusEventType(value: FocusEventType): boolean {
 export function sourceAcceptsFocusEventType(source: FocusEventSource, eventType: FocusEventType): boolean {
   if (source === 'apple_events_tab' || source === 'uia_tab') return TAB_EVENT_TYPES.has(eventType)
   if (source === SUPERVISOR_FOCUS_EVENT_SOURCE) return SUPERVISOR_EVENT_TYPES.has(eventType)
+  // Foreground observers — native helpers and the poll sampler alike — own the
+  // application/window/machine-state family only.
   return !TAB_EVENT_TYPES.has(eventType) && !SUPERVISOR_EVENT_TYPES.has(eventType)
 }
 
@@ -163,6 +173,7 @@ const SOURCE_PROVENANCE: Record<FocusEventSource, FocusEventProvenance> = {
   uia_foreground: { method: 'uia_foreground', permissionScope: 'windows_uia_foreground' },
   uia_tab: { method: 'uia_tab', permissionScope: 'windows_uia_foreground' },
   capture_supervisor: { method: 'capture_supervisor', permissionScope: 'application_internal' },
+  foreground_poll: { method: 'foreground_poll', permissionScope: 'active_window_poll' },
 }
 
 export function provenanceForFocusEventSource(source: FocusEventSource): FocusEventProvenance {
@@ -198,7 +209,10 @@ export type FocusEventRejectionReason =
 function violatesPageContentRules(event: FocusEventInsert): boolean {
   const hasPageContent = event.url !== null || event.page_title !== null
   if (event.confidence === 'unknown' && hasPageContent) return true
-  if ((event.source === 'nsworkspace_event' || event.source === 'uia_foreground') && hasPageContent) return true
+  if (
+    (event.source === 'nsworkspace_event' || event.source === 'uia_foreground' || event.source === POLL_FOCUS_EVENT_SOURCE)
+    && hasPageContent
+  ) return true
   if (
     (event.source === 'apple_events_tab' || event.source === 'uia_tab') &&
     event.confidence === 'observed' && !event.url
