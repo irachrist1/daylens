@@ -2223,6 +2223,125 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 47,
+    description: 'Admit the foreground_poll adapter into canonical focus_events — the interval sampler emits the same application/window/machine-state family as the native helpers (DEV-163)',
+    up: () => {
+      const db = getDb()
+      db.exec(`
+        CREATE TABLE focus_events_v47 (
+          id                INTEGER PRIMARY KEY AUTOINCREMENT,
+          evidence_id       TEXT    NOT NULL DEFAULT (lower(hex(randomblob(16)))) UNIQUE,
+          ts_ms             INTEGER NOT NULL,
+          mono_ns           INTEGER NOT NULL,
+          event_type        TEXT    NOT NULL CHECK(event_type IN (
+            'app_activated',
+            'app_deactivated',
+            'window_changed',
+            'space_changed',
+            'sleep',
+            'wake',
+            'lock',
+            'unlock',
+            'idle_started',
+            'idle_ended',
+            'capture_started',
+            'capture_stopped',
+            'capture_paused',
+            'capture_resumed',
+            'capture_failed',
+            'capture_recovered',
+            'tab_changed',
+            'tab_sampled'
+          )),
+          app_bundle_id     TEXT,
+          app_name          TEXT,
+          pid               INTEGER,
+          window_title      TEXT,
+          url               TEXT,
+          page_title        TEXT,
+          source            TEXT    NOT NULL CHECK(source IN (
+            'nsworkspace_event',
+            'apple_events_tab',
+            'uia_foreground',
+            'uia_tab',
+            'capture_supervisor',
+            'foreground_poll'
+          )),
+          confidence        TEXT    NOT NULL CHECK(confidence IN ('observed', 'corroborated', 'inferred', 'unknown')),
+          platform          TEXT    NOT NULL DEFAULT 'darwin',
+          sensitivity       TEXT    NOT NULL DEFAULT 'standard' CHECK(sensitivity IN ('standard', 'personal', 'high')),
+          provenance_method TEXT    NOT NULL DEFAULT 'unknown',
+          permission_scope  TEXT    NOT NULL DEFAULT 'unknown',
+          policy_version    INTEGER NOT NULL DEFAULT 0,
+          schema_ver        INTEGER NOT NULL DEFAULT 2 CHECK(schema_ver = 2),
+          CHECK(confidence <> 'unknown' OR (url IS NULL AND page_title IS NULL)),
+          CHECK(source NOT IN ('nsworkspace_event', 'uia_foreground', 'foreground_poll') OR (url IS NULL AND page_title IS NULL)),
+          CHECK(source NOT IN ('apple_events_tab', 'uia_tab') OR confidence <> 'observed' OR url IS NOT NULL),
+          CHECK(source NOT IN ('apple_events_tab', 'uia_tab') OR event_type IN ('tab_changed', 'tab_sampled')),
+          CHECK(source NOT IN ('nsworkspace_event', 'uia_foreground', 'foreground_poll') OR event_type IN (
+            'app_activated',
+            'app_deactivated',
+            'window_changed',
+            'space_changed',
+            'sleep',
+            'wake',
+            'lock',
+            'unlock'
+          )),
+          CHECK(source <> 'capture_supervisor' OR event_type IN (
+            'idle_started',
+            'idle_ended',
+            'capture_started',
+            'capture_stopped',
+            'capture_paused',
+            'capture_resumed',
+            'capture_failed',
+            'capture_recovered'
+          )),
+          CHECK(event_type NOT IN (
+            'idle_started',
+            'idle_ended',
+            'capture_started',
+            'capture_stopped',
+            'capture_paused',
+            'capture_resumed',
+            'capture_failed',
+            'capture_recovered'
+          ) OR source = 'capture_supervisor'),
+          CHECK(source <> 'capture_supervisor' OR (
+            app_bundle_id IS NULL AND app_name IS NULL AND window_title IS NULL
+            AND url IS NULL AND page_title IS NULL
+          ))
+        );
+
+        INSERT INTO focus_events_v47 (
+          id, evidence_id, ts_ms, mono_ns, event_type, app_bundle_id, app_name, pid,
+          window_title, url, page_title, source, confidence, platform,
+          sensitivity, provenance_method, permission_scope, policy_version, schema_ver
+        )
+        SELECT
+          id, evidence_id, ts_ms, mono_ns, event_type, app_bundle_id, app_name, pid,
+          window_title, url, page_title, source, confidence, platform,
+          sensitivity, provenance_method, permission_scope, policy_version, schema_ver
+        FROM focus_events
+        ORDER BY id;
+
+        DROP TABLE focus_events;
+        ALTER TABLE focus_events_v47 RENAME TO focus_events;
+
+        CREATE UNIQUE INDEX idx_focus_events_identity ON focus_events (
+          source, event_type, ts_ms, mono_ns,
+          COALESCE(app_bundle_id, ''), COALESCE(app_name, ''),
+          COALESCE(pid, -1), COALESCE(window_title, ''), COALESCE(url, ''),
+          COALESCE(page_title, ''), confidence, platform
+        );
+        CREATE INDEX IF NOT EXISTS idx_focus_events_ts ON focus_events(ts_ms);
+        CREATE INDEX IF NOT EXISTS idx_focus_events_type ON focus_events(event_type);
+        CREATE INDEX IF NOT EXISTS idx_focus_events_platform ON focus_events(platform);
+      `)
+    },
+  },
 ]
 
 export const LATEST_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0

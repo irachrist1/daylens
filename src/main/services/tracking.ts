@@ -17,6 +17,12 @@ import { upsertAppIdentityObservation } from '../core/inference/appIdentityRegis
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { createLeadingTrailingThrottle } from '../lib/coalescer'
 import { getDb } from './database'
+import {
+  recordPollForegroundEvent,
+  recordPollMachineStateEvent,
+  recordSupervisorEvent,
+  type PollMachineStateEventType,
+} from './captureEvidence'
 import type {
   AppCategory,
   AppSession,
@@ -29,7 +35,7 @@ import { resolveCanonicalApp } from '../lib/appIdentity'
 import { stripBrowserUrlFromTitle } from '@shared/aiSanitize'
 import { localDateString, localDayBounds } from '../lib/localDate'
 import { looksLikePassivePresenceSession } from '../lib/passivePresence'
-import { capture, captureException, captureRateLimited } from './analytics'
+import { capture, captureException, captureRateLimited, captureTrackingPauseTransition } from './analytics'
 import { resolveLinuxDesktopIdentity } from './linuxDesktop'
 import { flushActiveBrowserContext, recordActiveBrowserContextSample } from './browserContext'
 import { resolveBrowserApplication } from './browserRegistry'
@@ -175,6 +181,22 @@ export const trackingStatus = {
     pid: number
     path: string
   } | null,
+}
+
+// Capture-health transitions are canonical evidence: the first failure of a
+// burst emits capture_failed, the return to a clean poll emits
+// capture_recovered. Steady state (healthy or persistently failing) emits
+// nothing, so a broken helper can't flood the store.
+function setPollHealth(error: string | null): void {
+  const previous = trackingStatus.pollError
+  trackingStatus.pollError = error
+  if (error !== null && previous === null) {
+    const eventTs = nowMs()
+    if (currentSession) flushCurrent(eventTs, 'capture_failed')
+    recordSupervisorEvent('capture_failed', eventTs)
+  } else if (error === null && previous !== null) {
+    recordSupervisorEvent('capture_recovered', nowMs())
+  }
 }
 
 function formatError(err: unknown): string {
@@ -985,7 +1007,7 @@ export function requestTrackingPermission(): boolean | null {
   try {
     return awMod.requestPermissions()
   } catch (err) {
-    trackingStatus.pollError = formatError(err)
+    setPollHealth(formatError(err))
     console.warn('[tracking] failed to request permissions:', err)
     return null
   }
@@ -1417,7 +1439,16 @@ function recoverPersistedLiveSnapshot(): void {
         scheduleAttributionRefreshForSession(slice.startMs, slice.endMs)
       }
     }
-    if (recovered) console.log('[tracking] recovered live session snapshot after restart')
+    if (recovered) {
+      recordPollForegroundEvent('app_deactivated', {
+        tsMs: endTime,
+        bundleId: snapshot.bundleId,
+        appName: snapshot.appName,
+        pid: null,
+        windowTitle: snapshot.windowTitle,
+      }, trackingPlatform())
+      console.log('[tracking] recovered live session snapshot after restart')
+    }
 
     clearPersistedLiveSnapshot()
   } catch (err) {
@@ -1481,6 +1512,17 @@ function handleResume(): void {
   recordActivityEvent('resume')
 }
 
+// Legacy activity-state names → canonical focus-event kinds, emitted at the
+// same call site with the same timestamp so the two records can be compared.
+// Provisional idle_start/idle_end stay legacy-only: a provisional idle can be
+// cancelled by a return, so the committed canonical boundary is away_start.
+const CANONICAL_MACHINE_STATE: Partial<Record<string, PollMachineStateEventType>> = {
+  lock_screen: 'lock',
+  unlock_screen: 'unlock',
+  suspend: 'sleep',
+  resume: 'wake',
+}
+
 function recordActivityEvent(
   eventType: 'idle_start' | 'idle_end' | 'away_start' | 'away_end' | 'lock_screen' | 'unlock_screen' | 'suspend' | 'resume',
   metadata: Record<string, unknown> = {},
@@ -1498,6 +1540,14 @@ function recordActivityEvent(
   } catch (err) {
     console.warn('[tracking] failed to record activity event:', err)
   }
+  const machineState = CANONICAL_MACHINE_STATE[eventType]
+  if (machineState) {
+    recordPollMachineStateEvent(machineState, eventTs, trackingPlatform())
+  } else if (eventType === 'away_start') {
+    recordSupervisorEvent('idle_started', eventTs)
+  } else if (eventType === 'away_end') {
+    recordSupervisorEvent('idle_ended', eventTs)
+  }
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -1512,6 +1562,7 @@ export function startTracking(): void {
     powerMonitor.on('resume', handleResume)
     powerMonitorListenersRegistered = true
   }
+  recordSupervisorEvent('capture_started', Date.now())
   // Fire immediately — don't wait 5 s for the first data point
   void poll()
   pollTimer = setInterval(poll, POLL_INTERVAL_MS)
@@ -1523,7 +1574,29 @@ export function startTracking(): void {
   console.log('[tracking] started')
 }
 
+export function recordTrackingPauseTransition(
+  paused: boolean,
+  source: 'settings' | 'tray',
+  eventTs: number = Date.now(),
+): void {
+  if (paused && currentSession) flushCurrent(eventTs, 'tracking_paused')
+  try {
+    recordActivityStateEvent(getDb(), {
+      eventTs,
+      eventType: paused ? 'tracking_paused' : 'tracking_resumed',
+      source,
+    })
+  } catch {
+    // The persisted setting still gates capture if evidence storage is unavailable.
+  }
+  recordSupervisorEvent(paused ? 'capture_paused' : 'capture_resumed', eventTs)
+  captureTrackingPauseTransition(paused, 'user')
+}
+
 export function stopTracking(): void {
+  // A stop with no tracker running (e.g. shutdown before capture ever
+  // started) is not a capture-state transition — record nothing.
+  const wasRunning = pollTimer != null
   if (pollTimer) {
     clearInterval(pollTimer)
     pollTimer = null
@@ -1537,6 +1610,7 @@ export function stopTracking(): void {
   }
   flushCurrent()
   flushActiveBrowserContext(getDb())
+  if (wasRunning) recordSupervisorEvent('capture_stopped', Date.now())
   idleState = 'active'
   provisionalIdleStart = null
   returnFromIdleAtMs = null
@@ -1612,6 +1686,10 @@ function nowMs(): number {
   return fsmTestHarness ? fsmTestHarness.now() : Date.now()
 }
 
+function trackingPlatform(): NodeJS.Platform {
+  return fsmTestHarness?.platform ?? process.platform
+}
+
 function getIdleSeconds(): number {
   if (!fsmTestHarness && process.env.DAYLENS_SMOKE_TEST === '1') return 0
   return fsmTestHarness ? fsmTestHarness.idleSeconds() : powerMonitor.getSystemIdleTime()
@@ -1659,7 +1737,9 @@ async function poll(): Promise<void> {
         if (idleState !== 'away' && currentSession) {
           const idleStartMs = provisionalIdleStart ?? (nowMs() - Math.round(idleSec) * 1_000)
           if (idleState !== 'provisional_idle') {
-            recordActivityEvent('away_start', { idleSeconds: Math.round(idleSec) })
+            recordActivityEvent('away_start', { idleSeconds: Math.round(idleSec) }, idleStartMs)
+          } else {
+            recordSupervisorEvent('idle_started', idleStartMs)
           }
           flushCurrent(idleStartMs, 'away')
           flushActiveBrowserContext(getDb(), idleStartMs)
@@ -1791,7 +1871,7 @@ async function poll(): Promise<void> {
           } else {
             flushActiveBrowserContext(getDb())
             if (currentSession) currentSession.passivePresence = false
-            trackingStatus.pollError = formatError(err)
+            setPollHealth(formatError(err))
             captureRateLimited(ANALYTICS_EVENT.TRACKING_ENGINE_HEALTH, 'tracking:get-active-window', {
               failure_kind: classifyFailureKind(err),
               reason: 'poll',
@@ -1807,7 +1887,7 @@ async function poll(): Promise<void> {
     if (!win) {
       flushActiveBrowserContext(getDb())
       if (currentSession) currentSession.passivePresence = false
-      trackingStatus.pollError = null
+      setPollHealth(null)
       trackingStatus.lastRawWindow = null
       trackingStatus.lastResolvedWindow = null
       return
@@ -1828,7 +1908,7 @@ async function poll(): Promise<void> {
       }
     }
 
-    trackingStatus.pollError = null
+    setPollHealth(null)
     trackingStatus.lastRawWindow = {
       title: win.title,
       application: win.application,
@@ -1989,6 +2069,24 @@ async function poll(): Promise<void> {
         bornOnIdleReturn,
         windowTitles: [{ title: resolvedWindowTitle, ticks: 1 }],
       }
+      // Canonical mirror of this observation. Daylens' own windows are
+      // rejected before persistence on the legacy path (flush time); reject
+      // them here at activation time for the same reason.
+      if (!trackedForegroundSessionExclusionReason({
+        bundleId,
+        appName: identity.displayName,
+        windowTitle: resolvedWindowTitle,
+        rawAppName: appName,
+        executablePath: resolvedWin.path?.trim() || null,
+      })) {
+        recordPollForegroundEvent('app_activated', {
+          tsMs: startedAt,
+          bundleId,
+          appName: identity.displayName,
+          pid: resolvedWin.pid ?? null,
+          windowTitle: resolvedWindowTitle,
+        }, trackingPlatform())
+      }
       upsertAppIdentityObservation(getDb(), {
         bundleId,
         rawAppName: appName,
@@ -2003,6 +2101,24 @@ async function poll(): Promise<void> {
       })
       persistLiveSnapshot(true)
     } else {
+      // A title change is visible-context evidence; it never adds time. Emit
+      // only on a real change so per-tick sampling stays out of the store.
+      if (currentSession.windowTitle !== resolvedWindowTitle
+        && !trackedForegroundSessionExclusionReason({
+          bundleId,
+          appName: currentSession.appName,
+          windowTitle: resolvedWindowTitle,
+          rawAppName: currentSession.rawAppName,
+          executablePath: resolvedWin.path?.trim() || null,
+        })) {
+        recordPollForegroundEvent('window_changed', {
+          tsMs: nowMs(),
+          bundleId,
+          appName: currentSession.appName,
+          pid: resolvedWin.pid ?? null,
+          windowTitle: resolvedWindowTitle,
+        }, trackingPlatform())
+      }
       currentSession.windowTitle = resolvedWindowTitle
       currentSession.passivePresence = browserSample.passivePresence
       if (!currentSession.windowTitles) {
@@ -2035,7 +2151,7 @@ async function poll(): Promise<void> {
     }
   } catch (err) {
     // active-window can throw on permissions denial (macOS) or unsupported platform
-    trackingStatus.pollError = formatError(err)
+    setPollHealth(formatError(err))
     console.warn('[tracking] poll error:', err)
     captureRateLimited(ANALYTICS_EVENT.TRACKING_ENGINE_HEALTH, 'tracking:poll', {
       failure_kind: classifyFailureKind(err),
@@ -2068,7 +2184,7 @@ function flushCurrent(overrideEndTime?: number, endedReason: string | null = nul
   // day's totals only include time that actually fell within that day.
   const startDate = localDateString(new Date(currentSession.startTime))
   const endDate   = localDateString(new Date(endTime))
-  if (startDate !== endDate) {
+  if (startDate !== endDate && endedReason !== 'midnight_split') {
     const [, midnightMs] = localDayBounds(startDate)
     // Snapshot fields before the recursive call — flushCurrent sets
     // currentSession = null so we can't read it afterwards.
@@ -2078,6 +2194,23 @@ function flushCurrent(overrideEndTime?: number, endedReason: string | null = nul
     currentSession = { ...snapshot, startTime: midnightMs }
     flushCurrent(endTime, endedReason)
     return
+  }
+
+  // A midnight split is a legacy-storage detail, so only the final slice emits
+  // the observed deactivation.
+  if (endedReason !== 'midnight_split' && !trackedForegroundSessionExclusionReason({
+    bundleId: currentSession.bundleId,
+    appName: currentSession.appName,
+    windowTitle: currentSession.windowTitle,
+    rawAppName: currentSession.rawAppName,
+  })) {
+    recordPollForegroundEvent('app_deactivated', {
+      tsMs: endTime,
+      bundleId: currentSession.bundleId,
+      appName: currentSession.appName,
+      pid: null,
+      windowTitle: currentSession.windowTitle,
+    }, trackingPlatform())
   }
 
   if (currentSession.windowTitles && currentSession.windowTitles.length > 0) {
