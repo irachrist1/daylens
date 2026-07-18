@@ -121,7 +121,7 @@ const WIN = {
 
 const BASE = new Date(2026, 6, 3, 10, 0, 0, 0).getTime()
 
-const EVIDENCE_TABLES = ['app_sessions', 'focus_events', 'website_visits', 'website_visits_pending', 'activity_state_events']
+const EVIDENCE_TABLES = ['app_sessions', 'focus_events', 'website_visits', 'activity_state_events']
 
 function evidenceRowCounts(db: Database.Database): Record<string, number> {
   const counts: Record<string, number> = {}
