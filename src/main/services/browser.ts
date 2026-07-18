@@ -38,6 +38,7 @@ import {
 import { getWindowsBrowserHistoryLocations } from './windowsBrowserRegistry'
 import { decideAppCapture, decideSiteCapture, trackingControlsStateFromSettings } from '@shared/trackingControls'
 import { getSettings } from './settings'
+import { currentCaptureConsentDecidedAt } from '@shared/captureConsent'
 
 // ─── Chrome timestamp arithmetic ─────────────────────────────────────────────
 // Chrome stores timestamps as microseconds since 1601-01-01 00:00:00 UTC.
@@ -45,6 +46,10 @@ import { getSettings } from './settings'
 // arithmetic is required to avoid precision loss.
 
 const CHROME_OFFSET_US = 11_644_473_600_000_000n  // µs between 1601 and Unix epoch
+
+function consentFloorMs(): number {
+  return currentCaptureConsentDecidedAt(getSettings().captureConsent) ?? Date.now()
+}
 
 function msToChromeUs(ms: number): bigint {
   return BigInt(ms) * 1000n + CHROME_OFFSET_US
@@ -587,8 +592,10 @@ async function pollChromium(
   let error: string | null = null
 
   const lastCursorUs = browserCursors.get(browser.bundleId) ?? null
-  // If no cursor yet, start from 24h ago
-  const fromUs: bigint = lastCursorUs ?? msToChromeUs(Date.now() - 86_400_000)
+  // A cursor from an earlier consent can never cross a newer consent boundary.
+  const fromUs = [lastCursorUs, msToChromeUs(consentFloorMs())]
+    .filter((value): value is bigint => value !== null)
+    .reduce((latest, value) => value > latest ? value : latest)
   const controls = trackingControlsStateFromSettings(getSettings())
 
   try {
@@ -700,7 +707,8 @@ async function pollFirefox(
 
   // Firefox visit_date is Unix µs — not Chrome epoch µs
   const lastCursorUs = browserCursors.get(browser.bundleId) ?? null
-  const fromUs: bigint = lastCursorUs ?? (BigInt(Date.now() - 86_400_000) * 1000n)
+  const consentUs = BigInt(consentFloorMs()) * 1_000n
+  const fromUs = lastCursorUs && lastCursorUs > consentUs ? lastCursorUs : consentUs
   const controls = trackingControlsStateFromSettings(getSettings())
 
   try {
@@ -793,7 +801,8 @@ async function pollWebKit(
   let error: string | null = null
 
   const lastCursorUs = browserCursors.get(browser.bundleId) ?? null
-  const fromMs = lastCursorUs ? Number(lastCursorUs / 1_000n) : Date.now() - 86_400_000
+  const cursorMs = lastCursorUs ? Number(lastCursorUs / 1_000n) : 0
+  const fromMs = Math.max(cursorMs, consentFloorMs())
   const fromWebKitSeconds = fromMs / 1_000 - WEBKIT_EPOCH_OFFSET_SEC
 
   try {

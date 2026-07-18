@@ -209,6 +209,7 @@ let mainWindow: BrowserWindow | null = null
 let isQuitting = false
 let deferredIntegrationStartup: ReturnType<typeof setTimeout> | null = null
 let backgroundServicesStarted = false
+let captureAdapterStartupTimer: ReturnType<typeof setTimeout> | null = null
 // Set to latest version string when a newer release is detected
 export const updateAvailable: string | null = null
 
@@ -489,55 +490,71 @@ function ensureTray(): void {
   }
 }
 
-function startBackgroundServices(): void {
-  if (backgroundServicesStarted) return
-  if (REAL_DAY_HARNESS) {
-    backgroundServicesStarted = true
-    return
-  }
+function startCaptureServices(): void {
   if (!SMOKE_TEST && !shouldStartTrackingForSettings(getSettings())) return
-
   startTracking()
   if (process.platform === 'darwin') startFocusCapture()
   if (process.platform === 'win32') startWindowsFocusCapture()
-  // Background-process evidence (long-running apps that never come to the
-  // foreground) feeds block naming on both Windows and Linux. macOS uses
-  // focus events instead, so the monitor is a no-op there.
   if (!SMOKE_TEST && (process.platform === 'win32' || process.platform === 'linux')) ensureProcessMonitor()
-  if (!SMOKE_TEST) {
-    startSync()
-    startDailySummaryNotifier(mainWindow)
-    setDistractionAlertWindow(mainWindow)
-    startDistractionAlerter()
-    // Optional Wrapped connectors (git, calendar, focus apps) — best-effort
-    // background collection into external_signals; silent when unavailable.
-    startExternalSignalCollection()
-  }
-  backgroundServicesStarted = true
 
   if (!SMOKE_TEST) {
-    setTimeout(() => {
+    if (captureAdapterStartupTimer) clearTimeout(captureAdapterStartupTimer)
+    captureAdapterStartupTimer = setTimeout(() => {
+      captureAdapterStartupTimer = null
+      if (!shouldStartTrackingForSettings(getSettings())) return
       startBrowserTracking()
       setImmediate(() => {
         try { backfillWindowsHistory() } catch (err) { console.warn('[init] win history:', err) }
       })
     }, 5_000)
   }
+}
 
-  setTimeout(() => {
-    capture(ANALYTICS_EVENT.TRACKING_ENGINE_HEALTH, {
-      module_source: trackingStatus.moduleSource,
-      status: trackingStatus.moduleSource ? 'ok' : 'error',
-      surface: 'tracking',
-      ...(trackingStatus.loadError ? { failure_kind: classifyFailureKind(trackingStatus.loadError) } : {}),
-    })
-  }, 5_000)
-
-  if (!SMOKE_TEST) {
-    setTimeout(() => {
-      setTimeout(() => finalizePreviousDay(), 0)
-    }, 10_000)
+function stopCaptureServices(): void {
+  if (captureAdapterStartupTimer) {
+    clearTimeout(captureAdapterStartupTimer)
+    captureAdapterStartupTimer = null
   }
+  stopTracking()
+  stopFocusCapture()
+  stopWindowsFocusCapture()
+  stopBrowserTracking()
+  stopProcessMonitor()
+}
+
+function startBackgroundServices(): void {
+  if (REAL_DAY_HARNESS) {
+    backgroundServicesStarted = true
+    return
+  }
+
+  if (!backgroundServicesStarted) {
+    if (!SMOKE_TEST) {
+      startSync()
+      startDailySummaryNotifier(mainWindow)
+      setDistractionAlertWindow(mainWindow)
+      startDistractionAlerter()
+      startExternalSignalCollection()
+    }
+    backgroundServicesStarted = true
+
+    setTimeout(() => {
+      capture(ANALYTICS_EVENT.TRACKING_ENGINE_HEALTH, {
+        module_source: trackingStatus.moduleSource,
+        status: trackingStatus.moduleSource ? 'ok' : 'error',
+        surface: 'tracking',
+        ...(trackingStatus.loadError ? { failure_kind: classifyFailureKind(trackingStatus.loadError) } : {}),
+      })
+    }, 5_000)
+
+    if (!SMOKE_TEST) {
+      setTimeout(() => {
+        setTimeout(() => finalizePreviousDay(), 0)
+      }, 10_000)
+    }
+  }
+
+  startCaptureServices()
 }
 
 async function backupUserDataForUpdate(): Promise<void> {
@@ -632,12 +649,8 @@ async function shutdownApp(options?: { awaitFinalSync?: boolean; backupBeforeExi
     deferredIntegrationStartup = null
   }
   stopMcpServer()
-  stopTracking()
-  stopFocusCapture()
-  stopWindowsFocusCapture()
-  stopBrowserTracking()
+  stopCaptureServices()
   stopSync()
-  stopProcessMonitor()
   stopAIUsageRetentionSchedule()
   unregisterCommandPaletteShortcut()
 
@@ -906,13 +919,6 @@ ipcMain.handle(IPC.APP.RELAUNCH, async () => {
 })
 
 ipcMain.handle(IPC.APP.COMPLETE_ONBOARDING, async () => {
-  // Completing onboarding through any flow (including legacy paths that never
-  // hit the explicit consent call) is a consent act — record it rather than
-  // leaving a completed install gated off. Explicit decisions are never
-  // overwritten here.
-  if (getSettings().captureConsent.status === 'unset') {
-    await setSettings({ captureConsent: grantedCaptureConsent(Date.now()) })
-  }
   ensureTray()
   startBackgroundServices()
 })
@@ -929,21 +935,8 @@ ipcMain.handle(IPC.APP.SET_CAPTURE_CONSENT, async (_e, granted: unknown) => {
   })
   if (decision) {
     startBackgroundServices()
-    // Re-grant after services already started once (decline→grant, policy
-    // re-consent): startBackgroundServices is a one-shot, so restart the
-    // capture adapters directly — each start is idempotent.
-    if (backgroundServicesStarted && !SMOKE_TEST && !REAL_DAY_HARNESS && shouldStartTrackingForSettings(getSettings())) {
-      startTracking()
-      if (process.platform === 'darwin') startFocusCapture()
-      if (process.platform === 'win32') startWindowsFocusCapture()
-      startBrowserTracking()
-    }
   } else {
-    stopTracking()
-    stopFocusCapture()
-    stopWindowsFocusCapture()
-    stopBrowserTracking()
-    stopProcessMonitor()
+    stopCaptureServices()
   }
   return getSettings().captureConsent
 })
