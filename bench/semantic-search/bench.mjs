@@ -1,58 +1,40 @@
-// DEV-179 — choose the local semantic search engine.
-//
-// Benchmarks small local sentence-embedding models (MiniLM/bge-small class,
-// running on the ONNX runtime via transformers.js — plain Node, no Python,
-// Electron-compatible) and a local vector index (sqlite-vec vs a brute-force
-// Float32 scan) over a synthetic year of memory records.
-//
-// Evidence collected, per docs/TO-DO.md:
-//   - index build time for a representative year of memory records
-//   - query latency against the memory spec's 1-second budget
-//   - resident memory
-//   - CPU cost
-// Plus a small vague-memory recall probe so the model choice is grounded in
-// retrieval quality, not just speed.
-//
-// The dataset is generated deterministically (seeded PRNG); model weights are
-// fetched once into ./.cache and every later run is fully offline.
-//
-// Usage:  npm run bench          (embeds a subset, extrapolates build time)
-//         npm run bench:full     (embeds the entire synthetic year)
-
+import crypto from 'node:crypto'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
+import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { DatabaseSync } from 'node:sqlite'
+import Database from 'better-sqlite3'
 import * as sqliteVec from 'sqlite-vec'
 import { env, pipeline } from '@huggingface/transformers'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
-env.cacheDir = path.join(HERE, '.cache')
-
-const FULL = process.argv.includes('--full')
 const DIMS = 384
-const YEAR_RECORDS = 109_500 // 300 memory records/day × 365 days
-const EMBED_SUBSET = FULL ? YEAR_RECORDS : 8_192
+const RECORDS_PER_DAY = 300
+const YEAR_RECORDS = RECORDS_PER_DAY * 365
+const SMOKE_RECORDS = 8_192
+const EMBED_BATCH_SIZE = 32
+const COMMIT_BATCH_SIZE = 512
 const QUERY_RUNS = 50
 const TOP_K = 10
+const BGE_QUERY_PREFIX = 'Represent this sentence for searching relevant passages: '
 
-const MODELS = [
-  { id: 'Xenova/all-MiniLM-L6-v2', label: 'all-MiniLM-L6-v2 (q8)' },
-  { id: 'Xenova/bge-small-en-v1.5', label: 'bge-small-en-v1.5 (q8)' },
+export const MODELS = [
+  {
+    key: 'minilm',
+    id: 'Xenova/all-MiniLM-L6-v2',
+    revision: '751bff37182d3f1213fa05d7196b954e230abad9',
+    label: 'all-MiniLM-L6-v2 (q8)',
+    queryPrefix: '',
+  },
+  {
+    key: 'bge',
+    id: 'Xenova/bge-small-en-v1.5',
+    revision: 'ea104dacec62c0de699686887e3f920caeb4f3e3',
+    label: 'bge-small-en-v1.5 (q8, recommended query instruction)',
+    queryPrefix: BGE_QUERY_PREFIX,
+  },
 ]
-
-// ── Deterministic synthetic memory records ──────────────────────────────────
-
-function mulberry32(seed) {
-  let a = seed >>> 0
-  return () => {
-    a |= 0
-    a = (a + 0x6d2b79f5) | 0
-    let t = Math.imul(a ^ (a >>> 15), 1 | a)
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-  }
-}
 
 const TOPICS = [
   'quarterly budget review', 'kitchen renovation ideas', 'flight to Kigali',
@@ -68,26 +50,7 @@ const APPS = ['Google Chrome', 'Code', 'Slack', 'Notion', 'Figma', 'Terminal', '
 const DOMAINS = ['github.com', 'stackoverflow.com', 'nytimes.com', 'amazon.com', 'youtube.com', 'docs.google.com', 'linear.app', 'bestbuy.com', 'airbnb.com', 'wikipedia.org']
 const KINDS = ['page', 'file', 'meeting', 'block']
 
-function syntheticRecord(rng, index) {
-  const kind = KINDS[Math.floor(rng() * KINDS.length)]
-  const topic = TOPICS[Math.floor(rng() * TOPICS.length)]
-  const day = 1 + Math.floor(index / 300)
-  switch (kind) {
-    case 'page':
-      return `Visited page: ${topic} — ${DOMAINS[Math.floor(rng() * DOMAINS.length)]}, day ${day}`
-    case 'file':
-      return `Edited file: ${topic.replaceAll(' ', '-')}-v${1 + Math.floor(rng() * 9)}.md in ${APPS[Math.floor(rng() * APPS.length)]}, day ${day}`
-    case 'meeting':
-      return `Meeting: ${topic} sync with ${['Ana', 'Bo', 'Chris', 'Dee'][Math.floor(rng() * 4)]}, day ${day}`
-    default:
-      return `Work block: ${topic} in ${APPS[Math.floor(rng() * APPS.length)]}, day ${day}`
-  }
-}
-
-// Vague-memory probes: the query deliberately avoids the record's wording so
-// lexical overlap cannot answer it — this is exactly the gap semantic search
-// exists to close ("the TV page with the best discount").
-const PROBES = [
+export const PROBES = [
   { query: 'the TV page with the best discount', target: 'Visited page: 55-inch OLED television deals and markdowns — bestbuy.com, day 12' },
   { query: 'that article about sleeping better', target: 'Visited page: improving rest quality and nighttime routines — nytimes.com, day 40' },
   { query: 'the doc where we planned the offsite', target: 'Edited file: team-retreat-agenda-v2.md in Notion, day 55' },
@@ -114,26 +77,55 @@ const PROBES = [
   { query: 'the call where we picked the launch date', target: 'Meeting: release timing decision with Ana, day 359' },
 ]
 
-function buildCorpus() {
-  const rng = mulberry32(0xdaa11e5)
-  const records = Array.from({ length: YEAR_RECORDS }, (_, i) => syntheticRecord(rng, i))
-  // Plant the probe targets at deterministic positions inside the embedded subset.
-  const step = Math.floor(EMBED_SUBSET / (PROBES.length + 1))
-  PROBES.forEach((probe, i) => {
-    records[(i + 1) * step] = probe.target
-  })
-  return records
+function mulberry32(seed) {
+  let a = seed >>> 0
+  return () => {
+    a |= 0
+    a = (a + 0x6d2b79f5) | 0
+    let t = Math.imul(a ^ (a >>> 15), 1 | a)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
 }
 
-// ── Measurement helpers ─────────────────────────────────────────────────────
+function syntheticRecord(rng, index) {
+  const kind = KINDS[Math.floor(rng() * KINDS.length)]
+  const topic = TOPICS[Math.floor(rng() * TOPICS.length)]
+  const day = 1 + Math.floor(index / RECORDS_PER_DAY)
+  switch (kind) {
+    case 'page':
+      return `Visited page: ${topic} — ${DOMAINS[Math.floor(rng() * DOMAINS.length)]}, day ${day}`
+    case 'file':
+      return `Edited file: ${topic.replaceAll(' ', '-')}-v${1 + Math.floor(rng() * 9)}.md in ${APPS[Math.floor(rng() * APPS.length)]}, day ${day}`
+    case 'meeting':
+      return `Meeting: ${topic} sync with ${['Ana', 'Bo', 'Chris', 'Dee'][Math.floor(rng() * 4)]}, day ${day}`
+    default:
+      return `Work block: ${topic} in ${APPS[Math.floor(rng() * APPS.length)]}, day ${day}`
+  }
+}
+
+export function probeRows(recordCount) {
+  const step = Math.floor(recordCount / (PROBES.length + 1))
+  return PROBES.map((_, index) => (index + 1) * step)
+}
+
+export function buildCorpus(recordCount) {
+  const rng = mulberry32(0xdaa11e5)
+  const records = Array.from({ length: recordCount }, (_, index) => syntheticRecord(rng, index))
+  const rows = probeRows(recordCount)
+  PROBES.forEach((probe, index) => {
+    records[rows[index]] = probe.target
+  })
+  return { records, probeRows: rows }
+}
 
 function nowMs() {
   return performance.now()
 }
 
 function cpuSeconds(since) {
-  const u = process.cpuUsage(since)
-  return (u.user + u.system) / 1e6
+  const usage = process.cpuUsage(since)
+  return (usage.user + usage.system) / 1e6
 }
 
 function mb(bytes) {
@@ -146,174 +138,336 @@ function percentile(sorted, p) {
 
 function summarize(latencies) {
   const sorted = [...latencies].sort((a, b) => a - b)
-  return { p50: percentile(sorted, 0.5), p95: percentile(sorted, 0.95), max: sorted[sorted.length - 1] }
-}
-
-// ── Embedding ───────────────────────────────────────────────────────────────
-
-async function embedBatched(extractor, texts, batchSize = 32) {
-  const out = new Float32Array(texts.length * DIMS)
-  for (let start = 0; start < texts.length; start += batchSize) {
-    const batch = texts.slice(start, start + batchSize)
-    const tensor = await extractor(batch, { pooling: 'mean', normalize: true })
-    out.set(tensor.data, start * DIMS)
-    tensor.dispose?.()
+  return {
+    p50: Number(percentile(sorted, 0.5).toFixed(2)),
+    p95: Number(percentile(sorted, 0.95).toFixed(2)),
+    max: Number(sorted[sorted.length - 1].toFixed(2)),
   }
-  return out
 }
 
-function randomUnitVector(rng, target, offset) {
-  let norm = 0
-  for (let d = 0; d < DIMS; d += 1) {
-    const v = rng() * 2 - 1
-    target[offset + d] = v
-    norm += v * v
+function rssTracker() {
+  const baselineMb = mb(process.memoryUsage().rss)
+  let peakMb = baselineMb
+  return {
+    sample() {
+      peakMb = Math.max(peakMb, mb(process.memoryUsage().rss))
+    },
+    result() {
+      this.sample()
+      peakMb = Math.max(peakMb, Math.ceil(process.resourceUsage().maxRSS / 1024))
+      return {
+        baselineMb,
+        peakMb,
+        increaseMb: peakMb - baselineMb,
+        peakMethod: 'process.resourceUsage().maxRSS',
+      }
+    },
   }
-  norm = Math.sqrt(norm) || 1
-  for (let d = 0; d < DIMS; d += 1) target[offset + d] /= norm
 }
 
-// ── Indexes ─────────────────────────────────────────────────────────────────
-
-function bruteForceTopK(matrix, count, query, k) {
-  const hits = []
-  for (let row = 0; row < count; row += 1) {
-    let dot = 0
-    const base = row * DIMS
-    for (let d = 0; d < DIMS; d += 1) dot += matrix[base + d] * query[d]
-    if (hits.length < k) {
-      hits.push({ row, score: dot })
-      if (hits.length === k) hits.sort((a, b) => a.score - b.score)
-    } else if (dot > hits[0].score) {
-      hits[0] = { row, score: dot }
-      hits.sort((a, b) => a.score - b.score)
-    }
-  }
-  return hits.sort((a, b) => b.score - a.score)
+function vectorBlob(vector) {
+  return Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength)
 }
 
-function buildSqliteVecIndex(matrix, count) {
-  const db = new DatabaseSync(':memory:', { allowExtension: true })
-  db.enableLoadExtension(true)
+export function openVectorDatabase(filePath) {
+  const db = new Database(filePath)
   db.loadExtension(sqliteVec.getLoadablePath())
-  db.enableLoadExtension(false)
+  db.pragma('journal_mode = WAL')
+  db.pragma('foreign_keys = ON')
+  db.pragma('busy_timeout = 5000')
+  db.pragma('cache_size = -65536')
+  db.pragma('mmap_size = 536870912')
+  db.pragma('synchronous = NORMAL')
+  return db
+}
+
+function createIndex(db) {
   db.exec(`CREATE VIRTUAL TABLE vec_memory USING vec0(embedding float[${DIMS}] distance_metric=cosine)`)
+}
 
+function powerSnapshot() {
+  if (process.platform !== 'darwin') return { source: 'unknown', percent: null }
+  const result = spawnSync('pmset', ['-g', 'batt'], { encoding: 'utf8' })
+  const output = result.stdout ?? ''
+  const source = output.includes("'Battery Power'") ? 'battery' : output.includes("'AC Power'") ? 'ac' : 'unknown'
+  const percent = Number(output.match(/(\d+)%/)?.[1] ?? NaN)
+  return { source, percent: Number.isFinite(percent) ? percent : null }
+}
+
+function sha256(filePath) {
+  return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex')
+}
+
+function modelFiles(model) {
+  const root = path.join(env.cacheDir, ...model.id.split('/'), model.revision)
+  const relativePaths = ['config.json', 'tokenizer.json', 'tokenizer_config.json', 'onnx/model_quantized.onnx']
+  return relativePaths.map((relativePath) => {
+    const filePath = path.join(root, relativePath)
+    return { path: relativePath, bytes: fs.statSync(filePath).size, sha256: sha256(filePath) }
+  })
+}
+
+async function loadExtractor(model, allowDownload) {
+  return pipeline('feature-extraction', model.id, {
+    dtype: 'q8',
+    revision: model.revision,
+    local_files_only: !allowDownload,
+  })
+}
+
+async function downloadModels() {
+  env.allowRemoteModels = true
+  for (const model of MODELS) {
+    console.log(`Caching ${model.id}@${model.revision}`)
+    const extractor = await loadExtractor(model, true)
+    await extractor.dispose?.()
+  }
+}
+
+async function indexCorpus(extractor, records, db, tracker) {
   const insert = db.prepare('INSERT INTO vec_memory(rowid, embedding) VALUES (?, ?)')
-  const startCpu = process.cpuUsage()
-  const start = nowMs()
-  db.exec('BEGIN')
-  for (let row = 0; row < count; row += 1) {
-    const vector = matrix.subarray(row * DIMS, (row + 1) * DIMS)
-    // node:sqlite binds plain numbers as REAL, which vec0 rejects for rowid.
-    insert.run(BigInt(row), new Uint8Array(vector.buffer, vector.byteOffset, vector.byteLength))
-  }
-  db.exec('COMMIT')
-  return { db, buildMs: nowMs() - start, buildCpuSec: cpuSeconds(startCpu) }
-}
+  const startedAt = nowMs()
+  const cpuStart = process.cpuUsage()
 
-function sqliteVecTopK(db, query, k) {
-  const stmt = db.prepare('SELECT rowid, distance FROM vec_memory WHERE embedding MATCH ? AND k = ? ORDER BY distance')
-  return stmt.all(new Uint8Array(query.buffer, query.byteOffset, query.byteLength), k)
-}
-
-// ── Benchmark ───────────────────────────────────────────────────────────────
-
-async function benchModel(model, records) {
-  console.log(`\n━━ ${model.label} ━━`)
-  const loadStart = nowMs()
-  const extractor = await pipeline('feature-extraction', model.id, { dtype: 'q8' })
-  const loadMs = nowMs() - loadStart
-  console.log(`  model ready in ${Math.round(loadMs)} ms`)
-
-  const subset = records.slice(0, EMBED_SUBSET)
-  const embedCpuStart = process.cpuUsage()
-  const embedStart = nowMs()
-  const realVectors = await embedBatched(extractor, subset)
-  const embedMs = nowMs() - embedStart
-  const embedCpuSec = cpuSeconds(embedCpuStart)
-  const textsPerSec = EMBED_SUBSET / (embedMs / 1000)
-  const fullBuildMin = YEAR_RECORDS / textsPerSec / 60
-  const rssAfterEmbed = process.memoryUsage().rss
-  console.log(`  embedded ${EMBED_SUBSET.toLocaleString()} records in ${(embedMs / 1000).toFixed(1)} s → ${Math.round(textsPerSec)} records/s`)
-  console.log(`  extrapolated full-year (${YEAR_RECORDS.toLocaleString()}) index build: ${fullBuildMin.toFixed(1)} min, CPU ${(embedCpuSec / (EMBED_SUBSET / 1000)).toFixed(2)} s per 1k records`)
-
-  // Fill the remaining rows with seeded random unit vectors so index latency is
-  // measured at true year scale. Latency depends on row count and dimensions,
-  // not vector content; recall probes only ever score against real vectors.
-  const matrix = new Float32Array(YEAR_RECORDS * DIMS)
-  matrix.set(realVectors, 0)
-  const fillerRng = mulberry32(0x5eed + MODELS.indexOf(model))
-  for (let row = EMBED_SUBSET; row < YEAR_RECORDS; row += 1) randomUnitVector(fillerRng, matrix, row * DIMS)
-
-  const sqlite = buildSqliteVecIndex(matrix, YEAR_RECORDS)
-  console.log(`  sqlite-vec insert of ${YEAR_RECORDS.toLocaleString()} vectors: ${(sqlite.buildMs / 1000).toFixed(1)} s (CPU ${sqlite.buildCpuSec.toFixed(1)} s)`)
-
-  const queryTexts = PROBES.map((p) => p.query)
-  while (queryTexts.length < QUERY_RUNS) queryTexts.push(`what was I doing about ${TOPICS[queryTexts.length % TOPICS.length]}`)
-
-  const embedLat = []
-  const bruteLat = []
-  const vecLat = []
-  let recallHits = 0
-
-  for (const [i, text] of queryTexts.entries()) {
-    const t0 = nowMs()
-    const tensor = await extractor(text, { pooling: 'mean', normalize: true })
-    const queryVec = Float32Array.from(tensor.data)
-    tensor.dispose?.()
-    const t1 = nowMs()
-    const bruteHits = bruteForceTopK(matrix, YEAR_RECORDS, queryVec, TOP_K)
-    const t2 = nowMs()
-    sqliteVecTopK(sqlite.db, queryVec, TOP_K)
-    const t3 = nowMs()
-    embedLat.push(t1 - t0)
-    bruteLat.push(t2 - t1)
-    vecLat.push(t3 - t2)
-
-    if (i < PROBES.length) {
-      const step = Math.floor(EMBED_SUBSET / (PROBES.length + 1))
-      const targetRow = (i + 1) * step
-      if (bruteHits.some((hit) => hit.row === targetRow)) recallHits += 1
+  for (let commitStart = 0; commitStart < records.length; commitStart += COMMIT_BATCH_SIZE) {
+    const commitEnd = Math.min(records.length, commitStart + COMMIT_BATCH_SIZE)
+    db.exec('BEGIN')
+    try {
+      for (let start = commitStart; start < commitEnd; start += EMBED_BATCH_SIZE) {
+        const end = Math.min(commitEnd, start + EMBED_BATCH_SIZE)
+        const tensor = await extractor(records.slice(start, end), { pooling: 'mean', normalize: true })
+        for (let row = start; row < end; row += 1) {
+          const offset = (row - start) * DIMS
+          insert.run(BigInt(row), vectorBlob(tensor.data.subarray(offset, offset + DIMS)))
+        }
+        tensor.dispose?.()
+        tracker.sample()
+      }
+      db.exec('COMMIT')
+    } catch (error) {
+      db.exec('ROLLBACK')
+      throw error
     }
+    tracker.sample()
   }
 
-  sqlite.db.close()
-  const result = {
-    model: model.label,
-    loadMs: Math.round(loadMs),
-    recordsPerSec: Math.round(textsPerSec),
-    fullYearBuildMin: Number(fullBuildMin.toFixed(1)),
-    embedCpuSecPer1k: Number((embedCpuSec / (EMBED_SUBSET / 1000)).toFixed(2)),
-    rssAfterEmbedMb: mb(rssAfterEmbed),
-    sqliteVecInsertSec: Number((sqlite.buildMs / 1000).toFixed(1)),
-    queryEmbedMs: summarize(embedLat),
-    bruteForceSearchMs: summarize(bruteLat),
-    sqliteVecSearchMs: summarize(vecLat),
-    endToEndP95Ms: Math.round(summarize(embedLat.map((v, i) => v + vecLat[i])).p95),
-    recallAt10: `${recallHits}/${PROBES.length}`,
+  const wallMs = nowMs() - startedAt
+  const cpuSec = cpuSeconds(cpuStart)
+  return {
+    wallSec: Number((wallMs / 1000).toFixed(2)),
+    recordsPerSec: Math.round(records.length / (wallMs / 1000)),
+    cpuSec: Number(cpuSec.toFixed(2)),
+    cpuSecPer1k: Number((cpuSec / (records.length / 1000)).toFixed(2)),
   }
-  console.log(`  query embed p50/p95: ${result.queryEmbedMs.p50.toFixed(1)}/${result.queryEmbedMs.p95.toFixed(1)} ms`)
-  console.log(`  search p50/p95 — brute: ${result.bruteForceSearchMs.p50.toFixed(1)}/${result.bruteForceSearchMs.p95.toFixed(1)} ms, sqlite-vec: ${result.sqliteVecSearchMs.p50.toFixed(1)}/${result.sqliteVecSearchMs.p95.toFixed(1)} ms`)
-  console.log(`  end-to-end p95 (embed + sqlite-vec): ${result.endToEndP95Ms} ms — budget 1000 ms`)
-  console.log(`  vague-memory recall@${TOP_K}: ${result.recallAt10}`)
-  return result
 }
 
-const records = buildCorpus()
-console.log(`Synthetic year: ${YEAR_RECORDS.toLocaleString()} memory records (embedding ${EMBED_SUBSET.toLocaleString()} for real${FULL ? '' : ', extrapolating the rest'}), ${PROBES.length} vague-memory probes, ${QUERY_RUNS} query runs, top-${TOP_K}.`)
+async function queryIndex(extractor, model, db, targetRows, tracker) {
+  const statement = db.prepare('SELECT rowid, distance FROM vec_memory WHERE embedding MATCH ? AND k = ? ORDER BY distance')
+  const queryTexts = PROBES.map((probe) => probe.query)
+  while (queryTexts.length < QUERY_RUNS) {
+    queryTexts.push(`what was I doing about ${TOPICS[queryTexts.length % TOPICS.length]}`)
+  }
 
-const results = []
-for (const model of MODELS) results.push(await benchModel(model, records))
+  const embedLatencies = []
+  const searchLatencies = []
+  const endToEndLatencies = []
+  let recallHits = 0
+  let validResultSets = 0
 
-const outPath = path.join(HERE, 'results.json')
-fs.writeFileSync(outPath, JSON.stringify({
-  generatedAt: new Date().toISOString(),
-  node: process.version,
-  platform: `${process.platform}/${process.arch}`,
-  yearRecords: YEAR_RECORDS,
-  embeddedSubset: EMBED_SUBSET,
-  dims: DIMS,
-  results,
-}, null, 2))
-console.log(`\nWrote ${outPath}`)
+  for (const [index, text] of queryTexts.entries()) {
+    const startedAt = nowMs()
+    const tensor = await extractor(`${model.queryPrefix}${text}`, { pooling: 'mean', normalize: true })
+    const embeddedAt = nowMs()
+    const hits = statement.all(vectorBlob(tensor.data), TOP_K)
+    const completedAt = nowMs()
+    tensor.dispose?.()
+    tracker.sample()
+
+    embedLatencies.push(embeddedAt - startedAt)
+    searchLatencies.push(completedAt - embeddedAt)
+    endToEndLatencies.push(completedAt - startedAt)
+
+    const valid = hits.length === TOP_K
+      && hits.every((hit, hitIndex) => Number.isInteger(hit.rowid)
+        && Number.isFinite(hit.distance)
+        && (hitIndex === 0 || hit.distance >= hits[hitIndex - 1].distance))
+    if (valid) validResultSets += 1
+    if (index < PROBES.length && hits.some((hit) => hit.rowid === targetRows[index])) recallHits += 1
+  }
+
+  if (validResultSets !== queryTexts.length) {
+    throw new Error(`sqlite-vec returned ${validResultSets}/${queryTexts.length} valid ordered top-${TOP_K} result sets`)
+  }
+
+  return {
+    queryRuns: queryTexts.length,
+    queryEmbedMs: summarize(embedLatencies),
+    sqliteVecSearchMs: summarize(searchLatencies),
+    endToEndMs: summarize(endToEndLatencies),
+    firstQueryAfterReopenMs: Number(endToEndLatencies[0].toFixed(2)),
+    sqliteRecallAt10: `${recallHits}/${PROBES.length}`,
+    validResultSets,
+  }
+}
+
+async function benchModel(model, recordCount) {
+  env.cacheDir = path.join(HERE, '.cache')
+  env.allowRemoteModels = false
+  const tracker = rssTracker()
+  const overallCpuStart = process.cpuUsage()
+  const powerStart = powerSnapshot()
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `daylens-semantic-${model.key}-`))
+  const databasePath = path.join(tempDir, 'semantic.sqlite')
+  const { records, probeRows: targetRows } = buildCorpus(recordCount)
+  console.error(`\n━━ ${model.label} · ${recordCount.toLocaleString()} records ━━`)
+
+  try {
+    const loadStartedAt = nowMs()
+    const extractor = await loadExtractor(model, false)
+    const loadMs = Math.round(nowMs() - loadStartedAt)
+    tracker.sample()
+
+    let db = openVectorDatabase(databasePath)
+    createIndex(db)
+    const sqliteVersion = db.prepare('SELECT sqlite_version() AS version').get().version
+    const sqliteVecVersion = db.prepare('SELECT vec_version() AS version').get().version
+    const build = await indexCorpus(extractor, records, db, tracker)
+    db.pragma('wal_checkpoint(TRUNCATE)')
+    db.close()
+    tracker.sample()
+
+    const databaseMb = Number((fs.statSync(databasePath).size / 1024 / 1024).toFixed(2))
+    db = openVectorDatabase(databasePath)
+    const query = await queryIndex(extractor, model, db, targetRows, tracker)
+    db.close()
+    await extractor.dispose?.()
+    tracker.sample()
+
+    const result = {
+      model: model.label,
+      modelId: model.id,
+      modelRevision: model.revision,
+      queryInstruction: model.queryPrefix || null,
+      modelFiles: modelFiles(model),
+      loadMs,
+      build,
+      memory: tracker.result(),
+      databaseMb,
+      sqliteVersion,
+      sqliteVecVersion,
+      query,
+      cpuSec: Number(cpuSeconds(overallCpuStart).toFixed(2)),
+      powerStart,
+      powerEnd: powerSnapshot(),
+    }
+    console.error(`  build ${build.wallSec}s · ${build.recordsPerSec} records/s · CPU ${build.cpuSecPer1k}s/1k`)
+    console.error(`  RSS ${result.memory.peakMb} MB peak (${result.memory.increaseMb} MB over worker baseline) · DB ${databaseMb} MB`)
+    console.error(`  query p95 ${query.endToEndMs.p95} ms · first after reopen ${query.firstQueryAfterReopenMs} ms · sqlite recall ${query.sqliteRecallAt10}`)
+    return result
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  }
+}
+
+function packageVersion(name) {
+  const packagePath = path.join(HERE, 'node_modules', ...name.split('/'), 'package.json')
+  return JSON.parse(fs.readFileSync(packagePath, 'utf8')).version
+}
+
+function runtimeMetadata() {
+  return {
+    electron: process.versions.electron ?? null,
+    node: process.version,
+    platform: process.platform,
+    arch: process.arch,
+    cpu: os.cpus()[0]?.model ?? 'unknown',
+    logicalCpus: os.cpus().length,
+    memoryMb: mb(os.totalmem()),
+    dependencies: {
+      transformersJs: packageVersion('@huggingface/transformers'),
+      betterSqlite3: packageVersion('better-sqlite3'),
+      sqliteVec: packageVersion('sqlite-vec'),
+    },
+  }
+}
+
+async function runParent(full) {
+  const recordCount = full ? YEAR_RECORDS : SMOKE_RECORDS
+  const mode = full ? 'full' : 'smoke'
+  const outputPath = path.join(HERE, full ? 'results.json' : 'smoke-results.json')
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'daylens-semantic-results-'))
+  const powerStart = powerSnapshot()
+  const results = []
+
+  try {
+    for (const model of MODELS) {
+      const modelOutput = path.join(tempDir, `${model.key}.json`)
+      const child = spawnSync(process.execPath, [fileURLToPath(import.meta.url), '--worker', model.key, `--records=${recordCount}`, `--worker-output=${modelOutput}`], {
+        cwd: HERE,
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+        stdio: 'inherit',
+      })
+      if (child.status !== 0) throw new Error(`${model.label} worker exited with ${child.status}`)
+      results.push(JSON.parse(fs.readFileSync(modelOutput, 'utf8')))
+    }
+
+    const powerEnd = powerSnapshot()
+    const output = {
+      schemaVersion: 2,
+      generatedAt: new Date().toISOString(),
+      mode,
+      decisionEligible: full,
+      offlineEnforced: true,
+      corpus: {
+        seed: '0x0daa11e5',
+        records: recordCount,
+        recordsPerDay: RECORDS_PER_DAY,
+        days: full ? 365 : null,
+        dims: DIMS,
+        probes: PROBES.length,
+        queryRuns: QUERY_RUNS,
+        topK: TOP_K,
+        basis: '300 records/day matches the existing heavy-year query fixture website-visit volume; record content is synthetic.',
+      },
+      runtime: runtimeMetadata(),
+      powerStart,
+      powerEnd,
+      batteryRun: powerStart.source === 'battery' && powerEnd.source === 'battery',
+      results,
+    }
+    fs.writeFileSync(outputPath, `${JSON.stringify(output, null, 2)}\n`)
+    console.log(`\nWrote ${outputPath}`)
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  }
+}
+
+async function main() {
+  const workerIndex = process.argv.indexOf('--worker')
+  if (workerIndex !== -1) {
+    const model = MODELS.find((candidate) => candidate.key === process.argv[workerIndex + 1])
+    const recordCount = Number(process.argv.find((arg) => arg.startsWith('--records='))?.split('=')[1])
+    const outputPath = process.argv.find((arg) => arg.startsWith('--worker-output='))?.slice('--worker-output='.length)
+    if (!model || !Number.isInteger(recordCount) || recordCount < PROBES.length || !outputPath) {
+      throw new Error('Invalid benchmark worker arguments')
+    }
+    const result = await benchModel(model, recordCount)
+    fs.writeFileSync(outputPath, JSON.stringify(result))
+    return
+  }
+
+  env.cacheDir = path.join(HERE, '.cache')
+  if (process.argv.includes('--download-models')) {
+    await downloadModels()
+    return
+  }
+  await runParent(process.argv.includes('--full'))
+}
+
+const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : ''
+if (invokedPath === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(error)
+    process.exitCode = 1
+  })
+}

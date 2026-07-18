@@ -1,62 +1,191 @@
 {
-  "generatedAt": "2026-07-16T14:55:22.071Z",
-  "node": "v26.4.0",
-  "platform": "darwin/arm64",
-  "yearRecords": 109500,
-  "embeddedSubset": 109500,
-  "dims": 384,
+  "schemaVersion": 2,
+  "generatedAt": "2026-07-18T21:10:34.369Z",
+  "mode": "full",
+  "decisionEligible": true,
+  "offlineEnforced": true,
+  "corpus": {
+    "seed": "0x0daa11e5",
+    "records": 109500,
+    "recordsPerDay": 300,
+    "days": 365,
+    "dims": 384,
+    "probes": 24,
+    "queryRuns": 50,
+    "topK": 10,
+    "basis": "300 records/day matches the existing heavy-year query fixture website-visit volume; record content is synthetic."
+  },
+  "runtime": {
+    "electron": "34.5.8",
+    "node": "v20.19.1",
+    "platform": "darwin",
+    "arch": "arm64",
+    "cpu": "Apple M2 Pro",
+    "logicalCpus": 10,
+    "memoryMb": 16384,
+    "dependencies": {
+      "transformersJs": "3.8.1",
+      "betterSqlite3": "12.8.0",
+      "sqliteVec": "0.1.9"
+    }
+  },
+  "powerStart": {
+    "source": "battery",
+    "percent": 18
+  },
+  "powerEnd": {
+    "source": "battery",
+    "percent": 12
+  },
+  "batteryRun": true,
   "results": [
     {
       "model": "all-MiniLM-L6-v2 (q8)",
-      "loadMs": 100,
-      "recordsPerSec": 1128,
-      "fullYearBuildMin": 1.6,
-      "embedCpuSecPer1k": 3.79,
-      "rssAfterEmbedMb": 198,
-      "sqliteVecInsertSec": 1,
-      "queryEmbedMs": {
-        "p50": 1.9284999999945285,
-        "p95": 7.719874999995227,
-        "max": 28.108500000002095
+      "modelId": "Xenova/all-MiniLM-L6-v2",
+      "modelRevision": "751bff37182d3f1213fa05d7196b954e230abad9",
+      "queryInstruction": null,
+      "modelFiles": [
+        {
+          "path": "config.json",
+          "bytes": 650,
+          "sha256": "7135149f7cffa1a573466c6e4d8423ed73b62fd2332c575bf738a0d033f70df7"
+        },
+        {
+          "path": "tokenizer.json",
+          "bytes": 711661,
+          "sha256": "da0e79933b9ed51798a3ae27893d3c5fa4a201126cef75586296df9b4d2c62a0"
+        },
+        {
+          "path": "tokenizer_config.json",
+          "bytes": 366,
+          "sha256": "9261e7d79b44c8195c1cada2b453e55b00aeb81e907a6664974b4d7776172ab3"
+        },
+        {
+          "path": "onnx/model_quantized.onnx",
+          "bytes": 22972370,
+          "sha256": "afdb6f1a0e45b715d0bb9b11772f032c399babd23bfc31fed1c170afc848bdb1"
+        }
+      ],
+      "loadMs": 193,
+      "build": {
+        "wallSec": 128.59,
+        "recordsPerSec": 852,
+        "cpuSec": 551.67,
+        "cpuSecPer1k": 5.04
       },
-      "bruteForceSearchMs": {
-        "p50": 39.99445800000103,
-        "p95": 71.96125000000757,
-        "max": 133.91295899999386
+      "memory": {
+        "baselineMb": 82,
+        "peakMb": 357,
+        "increaseMb": 275,
+        "peakMethod": "process.resourceUsage().maxRSS"
       },
-      "sqliteVecSearchMs": {
-        "p50": 44.6840830000001,
-        "p95": 71.92545799999789,
-        "max": 99.69029100000625
+      "databaseMb": 163.07,
+      "sqliteVersion": "3.51.3",
+      "sqliteVecVersion": "v0.1.9",
+      "query": {
+        "queryRuns": 50,
+        "queryEmbedMs": {
+          "p50": 2.09,
+          "p95": 3.13,
+          "max": 4.19
+        },
+        "sqliteVecSearchMs": {
+          "p50": 57.04,
+          "p95": 60.35,
+          "max": 260.15
+        },
+        "endToEndMs": {
+          "p50": 59.12,
+          "p95": 62.3,
+          "max": 261.96
+        },
+        "firstQueryAfterReopenMs": 261.96,
+        "sqliteRecallAt10": "17/24",
+        "validResultSets": 50
       },
-      "endToEndP95Ms": 76,
-      "recallAt10": "17/24"
+      "cpuSec": 556.6,
+      "powerStart": {
+        "source": "battery",
+        "percent": 18
+      },
+      "powerEnd": {
+        "source": "battery",
+        "percent": 16
+      }
     },
     {
-      "model": "bge-small-en-v1.5 (q8)",
-      "loadMs": 121,
-      "recordsPerSec": 552,
-      "fullYearBuildMin": 3.3,
-      "embedCpuSecPer1k": 7.78,
-      "rssAfterEmbedMb": 150,
-      "sqliteVecInsertSec": 1.2,
-      "queryEmbedMs": {
-        "p50": 2.7276670000283048,
-        "p95": 6.219457999977749,
-        "max": 10.711874999979045
+      "model": "bge-small-en-v1.5 (q8, recommended query instruction)",
+      "modelId": "Xenova/bge-small-en-v1.5",
+      "modelRevision": "ea104dacec62c0de699686887e3f920caeb4f3e3",
+      "queryInstruction": "Represent this sentence for searching relevant passages: ",
+      "modelFiles": [
+        {
+          "path": "config.json",
+          "bytes": 683,
+          "sha256": "fa73f90bf92c8cace1fbcb709626306f2bdbc9ea3e5b5f94b440df9b6aa56350"
+        },
+        {
+          "path": "tokenizer.json",
+          "bytes": 711396,
+          "sha256": "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66"
+        },
+        {
+          "path": "tokenizer_config.json",
+          "bytes": 366,
+          "sha256": "9261e7d79b44c8195c1cada2b453e55b00aeb81e907a6664974b4d7776172ab3"
+        },
+        {
+          "path": "onnx/model_quantized.onnx",
+          "bytes": 34014426,
+          "sha256": "6c9c6101a956d62dfb5e7190c538226c0c5bb9cb27b651234b6df063ee7dbfe4"
+        }
+      ],
+      "loadMs": 195,
+      "build": {
+        "wallSec": 271.57,
+        "recordsPerSec": 403,
+        "cpuSec": 1038.41,
+        "cpuSecPer1k": 9.48
       },
-      "bruteForceSearchMs": {
-        "p50": 38.12933400005568,
-        "p95": 59.43300000001909,
-        "max": 67.16345799999544
+      "memory": {
+        "baselineMb": 82,
+        "peakMb": 368,
+        "increaseMb": 286,
+        "peakMethod": "process.resourceUsage().maxRSS"
       },
-      "sqliteVecSearchMs": {
-        "p50": 42.74516599997878,
-        "p95": 60.15454200003296,
-        "max": 80.28733299998567
+      "databaseMb": 163.07,
+      "sqliteVersion": "3.51.3",
+      "sqliteVecVersion": "v0.1.9",
+      "query": {
+        "queryRuns": 50,
+        "queryEmbedMs": {
+          "p50": 9.27,
+          "p95": 34.7,
+          "max": 75.74
+        },
+        "sqliteVecSearchMs": {
+          "p50": 69.69,
+          "p95": 200.65,
+          "max": 359.72
+        },
+        "endToEndMs": {
+          "p50": 80.14,
+          "p95": 276.39,
+          "max": 366.52
+        },
+        "firstQueryAfterReopenMs": 366.52,
+        "sqliteRecallAt10": "13/24",
+        "validResultSets": 50
       },
-      "endToEndP95Ms": 63,
-      "recallAt10": "17/24"
+      "cpuSec": 1044.98,
+      "powerStart": {
+        "source": "battery",
+        "percent": 16
+      },
+      "powerEnd": {
+        "source": "battery",
+        "percent": 12
+      }
     }
   ]
 }
