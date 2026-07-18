@@ -120,7 +120,7 @@ import { prewarmBrowserRegistry } from './services/browserRegistry'
 import { startSync, stopSync, finalizePreviousDay, syncNowForQuit } from './services/syncUploader'
 import { backfillWindowsHistory } from './services/windowsHistory'
 import { createTray, destroyTray, getTrayDiagnostics, hasTray } from './tray'
-import { getUpdaterState, initUpdater, isInstallingUpdate, registerUpdaterShutdown, getUpdateAvailable } from './services/updater'
+import { cancelPendingAutoInstall, getUpdaterState, initUpdater, isInstallingUpdate, registerUpdaterShutdown, getUpdateAvailable } from './services/updater'
 import { setDailySummaryNotificationWindow, startDailySummaryNotifier, triggerDailySummaryChecks } from './services/dailySummaryNotifier'
 import { fireTestDailyNotification } from './services/notificationHarness'
 import { consumePendingNavigationRoute } from './services/dailySummaryNavigation'
@@ -128,6 +128,7 @@ import { registerCommandPaletteShortcut, unregisterCommandPaletteShortcut } from
 import { registerDistractionAlerterHandlers, resetDistractionStateOnResume, setDistractionAlertWindow, startDistractionAlerter } from './services/distractionAlerter'
 import { startExternalSignalCollection } from './services/externalSignals'
 import { getLinuxDesktopDiagnostics, syncLinuxLaunchOnLogin } from './services/linuxDesktop'
+import { performUninstallCleanup } from './services/uninstallCleanup'
 import { detectCLITools } from './jobs/aiService'
 import { stopProcessMonitor } from './services/processMonitor'
 import { reconcileOnboardingState } from './services/onboarding'
@@ -902,6 +903,46 @@ ipcMain.handle(IPC.APP.RELAUNCH, async () => {
   isQuitting = true
   app.relaunch()
   app.exit(0)
+})
+
+ipcMain.handle(IPC.APP.RESET_AND_UNINSTALL, async (event): Promise<{ started: boolean }> => {
+  if (REAL_DAY_HARNESS) return { started: false }
+  const window = BrowserWindow.fromWebContents(event.sender)
+  const ask = async (options: Electron.MessageBoxOptions) => (
+    window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options)
+  )
+
+  const { response } = await ask({
+    type: 'warning',
+    title: 'Reset and uninstall Daylens',
+    message: 'Remove Daylens from this computer?',
+    detail: 'Daylens will stop launching at login and quit. Choose what happens to your local data — the timeline database and settings on this machine.',
+    buttons: ['Delete local data', 'Keep local data', 'Cancel'],
+    defaultId: 1,
+    cancelId: 2,
+  })
+  if (response === 2) return { started: false }
+  const deleteLocalData = response === 0
+
+  if (deleteLocalData) {
+    const confirm = await ask({
+      type: 'warning',
+      title: 'Delete local data',
+      message: 'Permanently delete your local Daylens data?',
+      detail: 'Your timeline database, settings, and stored API keys on this computer will be deleted. This cannot be undone.',
+      buttons: ['Delete', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+    })
+    if (confirm.response !== 0) return { started: false }
+  }
+
+  isQuitting = true
+  cancelPendingAutoInstall()
+  await shutdownApp()
+  await performUninstallCleanup({ deleteLocalData })
+  app.exit(0)
+  return { started: true }
 })
 
 ipcMain.handle(IPC.APP.COMPLETE_ONBOARDING, async () => {
