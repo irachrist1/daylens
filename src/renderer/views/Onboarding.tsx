@@ -1229,10 +1229,13 @@ export default function Onboarding({
     void consentAndLeaveWhy()
   }
 
-  function skipWhy() {
-    void persistOnboarding(isMac ? 'permission' : 'proof', {
-      proofState: isMac ? 'idle' : 'collecting',
-    })
+  async function skipWhy() {
+    try {
+      await ipc.app.setCaptureConsent(false)
+      await persistOnboarding('tour', { proofState: 'idle' })
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : String(error))
+    }
   }
 
   async function continueFromProof() {
@@ -1476,7 +1479,7 @@ export default function Onboarding({
             centered
             contentKey={`why-${beat.scene}`}
             primary={{ label: last ? "Makes sense, let's go" : 'Continue', onClick: () => advanceWhy() }}
-            skip={{ label: 'Skip', onClick: () => skipWhy() }}
+            skip={{ label: 'Skip', onClick: () => void skipWhy() }}
           >
             <WhyScene scene={beat.scene} name={greetName} />
             <div className="ob-why-dots" aria-hidden="true">

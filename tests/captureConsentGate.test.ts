@@ -264,6 +264,31 @@ test('a stale grant reopens onboarding at the consent explainer', async () => {
   __resetSettings()
 })
 
+test('skipping capture declines consent and bypasses the proof gate', () => {
+  const onboardingSource = fs.readFileSync(
+    new URL('../src/renderer/views/Onboarding.tsx', import.meta.url),
+    'utf8',
+  )
+  assert.match(
+    onboardingSource,
+    /async function skipWhy\(\)[\s\S]*?setCaptureConsent\(false\)[\s\S]*?persistOnboarding\('tour', \{ proofState: 'idle' \}\)/,
+  )
+})
+
+test('external activity signals start and stop with consent-gated capture services', () => {
+  const mainSource = fs.readFileSync(new URL('../src/main/index.ts', import.meta.url), 'utf8')
+  const captureStart = mainSource.slice(
+    mainSource.indexOf('function startCaptureServices'),
+    mainSource.indexOf('function stopCaptureServices'),
+  )
+  const captureStop = mainSource.slice(
+    mainSource.indexOf('function stopCaptureServices'),
+    mainSource.indexOf('function startBackgroundServices'),
+  )
+  assert.match(captureStart, /startExternalSignalCollection\(\)/)
+  assert.match(captureStop, /stopExternalSignalCollection\(\)/)
+})
+
 test('runtime wiring keeps non-capture services alive and history behind consent', () => {
   const indexSource = fs.readFileSync('src/main/index.ts', 'utf8')
   const onboardingSource = fs.readFileSync('src/renderer/views/Onboarding.tsx', 'utf8')
@@ -275,9 +300,9 @@ test('runtime wiring keeps non-capture services alive and history behind consent
   assert.match(indexSource, /function stopCaptureServices\(\)[\s\S]*clearTimeout\(captureAdapterStartupTimer\)/)
   assert.match(indexSource, /function startBackgroundServices\(\)[\s\S]*startSync\(\)[\s\S]*startCaptureServices\(\)/)
 
-  const skipWhy = onboardingSource.split('function skipWhy()')[1]?.split('async function continueFromProof')[0] ?? ''
-  assert.ok(skipWhy.includes('persistOnboarding'))
-  assert.ok(!skipWhy.includes('setCaptureConsent'))
+  const skipWhy = onboardingSource.split('async function skipWhy()')[1]?.split('async function continueFromProof')[0] ?? ''
+  assert.ok(skipWhy.includes('setCaptureConsent(false)'))
+  assert.ok(skipWhy.includes("persistOnboarding('tour'"))
 
   assert.match(browserSource, /Math\.max\(cursorMs, consentFloorMs\(\)\)/)
   assert.match(windowsHistorySource, /Math\.max\(windowFloorSec, consentFloorSec, cursorSec\)/)

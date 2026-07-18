@@ -127,7 +127,7 @@ import { fireTestDailyNotification } from './services/notificationHarness'
 import { consumePendingNavigationRoute } from './services/dailySummaryNavigation'
 import { registerCommandPaletteShortcut, unregisterCommandPaletteShortcut } from './services/commandPalette'
 import { registerDistractionAlerterHandlers, resetDistractionStateOnResume, setDistractionAlertWindow, startDistractionAlerter } from './services/distractionAlerter'
-import { startExternalSignalCollection } from './services/externalSignals'
+import { startExternalSignalCollection, stopExternalSignalCollection } from './services/externalSignals'
 import { getLinuxDesktopDiagnostics, syncLinuxLaunchOnLogin } from './services/linuxDesktop'
 import { performUninstallCleanup } from './services/uninstallCleanup'
 import { detectCLITools } from './jobs/aiService'
@@ -499,6 +499,7 @@ function startCaptureServices(): void {
   if (process.platform === 'darwin') startFocusCapture()
   if (process.platform === 'win32') startWindowsFocusCapture()
   if (!SMOKE_TEST && (process.platform === 'win32' || process.platform === 'linux')) ensureProcessMonitor()
+  if (!SMOKE_TEST) startExternalSignalCollection()
 
   if (!SMOKE_TEST) {
     if (captureAdapterStartupTimer) clearTimeout(captureAdapterStartupTimer)
@@ -523,6 +524,7 @@ function stopCaptureServices(): void {
   stopWindowsFocusCapture()
   stopBrowserTracking()
   stopProcessMonitor()
+  stopExternalSignalCollection()
 }
 
 function startBackgroundServices(): void {
@@ -537,7 +539,6 @@ function startBackgroundServices(): void {
       startDailySummaryNotifier(mainWindow)
       setDistractionAlertWindow(mainWindow)
       startDistractionAlerter()
-      startExternalSignalCollection()
     }
     backgroundServicesStarted = true
 
