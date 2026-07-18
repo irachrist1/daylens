@@ -40,20 +40,28 @@ test('NSIS uninstall hook only deletes data on an explicit choice, never silentl
   assert.match(source, /MessageBox MB_YESNO[^\n]*\/SD IDNO/)
   assert.match(source, /\$\{GetOptions\} \$R0 "\/S" \$R1/)
   assert.match(source, /SetSilent normal/)
-  // The in-app flow's --delete-app-data path also clears the legacy directory.
+  // The in-app flow's --delete-app-data path must remove every data
+  // directory — current, package-name cache, and legacy — itself, not rely
+  // on the built-in block staying in place.
   assert.match(source, /\$\{GetOptions\} \$R0 "--delete-app-data" \$R1/)
-  assert.ok(source.includes('RMDir /r "$APPDATA\\DaylensWindows"'))
+  const deleteBranch = source.split('${GetOptions} $R0 "--delete-app-data" $R1')[1]?.split('${else}')[0] ?? ''
+  for (const dir of ['Daylens', 'daylens', 'DaylensWindows']) {
+    assert.ok(deleteBranch.includes(`RMDir /r "$APPDATA\\${dir}"`), `expected --delete-app-data branch to remove $APPDATA\\${dir}`)
+  }
 })
 
 test('linux after-remove drops per-user autostart entries but never user data', () => {
   const source = fs.readFileSync(path.join(ROOT, 'build/linux/after-remove.sh'), 'utf8')
+  // Exact per-user paths from getent passwd — never a recursive sweep that
+  // could match unrelated files elsewhere in a home directory.
+  assert.match(source, /getent passwd \| cut -d: -f6/)
   assert.ok(
-    source.includes('rm -f /home/*/.config/autostart/daylens.desktop /root/.config/autostart/daylens.desktop'),
-    'after-remove must delete the XDG autostart entry for local users',
+    source.includes('rm -f "$home/.config/autostart/daylens.desktop"'),
+    'after-remove must delete the XDG autostart entry per user home',
   )
   // $VAR form, not ${VAR}: electron-builder treats ${VAR} in maintainer
   // scripts as an fpm macro (see linuxPackageScripts.test.ts).
   assert.ok(source.includes('"$XDG_CONFIG_HOME/autostart/daylens.desktop"'))
-  assert.match(source, /find \/home \/root -type f -path '\*\/autostart\/daylens\.desktop' -delete/)
+  assert.ok(!source.includes('find '), 'after-remove must not sweep filesystems with find')
   assert.ok(!/\.config\/Daylens/.test(source), 'after-remove must not delete user data directories')
 })

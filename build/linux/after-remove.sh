@@ -22,12 +22,20 @@ case "${1:-}" in
     if command -v update-desktop-database >/dev/null 2>&1; then
         update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
     fi
-    # Maintainer scripts remove login entries but never user data.
-    rm -f /home/*/.config/autostart/daylens.desktop /root/.config/autostart/daylens.desktop 2>/dev/null || true
+    # Maintainer scripts remove login entries but never user data. Delete only
+    # the exact autostart path per account home — no recursive sweeps.
+    if command -v getent >/dev/null 2>&1; then
+        getent passwd | cut -d: -f6 | while read -r home; do
+            if [ -n "$home" ] && [ "$home" != "/" ]; then
+                rm -f "$home/.config/autostart/daylens.desktop" 2>/dev/null || true
+            fi
+        done
+    else
+        rm -f /home/*/.config/autostart/daylens.desktop /root/.config/autostart/daylens.desktop 2>/dev/null || true
+    fi
     if [ -n "${XDG_CONFIG_HOME:-}" ]; then
         rm -f "$XDG_CONFIG_HOME/autostart/daylens.desktop" 2>/dev/null || true
     fi
-    find /home /root -type f -path '*/autostart/daylens.desktop' -delete 2>/dev/null || true
     ;;
 esac
 

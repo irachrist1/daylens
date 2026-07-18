@@ -58,13 +58,15 @@ rm -- "$0" 2>/dev/null || true
 
 export function buildWindowsDataCleanupScript(parentPid: number, targets: string[]): string {
   const removals = targets.map((target) => `rd /s /q "${target}"`).join('\r\n')
+  // No delayed expansion: it would corrupt paths containing "!". The goto-based
+  // loop re-expands %tries% on every iteration anyway.
   return [
     '@echo off',
-    'setlocal enabledelayedexpansion',
+    'setlocal',
     'set tries=0',
     ':wait',
     'set /a tries+=1',
-    'if !tries! gtr 120 goto clean',
+    'if %tries% gtr 120 goto clean',
     `tasklist /FI "PID eq ${parentPid}" 2>nul | findstr /r /c:" ${parentPid} " >nul`,
     'if not errorlevel 1 (',
     '  timeout /t 1 /nobreak >nul',

@@ -79,7 +79,9 @@ test('posix cleanup script waits for the parent, removes every target, and self-
 test('windows cleanup script polls the parent pid with a bounded loop and removes each target', () => {
   const script = buildWindowsDataCleanupScript(555, ['C:\\Users\\me\\AppData\\Roaming\\Daylens'])
   assert.match(script, /PID eq 555/)
-  assert.match(script, /if !tries! gtr 120 goto clean/)
+  assert.match(script, /if %tries% gtr 120 goto clean/)
+  // Delayed expansion would corrupt paths containing "!".
+  assert.ok(!script.includes('enabledelayedexpansion'))
   assert.ok(script.includes('rd /s /q "C:\\Users\\me\\AppData\\Roaming\\Daylens"'))
   assert.ok(script.includes('del "%~f0"'))
 })

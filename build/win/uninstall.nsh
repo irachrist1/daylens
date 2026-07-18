@@ -21,8 +21,11 @@
     ${GetParameters} $R0
     ${GetOptions} $R0 "--delete-app-data" $R1
     ${ifNot} ${Errors}
-      # The built-in block already removed $APPDATA\Daylens and $APPDATA\daylens;
-      # also remove the legacy data directory older installs used.
+      # The built-in block also removes $APPDATA\Daylens and $APPDATA\daylens on
+      # --delete-app-data; repeating them here keeps the requested reset complete
+      # even if that block changes, and adds the legacy directory it never knew.
+      RMDir /r "$APPDATA\Daylens"
+      RMDir /r "$APPDATA\daylens"
       RMDir /r "$APPDATA\DaylensWindows"
     ${else}
       ClearErrors
