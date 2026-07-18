@@ -56,7 +56,7 @@ jobs:
       - name: Install Linux packaging dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y rpm libsecret-1-dev libnotify-dev libx11-dev libxss-dev libxtst-dev xvfb xauth x11-utils xdotool dbus-x11 openbox xterm
+          sudo apt-get install -y rpm libsecret-1-dev libnotify-dev libx11-dev libxss-dev libxtst-dev xvfb xauth x11-utils xdotool wmctrl dbus-x11 openbox xterm
           docker --version
 
       - name: Stamp version into package.json
@@ -203,7 +203,7 @@ jobs:
             fedora:40 \
             bash -lc '
               set -euo pipefail
-              dnf install -y nodejs npm findutils grep sed xorg-x11-server-Xvfb xdotool xprop xterm openbox xorg-x11-apps dbus-daemon gtk3 libnotify libXScrnSaver libXtst nss libsecret xdg-utils
+              dnf install -y nodejs npm findutils grep sed xorg-x11-server-Xvfb xdotool wmctrl xprop xmessage xwininfo xterm openbox dbus-daemon gtk3 libnotify libXScrnSaver libXtst nss libsecret xdg-utils
               PACKAGE_FILE="dist-release/Daylens-'"${VERSION}"'.rpm"
               dnf install --nogpgcheck -y "$PACKAGE_FILE"
               PACKAGE_NAME="$(rpm -qp --queryformat "%{NAME}" "$PACKAGE_FILE")"

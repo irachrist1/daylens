@@ -810,7 +810,10 @@ async function performAdhocMacInstall(): Promise<boolean> {
   }
 }
 
-export function initUpdater(win: BrowserWindow): void {
+export function initUpdater(
+  win: BrowserWindow,
+  options: { diagnosticsOnly?: boolean } = {},
+): void {
   _statusWindow = win
   const support = getAutoUpdateSupport()
   _state = {
@@ -821,6 +824,8 @@ export function initUpdater(win: BrowserWindow): void {
     supportMessage: support.message,
   }
   emitState()
+
+  if (options.diagnosticsOnly) return
 
   ipcMain.removeHandler('update:get-status')
   ipcMain.removeHandler('update:check')
