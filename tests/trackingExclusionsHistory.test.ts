@@ -141,7 +141,7 @@ test('excluding a site removes its legacy browser title before projections rebui
       'https://old-forum.example/thread/1', 'old-forum.example/thread/1',
       ?, ?, 1190, 'app.zen-browser.zen:default', 'zen', 'default', 'test'
     )
-  `).run(pageTitle, start + 10_000, BigInt(start + 10_000) * 1_000n)
+  `).run(pageTitle, start, BigInt(start) * 1_000n)
   setTestDb(db)
 
   try {
@@ -187,6 +187,170 @@ test('excluding a site removes its legacy browser title before projections rebui
       SELECT COUNT(*) AS count FROM timeline_blocks
       WHERE label_current = ? OR evidence_summary_json LIKE ?
     `).get(pageTitle, `%${pageTitle}%`) as { count: number }).count, 0)
+  } finally {
+    clearTestDb()
+    db.close()
+  }
+})
+
+test('excluding a site redacts a decorated legacy title from raw history, search, and a cold rebuild', () => {
+  const db = createProductionTestDatabase()
+  const pageTitle = 'Shared dashboard'
+  const windowTitle = `${pageTitle} — Google Chrome`
+  const date = '2026-06-21'
+  const start = new Date(2026, 5, 21, 9, 0, 0, 0).getTime()
+  db.prepare(`
+    INSERT INTO app_sessions (
+      bundle_id, app_name, start_time, end_time, duration_sec, category,
+      is_focused, window_title, raw_app_name, capture_source, capture_version
+    ) VALUES ('com.google.Chrome', 'Google Chrome', ?, ?, 600, 'browsing', 0, ?, 'Google Chrome', 'test', 1)
+  `).run(start, start + 600_000, windowTitle)
+  db.prepare(`
+    INSERT INTO website_visits (
+      domain, page_title, url, normalized_url, page_key,
+      visit_time, visit_time_us, duration_sec, browser_bundle_id,
+      canonical_browser_id, browser_profile_id, source
+    ) VALUES (
+      'private.example', ?, 'https://private.example/dashboard',
+      'https://private.example/dashboard', 'private.example/dashboard',
+      ?, ?, 600, 'com.google.Chrome:Profile 1', 'chrome', 'Profile 1', 'test'
+    )
+  `).run(pageTitle, start, BigInt(start) * 1_000n)
+  setTestDb(db)
+
+  try {
+    assert.equal((db.prepare(`
+      SELECT COUNT(*) AS count FROM app_sessions_fts WHERE app_sessions_fts MATCH ?
+    `).get(`"${pageTitle}"`) as { count: number }).count, 1)
+
+    deleteHistoryForSite({ domain: 'private.example' })
+
+    assert.equal((db.prepare(`
+      SELECT COUNT(*) AS count FROM app_sessions WHERE window_title = ?
+    `).get(windowTitle) as { count: number }).count, 0)
+    assert.equal((db.prepare(`
+      SELECT COUNT(*) AS count FROM app_sessions_fts WHERE app_sessions_fts MATCH ?
+    `).get(`"${pageTitle}"`) as { count: number }).count, 0)
+
+    db.prepare(`DELETE FROM timeline_block_members WHERE block_id IN (
+      SELECT id FROM timeline_blocks WHERE date = ?
+    )`).run(date)
+    db.prepare('DELETE FROM timeline_blocks WHERE date = ?').run(date)
+    db.prepare(`DELETE FROM derived_block_sessions WHERE block_id IN (
+      SELECT id FROM derived_blocks WHERE date = ?
+    )`).run(date)
+    db.prepare('DELETE FROM derived_blocks WHERE date = ?').run(date)
+    db.prepare('DELETE FROM derived_sessions WHERE date = ?').run(date)
+
+    projectDay(db, date, { finalize: true })
+    const rebuilt = materializeTimelineDayProjection(db, date, null)
+    assert.equal(JSON.stringify(rebuilt).includes(pageTitle), false)
+    assert.equal(JSON.stringify(rebuilt).includes(windowTitle), false)
+  } finally {
+    clearTestDb()
+    db.close()
+  }
+})
+
+test('excluding a site preserves the same browser title outside the purged page interval', () => {
+  const db = createProductionTestDatabase()
+  const title = 'Dashboard'
+  const excludedStart = new Date(2026, 5, 22, 9, 0, 0, 0).getTime()
+  const safeStart = excludedStart + 60 * 60_000
+  const insertSession = db.prepare(`
+    INSERT INTO app_sessions (
+      bundle_id, app_name, start_time, end_time, duration_sec, category,
+      is_focused, window_title, raw_app_name, canonical_app_id, app_instance_id,
+      capture_source, capture_version
+    ) VALUES (
+      'com.google.Chrome', 'Google Chrome', @start, @end, 600, 'browsing',
+      0, @title, 'Google Chrome', 'chrome', @profile, 'test', 2
+    )
+  `)
+  insertSession.run({ start: excludedStart, end: excludedStart + 600_000, title, profile: 'com.google.Chrome:Profile 1' })
+  insertSession.run({ start: safeStart, end: safeStart + 600_000, title, profile: 'com.google.Chrome:Profile 2' })
+  const insertVisit = db.prepare(`
+    INSERT INTO website_visits (
+      domain, page_title, url, normalized_url, page_key,
+      visit_time, visit_time_us, duration_sec, browser_bundle_id,
+      canonical_browser_id, browser_profile_id, source
+    ) VALUES (
+      @domain, @title, @url, @url, @url, @start, @startUs, 600,
+      @browserBundleId, 'chrome', @profile, 'test'
+    )
+  `)
+  insertVisit.run({
+    domain: 'private.example',
+    title,
+    url: 'https://private.example/dashboard',
+    start: excludedStart,
+    startUs: BigInt(excludedStart) * 1_000n,
+    browserBundleId: 'com.google.Chrome:Profile 1',
+    profile: 'Profile 1',
+  })
+  insertVisit.run({
+    domain: 'safe.example',
+    title,
+    url: 'https://safe.example/dashboard',
+    start: safeStart,
+    startUs: BigInt(safeStart) * 1_000n,
+    browserBundleId: 'com.google.Chrome:Profile 2',
+    profile: 'Profile 2',
+  })
+  setTestDb(db)
+
+  try {
+    deleteHistoryForSite({ domain: 'private.example' })
+
+    const sessions = db.prepare(`
+      SELECT start_time, window_title FROM app_sessions ORDER BY start_time
+    `).all() as Array<{ start_time: number; window_title: string | null }>
+    assert.deepEqual(sessions, [
+      { start_time: excludedStart, window_title: null },
+      { start_time: safeStart, window_title: title },
+    ])
+    assert.deepEqual(db.prepare(`
+      SELECT domain, page_title FROM website_visits ORDER BY visit_time
+    `).all(), [{ domain: 'safe.example', page_title: title }])
+    assert.equal((db.prepare(`
+      SELECT COUNT(*) AS count FROM app_sessions_fts WHERE app_sessions_fts MATCH ?
+    `).get(title) as { count: number }).count, 1)
+  } finally {
+    clearTestDb()
+    db.close()
+  }
+})
+
+test('excluding a Safari site redacts URL-less focus titles through canonical identity', () => {
+  const db = createProductionTestDatabase()
+  const title = 'Travel plan'
+  const start = new Date(2026, 5, 23, 11, 0, 0, 0).getTime()
+  db.prepare(`
+    INSERT INTO website_visits (
+      domain, page_title, url, normalized_url, page_key,
+      visit_time, visit_time_us, duration_sec, browser_bundle_id,
+      canonical_browser_id, browser_profile_id, source
+    ) VALUES (
+      'private.example', ?, 'https://private.example/travel',
+      'https://private.example/travel', 'private.example/travel',
+      ?, ?, 600, '/Applications/Safari.app/Contents/MacOS/Safari', 'safari', 'default', 'test'
+    )
+  `).run(title, start, BigInt(start) * 1_000n)
+  db.prepare(`
+    INSERT INTO focus_events (
+      ts_ms, mono_ns, event_type, app_bundle_id, app_name, pid,
+      window_title, url, page_title, source, confidence, platform, schema_ver
+    ) VALUES (?, ?, 'app_activated', 'com.apple.Safari', 'Safari', 7,
+      ?, NULL, NULL, 'nsworkspace_event', 'observed', 'darwin', 2)
+  `).run(start + 1_000, start + 1_000, title)
+  setTestDb(db)
+
+  try {
+    deleteHistoryForSite({ domain: 'private.example' })
+
+    assert.deepEqual(db.prepare(`
+      SELECT window_title, page_title, url FROM focus_events
+    `).get(), { window_title: null, page_title: null, url: null })
   } finally {
     clearTestDb()
     db.close()
