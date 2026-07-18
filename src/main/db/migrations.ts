@@ -2342,6 +2342,22 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 48,
+    description:
+      'Drop website_visits_pending (unverified page content at rest) and add durable browser history source cursors',
+    up: () => {
+      const db = getDb()
+      db.exec(`
+        DROP TABLE IF EXISTS website_visits_pending;
+        CREATE TABLE IF NOT EXISTS browser_history_cursors (
+          browser_bundle_id TEXT PRIMARY KEY,
+          cursor_us         TEXT    NOT NULL,
+          updated_at        INTEGER NOT NULL
+        );
+      `)
+    },
+  },
 ]
 
 export const LATEST_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0

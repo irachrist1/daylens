@@ -168,13 +168,6 @@ test('synthetic day agrees from source boundaries through every local fact surfa
           )
           .get() as { n: number }
       ).n,
-      pending: (
-        db
-          .prepare(
-            "SELECT COUNT(*) AS n FROM website_visits_pending WHERE domain = 'excluded.example'",
-          )
-          .get() as { n: number }
-      ).n,
       visits: (
         db
           .prepare("SELECT COUNT(*) AS n FROM website_visits WHERE domain = 'excluded.example'")
@@ -195,7 +188,7 @@ test('synthetic day agrees from source boundaries through every local fact surfa
           .get() as { n: number }
       ).n,
     }
-    assert.deepEqual(forbiddenCounts, { sessions: 0, pending: 0, visits: 0, focus: 0, derived: 0 })
+    assert.deepEqual(forbiddenCounts, { sessions: 0, visits: 0, focus: 0, derived: 0 })
 
     const search = searchAll(db, 'Acme', {
       startDate: fixture.date,
