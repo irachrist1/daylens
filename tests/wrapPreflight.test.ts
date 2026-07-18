@@ -89,12 +89,11 @@ test('staleCapture warns only on the live day', () => {
   const past = getWrapPreflight(db, DATE)
   assert.equal(past.warnings.find((w) => w.kind === 'staleCapture'), undefined)
 
-  // The live day with the last session 3 hours ago must warn.
-  const today = new Date()
-  const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
-  const threeHoursAgo = Date.now() - 3 * 60 * 60 * 1000
+  // Pin the live day so the fixture cannot straddle midnight.
+  const nowMs = new Date(2026, 5, 23, 18, 0, 0, 0).getTime()
+  const threeHoursAgo = nowMs - 3 * 60 * 60 * 1000
   seedSessions(db, 3, 1, threeHoursAgo - 40 * 60_000)
-  const live = getWrapPreflight(db, todayStr)
+  const live = getWrapPreflight(db, DATE, { nowMs })
   const warning = live.warnings.find((w) => w.kind === 'staleCapture')
   assert.ok(warning, 'expected a staleCapture warning on the live day')
   assert.ok(/hours ago/.test(warning!.message))
