@@ -142,6 +142,7 @@ import {
   isHealthyUserDataState,
   selectLatestRestorableBackup,
 } from './services/userData'
+import { checkDatabaseIntegrity, recoverCorruptDatabase } from './services/databaseRecovery'
 
 const APP_USER_MODEL_ID = 'com.daylens.desktop'
 const SMOKE_TEST = process.env.DAYLENS_SMOKE_TEST === '1'
@@ -625,6 +626,68 @@ async function recoverFromUpdateIfNeeded(): Promise<void> {
   }
 }
 
+// Corruption gate for the main database. Must run after recoverFromUpdateIfNeeded()
+// and before initDb(): a corrupt file previously rethrew out of initDb() straight
+// into app.quit(), which made corruption an unrecoverable crash loop. Returns
+// false only when the person chose to quit instead of recovering.
+function resolveCorruptDatabaseBeforeOpen(): boolean {
+  const dbPath = path.join(app.getPath('userData'), 'daylens.sqlite')
+  const integrity = checkDatabaseIntegrity(dbPath)
+  if (integrity.ok) return true
+
+  console.error('[db] integrity check failed:', integrity.reason)
+  if (!REAL_DAY_HARNESS && !SMOKE_TEST) {
+    capture(ANALYTICS_EVENT.DATABASE_HEALTH, {
+      stage: 'integrity_check',
+      status: 'corrupt',
+      surface: 'database',
+    })
+  }
+
+  const backupDir = SMOKE_TEST || REAL_DAY_HARNESS
+    ? null
+    : selectLatestRestorableBackup(path.join(app.getPath('userData'), 'pre-update-backups'))
+
+  // Harness runs have no one to ask — recover to a fresh database so the run
+  // still produces a report instead of dying on the old crash loop.
+  let choice: 'restore' | 'fresh' | 'quit' = 'fresh'
+  if (!SMOKE_TEST && !REAL_DAY_HARNESS) {
+    const buttons = backupDir
+      ? ['Restore from backup', 'Start fresh', 'Quit']
+      : ['Start fresh', 'Quit']
+    const detail = backupDir
+      ? 'Your local database is damaged and cannot be opened. You can restore the most recent backup, or start with a fresh database. The damaged file is kept next to the database either way.'
+      : 'Your local database is damaged and cannot be opened, and no restorable backup was found. You can start with a fresh database. The damaged file is kept next to the database.'
+    const response = dialog.showMessageBoxSync({
+      type: 'error',
+      title: `${APP_DISPLAY_NAME} database problem`,
+      message: 'Your Daylens database needs repair',
+      detail,
+      buttons,
+      defaultId: 0,
+      cancelId: buttons.length - 1,
+    })
+    const picked = buttons[response]
+    choice = picked === 'Restore from backup' ? 'restore' : picked === 'Start fresh' ? 'fresh' : 'quit'
+  }
+
+  if (choice === 'quit') return false
+
+  const recovery = recoverCorruptDatabase(dbPath, backupDir, choice)
+  console.log(
+    `[db] corrupt database recovered via ${recovery.outcome}`,
+    recovery.quarantinedTo ? `(damaged file kept at ${recovery.quarantinedTo})` : '',
+  )
+  if (!REAL_DAY_HARNESS && !SMOKE_TEST) {
+    capture(ANALYTICS_EVENT.DATABASE_HEALTH, {
+      stage: 'integrity_check',
+      status: `recovered_${recovery.outcome}`,
+      surface: 'database',
+    })
+  }
+  return true
+}
+
 async function shutdownApp(options?: { awaitFinalSync?: boolean; backupBeforeExit?: boolean }): Promise<void> {
   if (deferredIntegrationStartup) {
     clearTimeout(deferredIntegrationStartup)
@@ -1037,6 +1100,10 @@ app.whenReady()
       })
     }
 
+    if (!resolveCorruptDatabaseBeforeOpen()) {
+      app.quit()
+      return
+    }
     initDb()
 
     // AI-telemetry retention: deferred first pass after launch, then
