@@ -52,8 +52,8 @@ test('NSIS uninstall hook only deletes data on an explicit choice, never silentl
 
 test('linux after-remove drops per-user autostart entries but never user data', () => {
   const source = fs.readFileSync(path.join(ROOT, 'build/linux/after-remove.sh'), 'utf8')
-  // Exact per-user paths from getent passwd — never a recursive sweep that
-  // could match unrelated files elsewhere in a home directory.
+  // Custom XDG paths are discovered under each account home, but only generated
+  // Daylens desktop entries are removed.
   assert.match(source, /getent passwd \| cut -d: -f6/)
   assert.ok(
     source.includes('rm -f "$home/.config/autostart/daylens.desktop"'),
@@ -62,6 +62,8 @@ test('linux after-remove drops per-user autostart entries but never user data', 
   // $VAR form, not ${VAR}: electron-builder treats ${VAR} in maintainer
   // scripts as an fpm macro (see linuxPackageScripts.test.ts).
   assert.ok(source.includes('"$XDG_CONFIG_HOME/autostart/daylens.desktop"'))
-  assert.ok(!source.includes('find '), 'after-remove must not sweep filesystems with find')
+  assert.match(source, /find "\$home" -xdev -type f -path '\*\/autostart\/daylens\.desktop'/)
+  assert.ok(source.includes('grep -q "^Name=Daylens$" "$file"'))
+  assert.ok(source.includes('grep -q "^StartupWMClass=daylens$" "$file"'))
   assert.ok(!/\.config\/Daylens/.test(source), 'after-remove must not delete user data directories')
 })

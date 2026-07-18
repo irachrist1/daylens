@@ -937,21 +937,6 @@ ipcMain.handle(IPC.APP.RESET_AND_UNINSTALL, async (event): Promise<{ started: bo
     if (confirm.response !== 0) return { started: false }
   }
 
-  if (process.platform === 'linux') {
-    const handoff = await ask({
-      type: 'info',
-      title: 'Finish uninstalling Daylens',
-      message: 'After Daylens quits, remove it with your Software app or package manager.',
-      detail: process.env.APPIMAGE
-        ? 'For an AppImage install, delete the Daylens AppImage file. Its folder will open after Daylens quits.'
-        : 'For a deb or rpm install, uninstall the Daylens package in your Software app or with your usual package-manager command.',
-      buttons: ['Quit Daylens', 'Cancel'],
-      defaultId: 0,
-      cancelId: 1,
-    })
-    if (handoff.response !== 0) return { started: false }
-  }
-
   isQuitting = true
   cancelPendingAutoInstall()
   await shutdownApp()
