@@ -199,12 +199,19 @@ test('private and excluded observations cannot reach storage or downstream produ
     )
     assert.doesNotMatch(JSON.stringify(storedSessions), /Zen|Private|Dia/i)
 
-    {
-      const row = db.prepare('SELECT COUNT(*) AS count FROM website_visits_pending').get() as { count: number }
-      assert.equal(row.count, 0, 'website_visits_pending must contain no blocked evidence')
-    }
-    // The canonical store now mirrors allowed foreground observations, so it
-    // is not empty — the invariant is that nothing blocked reaches it.
+    assert.equal(
+      (
+        db
+          .prepare(
+            "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'website_visits_pending'",
+          )
+          .get() as { count: number }
+      ).count,
+      0,
+      'website_visits_pending must not exist after privacy-verified browser evidence',
+    )
+    // The canonical store mirrors allowed foreground observations — nothing
+    // blocked may reach it.
     const focusRows = db.prepare('SELECT event_type, app_name, window_title, url, page_title FROM focus_events').all()
     assert.doesNotMatch(JSON.stringify(focusRows), /Zen|private\.example|Private quarterly|Dia/i)
     const visits = db.prepare('SELECT domain, page_title, url FROM website_visits').all()
@@ -246,7 +253,7 @@ test('private and excluded observations cannot reach storage or downstream produ
   }
 })
 
-test('an excluded site with unknown browser mode never enters pending evidence', () => {
+test('an excluded site with unknown browser mode never enters page evidence', () => {
   const db = createProductionTestDatabase()
   __setSettings({
     trackingControlsEnabled: true,
@@ -269,14 +276,6 @@ test('an excluded site with unknown browser mode never enters pending evidence',
     })
     assert.equal(result.captureBlockReason, 'excluded_site')
     tracker.flush(db, BASE + 60_000)
-    assert.equal(
-      (
-        db.prepare('SELECT COUNT(*) AS count FROM website_visits_pending').get() as {
-          count: number
-        }
-      ).count,
-      0,
-    )
     assert.equal(
       (db.prepare('SELECT COUNT(*) AS count FROM website_visits').get() as { count: number }).count,
       0,
