@@ -22,20 +22,23 @@ case "${1:-}" in
     if command -v update-desktop-database >/dev/null 2>&1; then
         update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
     fi
-    # Maintainer scripts remove login entries but never user data. A custom
-    # XDG_CONFIG_HOME can put the entry anywhere under an account home, so only
-    # delete matching Daylens desktop entries.
+    # The marker records the exact path used when XDG_CONFIG_HOME is custom.
     if command -v getent >/dev/null 2>&1; then
         getent passwd | cut -d: -f6 | while read -r home; do
             if [ -n "$home" ] && [ "$home" != "/" ]; then
                 rm -f "$home/.config/autostart/daylens.desktop" 2>/dev/null || true
-                find "$home" -xdev -type f -path '*/autostart/daylens.desktop' -exec sh -c '
-                    for file do
-                        if grep -q "^Name=Daylens$" "$file" && grep -q "^StartupWMClass=daylens$" "$file"; then
-                            rm -f "$file"
+                marker="$home/.daylens-autostart-path"
+                if [ -f "$marker" ]; then
+                    IFS= read -r autostart < "$marker" || true
+                    case "$autostart" in
+                      */autostart/daylens.desktop)
+                        if [ -f "$autostart" ] && grep -q '^Name=Daylens$' "$autostart" && grep -q '^StartupWMClass=daylens$' "$autostart"; then
+                            rm -f "$autostart" 2>/dev/null || true
                         fi
-                    done
-                ' sh {} + 2>/dev/null || true
+                        ;;
+                    esac
+                    rm -f "$marker" 2>/dev/null || true
+                fi
             fi
         done
     else
