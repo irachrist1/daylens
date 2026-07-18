@@ -25,7 +25,7 @@ case "${1:-}" in
     # Maintainer scripts remove login entries but never user data.
     rm -f /home/*/.config/autostart/daylens.desktop /root/.config/autostart/daylens.desktop 2>/dev/null || true
     if [ -n "${XDG_CONFIG_HOME:-}" ]; then
-        rm -f "${XDG_CONFIG_HOME}/autostart/daylens.desktop" 2>/dev/null || true
+        rm -f "$XDG_CONFIG_HOME/autostart/daylens.desktop" 2>/dev/null || true
     fi
     find /home /root -type f -path '*/autostart/daylens.desktop' -delete 2>/dev/null || true
     ;;

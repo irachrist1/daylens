@@ -51,7 +51,9 @@ test('linux after-remove drops per-user autostart entries but never user data', 
     source.includes('rm -f /home/*/.config/autostart/daylens.desktop /root/.config/autostart/daylens.desktop'),
     'after-remove must delete the XDG autostart entry for local users',
   )
-  assert.ok(source.includes('${XDG_CONFIG_HOME}/autostart/daylens.desktop'))
+  // $VAR form, not ${VAR}: electron-builder treats ${VAR} in maintainer
+  // scripts as an fpm macro (see linuxPackageScripts.test.ts).
+  assert.ok(source.includes('"$XDG_CONFIG_HOME/autostart/daylens.desktop"'))
   assert.match(source, /find \/home \/root -type f -path '\*\/autostart\/daylens\.desktop' -delete/)
   assert.ok(!/\.config\/Daylens/.test(source), 'after-remove must not delete user data directories')
 })
