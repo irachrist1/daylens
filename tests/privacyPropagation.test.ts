@@ -66,6 +66,7 @@ test('private and excluded observations cannot reach storage or downstream produ
     ),
   )
   __setTrackingFsmTestHarness({
+    platform: 'darwin',
     now: () => clock.now,
     idleSeconds: () => 0,
     activeWindow: () => {
@@ -83,6 +84,7 @@ test('private and excluded observations cannot reach storage or downstream produ
             title: 'Private client plan',
             application: 'Zen',
             path: '/Applications/Zen.app',
+            bundleId: 'app.zen-browser.zen',
             pid: 2,
             icon: '',
           }
