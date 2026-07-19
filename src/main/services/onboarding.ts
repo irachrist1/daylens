@@ -74,9 +74,16 @@ export async function reconcileOnboardingState(): Promise<AppSettings> {
       onboardingState.proofState = 'idle'
       changed = true
     }
-  } else if (process.platform !== 'darwin' && onboardingState.trackingPermissionState !== 'granted') {
-    onboardingState.trackingPermissionState = 'granted'
-    changed = true
+  } else if (process.platform !== 'darwin' && onboardingState.stage !== 'complete' && !requiresCaptureReconsent) {
+    const permissionState = getTrackingPermissionState()
+    if (onboardingState.trackingPermissionState !== permissionState) {
+      onboardingState.trackingPermissionState = permissionState
+      changed = true
+    }
+    if (permissionState === 'granted' && onboardingState.stage === 'permission') {
+      onboardingState.stage = 'proof'
+      changed = true
+    }
   }
 
   onboardingState.proofState = nextProofState(onboardingState.stage, onboardingState.proofState)
