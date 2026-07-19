@@ -1374,7 +1374,7 @@ function recoverPersistedLiveSnapshot(): void {
     const snapshot = getLiveAppSessionSnapshot(db)
     if (!snapshot) return
 
-    const endTime = Math.min(Date.now(), Math.max(snapshot.lastSeenAt, snapshot.startTime))
+    const endTime = Math.min(nowMs(), Math.max(snapshot.lastSeenAt, snapshot.startTime))
 
     // Same calendar-ownership rule as flushCurrent: a recovered session that
     // crosses local midnight is persisted as one slice per day, so each day's
