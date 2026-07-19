@@ -8,107 +8,18 @@ import * as devices from '../apps/web/convex/devices.ts'
 import * as remoteSync from '../apps/web/convex/remoteSync.ts'
 import { buildAppDetail } from '../apps/web/app/lib/presentation.ts'
 import { InMemoryConvexDatabase } from './support/inMemoryConvex.ts'
+import {
+  FIXTURE_DEVICE_ID as deviceId,
+  FIXTURE_WORKSPACE_ID as workspaceId,
+  makeDirtyRemoteSyncPayload as makePayload,
+} from './support/remoteSyncPayloadFixture'
 
 type RegisteredHandler = {
   _handler: (ctx: unknown, args: unknown) => Promise<unknown>
 }
 
-const workspaceId = 'workspaces:test'
-const deviceId = 'desktop:test'
-
 function handler(value: unknown): RegisteredHandler['_handler'] {
   return (value as RegisteredHandler)._handler
-}
-
-function makePayload(overrides: Partial<RemoteSyncPayload> = {}): RemoteSyncPayload {
-  const localDate = '2026-07-14'
-  const generatedAt = '2026-07-14T16:00:00.000Z'
-  const payload: RemoteSyncPayload = {
-    contractVersion: '2026-04-20-r2',
-    deviceId,
-    localDate,
-    generatedAt,
-    daySummary: {
-      contractVersion: '2026-04-20-r2',
-      deviceId,
-      localDate,
-      generatedAt,
-      isPartialDay: false,
-      focusScore: 82,
-      focusSeconds: 3600,
-      focusScoreV2: {
-        deepWorkPct: 82,
-        longestStreakSeconds: 3600,
-        switchCount: 2,
-        deepWorkSessionCount: 1,
-      },
-      recap: {
-        day: {
-          headline: 'A deliberately untrusted desktop recap',
-          chapters: [],
-          metrics: [],
-          changeSummary: '',
-          promptChips: [],
-          hasData: true,
-        },
-        week: null,
-        month: null,
-      },
-      coverage: {
-        attributedPct: 100,
-        untitledPct: 0,
-        activeDayCount: 1,
-        quietDayCount: 0,
-        hasComparison: false,
-        coverageNote: null,
-      },
-      topWorkstreams: [],
-      latestWorkBlockId: 'block:1',
-      workBlockCount: 1,
-      entityCount: 1,
-      artifactCount: 1,
-      privacyFiltered: true,
-    },
-    workBlocks: [
-      {
-        id: 'block:1',
-        startAt: '2026-07-14T14:00:00.000Z',
-        endAt: '2026-07-14T15:00:00.000Z',
-        label: '/Users/person/private/client-plan.md',
-        labelSource: 'rule',
-        dominantCategory: 'development',
-        focusSeconds: 3600,
-        switchCount: 2,
-        confidence: 'high',
-        topApps: [
-          { appKey: 'com.microsoft.VSCode', seconds: 3300 },
-          { appKey: 'unknown-123', seconds: 300 },
-        ],
-        topPages: [{ domain: 'github.com', label: 'Secret Client · GitHub', seconds: 900 }],
-        artifactIds: ['local-file:/Users/person/private/client-plan.md'],
-      },
-    ],
-    entities: [
-      {
-        id: 'project:daylens',
-        label: 'Daylens',
-        kind: 'project',
-        secondsToday: 3600,
-        blockCount: 1,
-      },
-    ],
-    artifacts: [
-      {
-        id: 'artifact:1',
-        kind: 'report',
-        title: 'Daily report',
-        byteSize: 1024,
-        generatedAt,
-        threadId: null,
-      },
-    ],
-  }
-  return { ...payload, ...overrides }
 }
 
 async function setupRemote() {
