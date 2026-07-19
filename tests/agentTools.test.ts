@@ -154,7 +154,11 @@ test('get_day_overview distinguishes locked time from unexplained capture gaps',
   assert.equal(chunks.chunks.length, 4)
   assert.ok(chunks.chunks.every((chunk: { durationMinutes: number }) => chunk.durationMinutes === 60))
   assert.equal(chunks.chunks[1].gap.label, 'machine locked')
-  assert.equal(chunks.chunks[2].gap.label, 'no data captured — possible tracking failure')
+  // The 10:05 activation is canonical evidence of observed foreground time,
+  // so the chunk shows captured activity (with a stable unknown identity)
+  // rather than claiming a tracking failure the events disprove.
+  assert.ok(chunks.chunks[2].activity.length > 0, 'canonical evidence fills the 10-11 chunk')
+  assert.ok(!chunks.chunks[2].gap, 'observed foreground time is not a gap')
   db.close()
 })
 
