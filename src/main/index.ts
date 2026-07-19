@@ -89,6 +89,7 @@ process.on('unhandledRejection', (reason) => {
 })
 
 import { BrowserWindow, Menu, app, dialog, ipcMain, nativeImage, nativeTheme, powerMonitor, session, shell } from 'electron'
+import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -146,6 +147,12 @@ import {
   selectLatestRestorableBackup,
 } from './services/userData'
 import { checkDatabaseIntegrity, recoverCorruptDatabase } from './services/databaseRecovery'
+import {
+  parseBackupDirTimestampMs,
+  pruneDeletionJournalOlderThan,
+  replayDeletionJournal,
+  selectBackupSourceEntries,
+} from './services/deletionJournal'
 
 const APP_USER_MODEL_ID = 'com.daylens.desktop'
 const SMOKE_TEST = process.env.DAYLENS_SMOKE_TEST === '1'
@@ -602,16 +609,20 @@ async function backupUserDataForUpdate(): Promise<void> {
 
   try {
     fs.mkdirSync(backupDir, { recursive: true })
-    for (const entry of fs.readdirSync(userDataPath)) {
-      if (entry === path.basename(backupRoot)) continue
+    // The backup root is excluded from the copy, so the deletion journal that
+    // lives inside it is never captured into a backup (DEV-220).
+    for (const entry of selectBackupSourceEntries(fs.readdirSync(userDataPath))) {
       fs.cpSync(path.join(userDataPath, entry), path.join(backupDir, entry), {
         recursive: true,
         force: true,
       })
     }
 
+    // Rotate only the timestamped backup directories — the backup root also
+    // holds the deletion journal, which must never be rotated away.
     const backups = fs
       .readdirSync(backupRoot)
+      .filter((entry) => parseBackupDirTimestampMs(entry) !== null)
       .sort()
     while (backups.length > 3) {
       const oldest = backups.shift()
@@ -622,9 +633,42 @@ async function backupUserDataForUpdate(): Promise<void> {
     const manifest = createBackupManifest(userDataPath, app.getVersion())
     fs.writeFileSync(path.join(backupDir, 'backup-manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
 
+    // Journal entries older than the oldest retained backup can never
+    // resurrect anything on a restore — drop them.
+    const oldestBackupMs = backups
+      .map((entry) => parseBackupDirTimestampMs(entry))
+      .filter((value): value is number => value !== null)
+      .reduce((min, value) => Math.min(min, value), Number.POSITIVE_INFINITY)
+    if (Number.isFinite(oldestBackupMs)) {
+      pruneDeletionJournalOlderThan(userDataPath, oldestBackupMs)
+    }
+
     console.log('[update] backed up user data to', backupDir)
   } catch (err) {
     console.warn('[update] backup failed:', err)
+  }
+}
+
+// DEV-220: after either restore path copies a backup database back into
+// place, re-run every journaled deletion against it so the restore cannot
+// resurrect data the person deleted after that backup was taken. The main
+// database isn't open yet at both call sites, so open it briefly just for the
+// replay. Never fatal — a failed replay logs and startup continues.
+function replayDeletionJournalAfterRestore(stage: string): void {
+  const userDataPath = app.getPath('userData')
+  const dbPath = path.join(userDataPath, 'daylens.sqlite')
+  if (!fs.existsSync(dbPath)) return
+  let db: Database.Database | null = null
+  try {
+    db = new Database(dbPath)
+    const { replayed, failed } = replayDeletionJournal(db, userDataPath)
+    if (replayed > 0 || failed > 0) {
+      console.log(`[deletion-journal] ${stage}: replayed ${replayed} deletion(s), ${failed} failed`)
+    }
+  } catch (err) {
+    console.warn(`[deletion-journal] ${stage}: replay failed:`, err)
+  } finally {
+    try { db?.close() } catch { /* already closed */ }
   }
 }
 
@@ -670,6 +714,9 @@ async function recoverFromUpdateIfNeeded(): Promise<void> {
         }
       }
       console.log('[update] user data restored successfully from', backupDir)
+      // The backup predates any deletions made since it was taken — replay
+      // the deletion journal so the restore does not resurrect them.
+      replayDeletionJournalAfterRestore('post-update restore')
       return
     }
     console.warn('[update] post-upgrade blank state detected but no valid backup found')
@@ -730,6 +777,11 @@ function resolveCorruptDatabaseBeforeOpen(): boolean {
     `[db] corrupt database recovered via ${recovery.outcome}`,
     recovery.quarantinedTo ? `(damaged file kept at ${recovery.quarantinedTo})` : '',
   )
+  if (recovery.outcome === 'restored') {
+    // The restored copy predates any deletions made since that backup was
+    // taken — replay the deletion journal so none of them resurrect.
+    replayDeletionJournalAfterRestore('corruption restore')
+  }
   if (!REAL_DAY_HARNESS && !SMOKE_TEST) {
     capture(ANALYTICS_EVENT.DATABASE_HEALTH, {
       stage: 'integrity_check',

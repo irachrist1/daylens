@@ -1,4 +1,4 @@
-import { BrowserWindow, dialog, ipcMain } from 'electron'
+import { BrowserWindow, app, dialog, ipcMain } from 'electron'
 import {
   clearBlockLabelOverride,
   setBlockLabelOverride,
@@ -55,7 +55,14 @@ import { setSettings } from '../services/settings'
 import { flushCurrentSession, getCurrentSession, getLinuxTrackingDiagnostics, trackingStatus } from '../services/tracking'
 import { getBrowserStatus } from '../services/browser'
 import { isWindowsFocusCaptureRunning } from '../services/windowsFocusCapture'
-import { deleteHistoryForApp, deleteHistoryForSite, deleteTrackedActivity } from '../services/trackingHistory'
+import {
+  deleteHistoryForApp,
+  deleteHistoryForSite,
+  deleteTrackedActivity,
+  purgeTrackedEvidenceRows,
+  purgeTimelineBlockSpanRows,
+} from '../services/trackingHistory'
+import { appendDeletionJournalEntry, type DeletionJournalEntryInput } from '../services/deletionJournal'
 import { getProcessMetrics } from '../services/processMonitor'
 import { getBlockDetailPayload, getDistractionCostPayload, getRecapRange, writeTimelineBlockReview, mergeTimelineEpisodes, trimTimelineBlockSpan, invalidateTimelineDayBlocks } from '../services/workBlocks'
 import { applyCorrection, previewCorrection, undoCorrection } from '../services/correctionCommands'
@@ -109,6 +116,13 @@ function localDateString(): string {
   const m = String(d.getMonth() + 1).padStart(2, '0')
   const day = String(d.getDate()).padStart(2, '0')
   return `${y}-${m}-${day}`
+}
+
+// DEV-220: every user-initiated destructive deletion is journaled so a
+// pre-update backup restore can replay it and never resurrect deleted data.
+// appendDeletionJournalEntry is best-effort and warns internally on failure.
+function recordDeletionInJournal(entry: DeletionJournalEntryInput): void {
+  appendDeletionJournalEntry(app.getPath('userData'), entry)
 }
 
 async function syncActiveClientNamesToSettings(db = getDb()): Promise<void> {
@@ -744,7 +758,7 @@ export function registerDbHandlers(): void {
       type: 'warning' as const,
       title: 'Remove tracked record',
       message: 'Permanently remove this record?',
-      detail: `Everything tracked for "${subject}" in this block will be deleted from Daylens — timeline, apps, and AI. This cannot be undone.`,
+      detail: `Everything tracked for "${subject}" in this block will be deleted from Daylens — timeline, apps, and AI. A copy may persist in pre-update backups until you delete all local data. This cannot be undone.`,
       buttons: ['Remove permanently', 'Cancel'],
       defaultId: 1,
       cancelId: 1,
@@ -757,32 +771,16 @@ export function registerDbHandlers(): void {
     if (response !== 0) return { purged: false }
 
     const { fromMs, toMs } = payload
-    const run = db.transaction(() => {
-      if (payload.kind === 'site' && payload.domain) {
-        const domain = payload.domain
-        const like = `%${domain}%`
-        db.prepare(`DELETE FROM website_visits WHERE domain = ? AND visit_time >= ? AND visit_time < ?`)
-          .run(domain, fromMs, toMs)
-        db.prepare(`DELETE FROM focus_events WHERE ts_ms >= ? AND ts_ms < ? AND (url LIKE ? OR page_title LIKE ?)`)
-          .run(fromMs, toMs, like, like)
-        db.prepare(`DELETE FROM derived_sessions WHERE start_ts_ms >= ? AND start_ts_ms < ? AND domain = ?`)
-          .run(fromMs, toMs, domain)
-        // Artifact identities for the host are display aggregates; remove them
-        // outright (mentions cascade). Other days' remaining data regenerates
-        // its own artifacts on the next rebuild.
-        db.prepare(`DELETE FROM artifacts WHERE host = ?`).run(domain)
-      } else {
-        const bundleId = payload.bundleId ?? ''
-        const appName = payload.appName ?? bundleId
-        db.prepare(`DELETE FROM app_sessions WHERE start_time >= ? AND start_time < ? AND (bundle_id = ? OR app_name = ?)`)
-          .run(fromMs, toMs, bundleId, appName)
-        db.prepare(`DELETE FROM focus_events WHERE ts_ms >= ? AND ts_ms < ? AND (app_bundle_id = ? OR app_name = ?)`)
-          .run(fromMs, toMs, bundleId, appName)
-        db.prepare(`DELETE FROM derived_sessions WHERE start_ts_ms >= ? AND start_ts_ms < ? AND (app_bundle_id = ? OR app_name = ?)`)
-          .run(fromMs, toMs, bundleId, appName)
-      }
-    })
-    run()
+    const purgeParams = {
+      kind: payload.kind,
+      bundleId: payload.bundleId,
+      appName: payload.appName,
+      domain: payload.domain,
+      fromMs,
+      toMs,
+    }
+    purgeTrackedEvidenceRows(db, purgeParams)
+    recordDeletionInJournal({ kind: 'purge-evidence', params: purgeParams })
 
     const dateStr = localDateStringForTimestamp(fromMs)
     invalidateTimelineDayBlocks(db, dateStr)
@@ -818,7 +816,7 @@ export function registerDbHandlers(): void {
       type: 'warning' as const,
       title: 'Delete block and its data',
       message: 'Permanently delete this block?',
-      detail: `"${block.label.current}" (${timeRange}) and everything tracked inside it — apps, sites, page titles — will be deleted from Daylens entirely. This cannot be undone.`,
+      detail: `"${block.label.current}" (${timeRange}) and everything tracked inside it — apps, sites, page titles — will be deleted from Daylens entirely. A copy may persist in pre-update backups until you delete all local data. This cannot be undone.`,
       buttons: ['Delete permanently', 'Cancel'],
       defaultId: 1,
       cancelId: 1,
@@ -832,14 +830,8 @@ export function registerDbHandlers(): void {
 
     const fromMs = block.startTime
     const toMs = block.endTime
-    const run = db.transaction(() => {
-      db.prepare(`DELETE FROM app_sessions WHERE start_time >= ? AND start_time < ?`).run(fromMs, toMs)
-      db.prepare(`DELETE FROM website_visits WHERE visit_time >= ? AND visit_time < ?`).run(fromMs, toMs)
-      db.prepare(`DELETE FROM focus_events WHERE ts_ms >= ? AND ts_ms < ?`).run(fromMs, toMs)
-      db.prepare(`DELETE FROM derived_sessions WHERE start_ts_ms >= ? AND start_ts_ms < ?`).run(fromMs, toMs)
-      db.prepare(`DELETE FROM artifact_mentions WHERE start_time >= ? AND start_time < ?`).run(fromMs, toMs)
-    })
-    run()
+    purgeTimelineBlockSpanRows(db, { fromMs, toMs })
+    recordDeletionInJournal({ kind: 'purge-block', params: { fromMs, toMs } })
 
     // Backstop: a session that started before the block's edge and bled in
     // survives the span delete — the ignored review keeps any remnant from
@@ -988,12 +980,24 @@ export function registerDbHandlers(): void {
     return getProcessMetrics()
   })
 
-  // T3: delete already-captured history for an excluded app/site.
+  // T3: delete already-captured history for an excluded app/site. Each
+  // deletion is journaled even when it removed zero live rows — an older
+  // pre-update backup may still hold matching rows the replay must delete.
   ipcMain.handle(IPC.TRACKING.DELETE_APP_HISTORY, (_e, payload: { bundleId?: string | null; appName?: string | null }) => {
-    return deleteHistoryForApp(payload ?? {})
+    const params = { bundleId: payload?.bundleId ?? null, appName: payload?.appName ?? null }
+    const result = deleteHistoryForApp(params)
+    if ((params.bundleId ?? '').trim() || (params.appName ?? '').trim()) {
+      recordDeletionInJournal({ kind: 'app-history', params })
+    }
+    return result
   })
   ipcMain.handle(IPC.TRACKING.DELETE_SITE_HISTORY, (_e, payload: { domain: string }) => {
-    return deleteHistoryForSite(payload ?? { domain: '' })
+    const params = { domain: payload?.domain ?? '' }
+    const result = deleteHistoryForSite(params)
+    if (params.domain.trim()) {
+      recordDeletionInJournal({ kind: 'site-history', params })
+    }
+    return result
   })
   ipcMain.handle(IPC.TRACKING.DELETE_ACTIVITY, (_e, payload: {
     appSessionIds?: number[] | null
@@ -1009,7 +1013,10 @@ export function registerDbHandlers(): void {
     endTime?: number | null
     date?: string | null
   }) => {
-    return deleteTrackedActivity(payload ?? {})
+    const params = payload ?? {}
+    const result = deleteTrackedActivity(params)
+    recordDeletionInJournal({ kind: 'tracked-activity', params })
+    return result
   })
 
   // ─── Attribution query resolvers ──────────────────────────────────────────
