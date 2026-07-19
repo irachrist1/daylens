@@ -15,6 +15,7 @@ import {
   getDaysTracked,
   type WebsiteVisitRecord,
 } from '../db/queries'
+import { isWorkIntentRole } from '@shared/types'
 import type {
   AppDetailPayload,
   AppCategory,
@@ -1597,18 +1598,7 @@ function stringValue(value: unknown): string | null {
 }
 
 function intentRoleValue(value: unknown): WorkIntentRole | null {
-  if (typeof value !== 'string') return null
-  return ([
-    'execution',
-    'research',
-    'communication',
-    'review',
-    'coordination',
-    'ambient',
-    'ambiguous',
-  ] as WorkIntentRole[]).includes(value as WorkIntentRole)
-    ? value as WorkIntentRole
-    : null
+  return isWorkIntentRole(value) ? value : null
 }
 
 interface PersistedReviewRow {

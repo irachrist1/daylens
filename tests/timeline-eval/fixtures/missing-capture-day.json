@@ -1,0 +1,122 @@
+{
+  "schemaVersion": 1,
+  "id": "missing-capture-day",
+  "name": "Missing capture day",
+  "date": "2026-05-20",
+  "timezone": "local",
+  "description": "Capture stops at 09:45 (lock, laptop away) and resumes at 13:30. The gap must stay a gap: no block may span it, and no total or wrap line may invent activity inside it.",
+  "input": {
+    "kind": "normalized-evidence",
+    "sessions": [
+      {
+        "start": "09:00",
+        "end": "09:45",
+        "bundleId": "com.microsoft.VSCode",
+        "appName": "Code",
+        "category": "development",
+        "title": "importer.ts — atlas-api"
+      },
+      {
+        "start": "13:30",
+        "end": "15:00",
+        "bundleId": "com.microsoft.VSCode",
+        "appName": "Code",
+        "category": "development",
+        "title": "importer.ts — atlas-api"
+      },
+      {
+        "start": "15:00",
+        "end": "15:30",
+        "bundleId": "com.tinyspeck.slackmacgap",
+        "appName": "Slack",
+        "category": "communication",
+        "title": "atlas-api rollout — Slack"
+      }
+    ],
+    "activityEvents": [
+      {
+        "at": "09:45",
+        "type": "lock"
+      },
+      {
+        "at": "13:30",
+        "type": "unlock"
+      }
+    ]
+  },
+  "expected": {
+    "episodes": [
+      {
+        "id": "atlas-api-morning",
+        "start": "09:00",
+        "end": "09:45",
+        "label": "atlas-api",
+        "labelIncludes": [
+          "atlas",
+          "importer"
+        ],
+        "kind": "work"
+      },
+      {
+        "id": "atlas-api-afternoon",
+        "start": "13:30",
+        "end": "15:00",
+        "label": "atlas-api",
+        "labelIncludes": [
+          "atlas",
+          "importer"
+        ],
+        "kind": "work"
+      },
+      {
+        "id": "atlas-rollout-comms",
+        "start": "15:00",
+        "end": "15:30",
+        "label": "atlas-api rollout",
+        "labelIncludes": [
+          "atlas",
+          "Slack",
+          "communication"
+        ],
+        "kind": "work"
+      }
+    ],
+    "apps": [
+      {
+        "appName": "Visual Studio Code",
+        "durationMinutes": 135,
+        "durationToleranceMinutes": 6
+      },
+      {
+        "appName": "Slack",
+        "durationMinutes": 30,
+        "durationToleranceMinutes": 6
+      }
+    ],
+    "totals": {
+      "activeSeconds": 9900,
+      "workSeconds": 9900,
+      "leisureSeconds": 0,
+      "personalSeconds": 0
+    },
+    "wrap": {
+      "isLeisureDay": false,
+      "workActivityIncludes": "atlas"
+    },
+    "answers": [
+      {
+        "question": "What was I doing at 11am?",
+        "requiredFacts": [
+          "no capture",
+          "gap"
+        ],
+        "prohibitedClaims": [
+          "atlas-api at 11"
+        ],
+        "requiredSources": [
+          "Timeline"
+        ]
+      }
+    ]
+  }
+}
