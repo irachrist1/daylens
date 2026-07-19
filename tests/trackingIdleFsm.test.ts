@@ -142,6 +142,43 @@ test('titleless Dia on Netflix remains active beyond the five-minute idle thresh
   }
 })
 
+test('media hold reached via provisional_idle stamps heldForMediaPlayback on the open idle_start', async () => {
+  // Production ordering: the poller ticks every 5s, so idleSec always crosses
+  // the 2-minute provisional threshold (plain idle_start) before the 5-minute
+  // away threshold where the media-hold decision happens. The hold must upgrade
+  // that open idle_start — attribution and work-block gap labels read the
+  // heldForMediaPlayback flag off it, and without it the held media span is
+  // sliced out of activity stats as ordinary idle.
+  __setActiveBrowserContextTrackerForTest(new ActiveBrowserContextTracker(
+    () => ({ url: 'https://www.netflix.com/watch/81234567', title: 'Netflix', modeKnown: true }),
+    () => true,
+  ))
+  const rig = makeRig(() => DIA_WIN)
+  try {
+    await rig.poll(BASE, { input: true })
+    // ≤55s steps: provisional_idle fires around +165s, the away threshold
+    // around +330s — the tracker itself must produce the flagged event.
+    await pollThrough(rig, BASE, BASE + 360_000)
+
+    assert.ok(getCurrentSession(), 'media session must still be held open past the away threshold')
+    const idleStarts = rig.db.prepare(`
+      SELECT metadata_json AS metadataJson
+      FROM activity_state_events
+      WHERE event_type = 'idle_start'
+      ORDER BY event_ts ASC
+    `).all() as { metadataJson: string }[]
+    assert.equal(idleStarts.length, 1, 'exactly one idle_start opens the held span')
+    const metadata = JSON.parse(idleStarts[0].metadataJson) as Record<string, unknown>
+    assert.equal(
+      metadata.heldForMediaPlayback,
+      true,
+      'the provisional idle_start must be upgraded to a media hold at the away threshold',
+    )
+  } finally {
+    rig.teardown()
+  }
+})
+
 test('titleless Dia on a non-media domain still flushes under normal idle handling', async () => {
   __setActiveBrowserContextTrackerForTest(new ActiveBrowserContextTracker(
     () => ({ url: 'https://example.com/article', title: 'Article', modeKnown: true }),
