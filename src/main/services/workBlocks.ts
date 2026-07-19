@@ -77,7 +77,7 @@ import {
 } from './workMemory'
 import { isBrowserApplication } from './browserRegistry'
 import { getBackgroundProcessEvidence } from './backgroundProcessEvidence'
-import { getCorrectedWebsiteSummariesForRange } from './activityFacts'
+import { filterExcludedWebsiteSummaries, getCorrectedWebsiteSummariesForRange } from './activityFacts'
 import { queryCorrectedActivityFactsForRange } from '../core/query/activityFactsQuery'
 
 /**
@@ -1889,7 +1889,7 @@ function writeBoundaryCorrection(
 // wall-clock timestamp (span_start_ms): session ids churn across the
 // app_sessions ↔ derived_sessions namespaces, but the moment the user pointed
 // at does not. Enforced by enforceUserCuts as the last pipeline pass.
-function writeSplitCorrection(db: Database.Database, dateStr: string, cutMs: number): void {
+export function writeSplitCorrection(db: Database.Database, dateStr: string, cutMs: number): void {
   const now = Date.now()
   const id = `cut_${sha1(`${dateStr}:${cutMs}`).slice(0, 18)}`
   // The (left, right) session-id pair has a unique index; a cut is anchored to
@@ -2712,7 +2712,9 @@ function buildBlockFromCandidate(
   const coherence = coherenceScore(distribution)
   const switchCount = countAppSwitches(candidate.sessions)
   const computedAt = Date.now()
-  const websites = getWebsiteSummariesForRange(db, blockStart, blockEnd).slice(0, 5)
+  const websites = filterExcludedWebsiteSummaries(
+    db, getWebsiteSummariesForRange(db, blockStart, blockEnd), blockStart, blockEnd,
+  ).slice(0, 5)
   const keyPagesByDomain = getTopPagesForDomains(db, blockStart, blockEnd, websites.map((site) => site.domain), 2)
   const keyPages = websites.flatMap((site) => keyPagesByDomain[site.domain] ?? [])
     .map((page) => page.title?.trim())
@@ -4844,7 +4846,9 @@ function loadPersistedTimelineBlocksForDay(
       blockSessions = sessions.filter((s) => s.startTime >= row.start_time && s.startTime < row.end_time)
     }
 
-    const websites = getWebsiteSummariesForRange(db, row.start_time, row.end_time).slice(0, 5)
+    const websites = filterExcludedWebsiteSummaries(
+      db, getWebsiteSummariesForRange(db, row.start_time, row.end_time), row.start_time, row.end_time,
+    ).slice(0, 5)
 
     const keyPagesByDomain = getTopPagesForDomains(db, row.start_time, row.end_time, websites.map((site) => site.domain), 2)
     const keyPages = websites.flatMap((site) => keyPagesByDomain[site.domain] ?? [])

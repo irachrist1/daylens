@@ -58,6 +58,71 @@ export interface TimelineBlockEditResult {
   changedFields: Array<'label' | 'category' | 'time'>
 }
 
+// ─── Correction commands (timeline spec, Corrections) ────────────────────────
+// One typed command per correction a person can make. Every command previews
+// its effect on time, entities, Timeline, Apps, and search before applying,
+// applies atomically, and can be undone. Permanent purges are NOT commands —
+// they stay on their own destructive, confirmed, no-undo path.
+
+export interface ExcludedEvidenceRef {
+  kind: 'app' | 'site'
+  bundleId?: string | null
+  appName?: string | null
+  domain?: string | null
+}
+
+export type CorrectionCommand =
+  | { kind: 'edit'; date: string; blockId: string; label?: string; category?: AppCategory; startMs?: number; endMs?: number }
+  | { kind: 'merge'; date: string; blockIds: string[] }
+  | { kind: 'split'; date: string; blockId: string; cutMs: number }
+  | { kind: 'exclude-block'; date: string; blockId: string }
+  | { kind: 'exclude-evidence'; date: string; blockId: string; evidence: ExcludedEvidenceRef }
+  | { kind: 'assign-client'; date: string; blockId: string; clientId: string | null; projectId?: string | null }
+
+export interface CorrectionBlockDelta {
+  blockId: string
+  labelBefore: string
+  /** null = the block is gone after the correction (merged away or excluded). */
+  labelAfter: string | null
+  startMsBefore: number
+  endMsBefore: number
+  startMsAfter: number | null
+  endMsAfter: number | null
+  categoryBefore: AppCategory
+  categoryAfter: AppCategory | null
+}
+
+export interface CorrectionAppDelta {
+  appName: string
+  secondsBefore: number
+  secondsAfter: number
+}
+
+export interface CorrectionPreview {
+  /** One human sentence naming the correction, e.g. `Rename "A" to "B"`. */
+  description: string
+  totalSecondsBefore: number
+  totalSecondsAfter: number
+  blockCountBefore: number
+  blockCountAfter: number
+  /** Blocks whose label, span, or category the correction changes. */
+  blocks: CorrectionBlockDelta[]
+  /** Apps whose day total the correction changes (Apps view delta). */
+  apps: CorrectionAppDelta[]
+  /** Plain sentences on how consuming surfaces change (search, AI, client rollups). */
+  surfaces: string[]
+}
+
+export interface CorrectionApplyResult {
+  correctionId: string
+  description: string
+}
+
+export interface CorrectionUndoResult {
+  undone: boolean
+  description: string
+}
+
 // Each Apps row leads with what was accomplished, not how long.
 // This compact digest provides the headline activity per app over a range —
 // the top work block the app participated in and the top artifact it touched.
@@ -2007,6 +2072,14 @@ export interface ProjectSummary {
   color: string | null
 }
 
+/** Active project row for attribution pickers (client + project). */
+export interface AttributionProject {
+  id: string
+  client_id: string
+  name: string
+  client_name: string
+}
+
 export interface WorkSessionApp {
   app_name: string
   duration_ms: number
@@ -2138,6 +2211,9 @@ export const IPC = {
     UPDATE_TIMELINE_BLOCK: 'db:update-timeline-block',
     PURGE_TRACKED_EVIDENCE: 'db:purge-tracked-evidence',
     PURGE_TIMELINE_BLOCK: 'db:purge-timeline-block',
+    PREVIEW_CORRECTION: 'db:preview-correction',
+    APPLY_CORRECTION: 'db:apply-correction',
+    UNDO_CORRECTION: 'db:undo-correction',
     GET_DISTRACTION_COST: 'db:get-distraction-cost',
     GET_RECAP_RANGE: 'db:get-recap-range',
     GET_TIMELINE_RANGE_BLOCKS: 'db:get-timeline-range-blocks',
@@ -2252,6 +2328,7 @@ export const IPC = {
     FIND_CLIENT: 'attribution:find-client',
     LIST_CLIENTS: 'attribution:list-clients',
     LIST_CLIENTS_DETAILED: 'attribution:list-clients-detailed',
+    LIST_PROJECTS: 'attribution:list-projects',
     CREATE_CLIENT: 'attribution:create-client',
     ENSURE_CLIENTS: 'attribution:ensure-clients',
     UPDATE_CLIENT: 'attribution:update-client',

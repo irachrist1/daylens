@@ -38,6 +38,7 @@ import {
   findClientByName,
   listClients,
   listClientsDetailed,
+  listProjects,
   createClient,
   updateClient,
   archiveClient,
@@ -57,6 +58,7 @@ import { isWindowsFocusCaptureRunning } from '../services/windowsFocusCapture'
 import { deleteHistoryForApp, deleteHistoryForSite, deleteTrackedActivity } from '../services/trackingHistory'
 import { getProcessMetrics } from '../services/processMonitor'
 import { getBlockDetailPayload, getDistractionCostPayload, getRecapRange, writeTimelineBlockReview, mergeTimelineEpisodes, trimTimelineBlockSpan, invalidateTimelineDayBlocks } from '../services/workBlocks'
+import { applyCorrection, previewCorrection, undoCorrection } from '../services/correctionCommands'
 import { getTimelineRangeBlocks } from '../services/timelineCalendarRange'
 import { computeAppActivityDigest } from '../services/appActivityDigest'
 import { analyzeTimelineDay } from '../services/analyzeDay'
@@ -85,6 +87,10 @@ import type {
   TimelineBlockReviewUpdate,
   TimelineBlockEditPayload,
   TimelineBlockEditResult,
+  CorrectionCommand,
+  CorrectionPreview,
+  CorrectionApplyResult,
+  CorrectionUndoResult,
   PurgeTrackedEvidencePayload,
   WorkMemorySettingsSummary,
 } from '@shared/types'
@@ -847,6 +853,36 @@ export function registerDbHandlers(): void {
     return { purged: true }
   })
 
+  // ─── Correction commands (timeline spec, Corrections; DEV-172) ────────────
+  // Preview computes the exact cross-surface effect of a correction without
+  // persisting anything; apply commits it atomically with an undo entry; undo
+  // restores the correction ledger to the pre-apply snapshot. Permanent purges
+  // stay on their own destructive, confirmed paths above.
+  ipcMain.handle(IPC.DB.PREVIEW_CORRECTION, (_e, command: CorrectionCommand): CorrectionPreview => {
+    return previewCorrection(getDb(), command, getLiveSessionForDate(command.date))
+  })
+
+  ipcMain.handle(IPC.DB.APPLY_CORRECTION, (_e, command: CorrectionCommand): CorrectionApplyResult => {
+    const db = getDb()
+    // A merge touching the still-live block needs the in-flight session
+    // persisted first, or the block re-splits on the next tracking tick —
+    // same guard as the legacy merge channel.
+    if (command.kind === 'merge') flushCurrentSession()
+    const result = applyCorrection(db, command, getLiveSessionForDate(command.date))
+    invalidateProjectionScope('timeline', 'correction_command', { date: command.date })
+    invalidateProjectionScope('apps', 'correction_command', { date: command.date })
+    invalidateProjectionScope('insights', 'correction_command', { date: command.date })
+    return result
+  })
+
+  ipcMain.handle(IPC.DB.UNDO_CORRECTION, (_e, correctionId: string): CorrectionUndoResult => {
+    const result = undoCorrection(getDb(), correctionId)
+    invalidateProjectionScope('timeline', 'correction_undo')
+    invalidateProjectionScope('apps', 'correction_undo')
+    invalidateProjectionScope('insights', 'correction_undo')
+    return result
+  })
+
   ipcMain.handle(IPC.DB.MERGE_TIMELINE_EPISODES, (_e, payload: { blockIds: [string, string]; date?: string | null }): DayTimelinePayload => {
     const db = getDb()
     const initialDate = payload.date ?? null
@@ -997,6 +1033,10 @@ export function registerDbHandlers(): void {
 
   ipcMain.handle(IPC.ATTRIBUTION.LIST_CLIENTS_DETAILED, (): ClientRecord[] => {
     return listClientsDetailed(getDb())
+  })
+
+  ipcMain.handle(IPC.ATTRIBUTION.LIST_PROJECTS, () => {
+    return listProjects(getDb())
   })
 
   ipcMain.handle(IPC.ATTRIBUTION.CREATE_CLIENT, async (_e, payload: { name: string; color?: string | null }): Promise<ClientRecord> => {

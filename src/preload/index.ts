@@ -34,6 +34,7 @@ import type {
   IntercomIdentity,
   CategoryOverrideEffect,
   ClientRecord,
+  AttributionProject,
   BreakRecommendation,
   CalendarRangeDay,
   DayTimelinePayload,
@@ -48,6 +49,10 @@ import type {
   SyncStatus,
   TimelineBlockReviewUpdate,
   TimelineBlockEditPayload,
+  CorrectionCommand,
+  CorrectionPreview,
+  CorrectionApplyResult,
+  CorrectionUndoResult,
   TimelineBlockEditResult,
   PurgeTrackedEvidencePayload,
   MemoryBackfillResult,
@@ -187,6 +192,12 @@ const api = {
       ipcRenderer.invoke(IPC.DB.PURGE_TRACKED_EVIDENCE, payload),
     purgeTimelineBlock: (payload: { blockId: string; date?: string | null }): Promise<{ purged: boolean }> =>
       ipcRenderer.invoke(IPC.DB.PURGE_TIMELINE_BLOCK, payload),
+    previewCorrection: (command: CorrectionCommand): Promise<CorrectionPreview> =>
+      ipcRenderer.invoke(IPC.DB.PREVIEW_CORRECTION, command),
+    applyCorrection: (command: CorrectionCommand): Promise<CorrectionApplyResult> =>
+      ipcRenderer.invoke(IPC.DB.APPLY_CORRECTION, command),
+    undoCorrection: (correctionId: string): Promise<CorrectionUndoResult> =>
+      ipcRenderer.invoke(IPC.DB.UNDO_CORRECTION, correctionId),
     getAppDetail: (canonicalAppId: string, days?: number | string): Promise<AppDetailPayload> =>
       ipcRenderer.invoke(IPC.DB.GET_APP_DETAIL, canonicalAppId, days),
     getAppActivityDigest: (days?: number): Promise<AppActivityDigest[]> =>
@@ -380,6 +391,7 @@ const api = {
   },
   attribution: {
     listClientsDetailed: (): Promise<ClientRecord[]> => ipcRenderer.invoke(IPC.ATTRIBUTION.LIST_CLIENTS_DETAILED),
+    listProjects: (): Promise<AttributionProject[]> => ipcRenderer.invoke(IPC.ATTRIBUTION.LIST_PROJECTS),
     createClient: (payload: { name: string; color?: string | null }): Promise<ClientRecord> =>
       ipcRenderer.invoke(IPC.ATTRIBUTION.CREATE_CLIENT, payload),
     ensureClients: (names: string[]): Promise<ClientRecord[]> =>

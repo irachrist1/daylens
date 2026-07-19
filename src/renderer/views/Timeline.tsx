@@ -1,8 +1,8 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Trash2, X } from 'lucide-react'
+import { EyeOff, Trash2, X } from 'lucide-react'
 import { ANALYTICS_EVENT, blockCountBucket, trackedTimeBucket } from '@shared/analytics'
-import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, CalendarRangeBlock, CalendarRangeDay, DayTimelinePayload, TimelineGapSegment, WorkContextBlock } from '@shared/types'
+import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, AttributionProject, CalendarRangeBlock, CalendarRangeDay, ClientRecord, CorrectionCommand, DayTimelinePayload, TimelineGapSegment, WorkContextBlock } from '@shared/types'
 import { activityColorForCategory, leisureBlocksDimmed } from '@shared/activityColors'
 import { calendarCardHeights } from '../lib/timelineBlockLayout'
 import { blockActiveSeconds } from '@shared/blockDuration'
@@ -21,8 +21,10 @@ import {
   clampEndTimeDraft,
   clampStartTimeDraft,
   draftTimeInputChange,
+  fromTimeInputValue,
   toTimeInputValue,
 } from '../lib/blockTimeEdit'
+import { useCorrectionFlow } from '../components/CorrectionFlow'
 import { mergeSelectionSpan, spanMergeState } from '../lib/timelineMergeSelection'
 import { ipc } from '../lib/ipc'
 import { sanitizeIpcError } from '../lib/ipcError'
@@ -539,6 +541,7 @@ function BlockContextMenu({
   y,
   busy,
   onEdit,
+  onSplit,
   onRegenerate,
   onDelete,
   onClose,
@@ -550,6 +553,9 @@ function BlockContextMenu({
   y: number
   busy: boolean
   onEdit: () => void
+  // Split at a chosen time — opens the small time-picker dialog. Hidden for
+  // provisional blocks (the day hasn't settled enough to cut).
+  onSplit: (() => void) | null
   onRegenerate: () => void
   onDelete: () => void
   onClose: () => void
@@ -572,7 +578,7 @@ function BlockContextMenu({
 
   const MENU_WIDTH = 200
   const ITEM_HEIGHT = 36
-  const itemCount = 3 + (mergeSpan ? 1 : (mergeAbove ? 1 : 0) + (mergeBelow ? 1 : 0))
+  const itemCount = 3 + (onSplit ? 1 : 0) + (mergeSpan ? 1 : (mergeAbove ? 1 : 0) + (mergeBelow ? 1 : 0))
   const MENU_HEIGHT = itemCount * ITEM_HEIGHT + 10
   const left = Math.min(x, window.innerWidth - MENU_WIDTH - 8)
   const top = Math.min(y, window.innerHeight - MENU_HEIGHT - 8)
@@ -647,6 +653,13 @@ function BlockContextMenu({
             )}
           </>
         )}
+        {onSplit && (
+          <button type="button" role="menuitem" disabled={busy} onClick={onSplit} style={itemStyle()}
+            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-high)' }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}>
+            Split block…
+          </button>
+        )}
         <button type="button" role="menuitem" disabled={busy} onClick={onRegenerate} style={itemStyle()}
           onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-high)' }}
           onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}>
@@ -655,7 +668,7 @@ function BlockContextMenu({
         <button type="button" role="menuitem" disabled={busy} onClick={onDelete} style={itemStyle(true)}
           onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-high)' }}
           onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}>
-          Delete
+          Remove from day
         </button>
       </div>
     </div>
@@ -676,6 +689,7 @@ function BlockEditModal({
   onClose,
   onDeleted,
   onRefresh,
+  onCorrection,
 }: {
   block: WorkContextBlock
   payload: DayTimelinePayload
@@ -684,6 +698,9 @@ function BlockEditModal({
   // (now dangling) selection before the refreshed day lands.
   onDeleted: () => void
   onRefresh: () => Promise<void>
+  // Runs a correction command through the shared preview → apply → undo flow
+  // (DEV-172). Resolves true once applied, false if the preview was cancelled.
+  onCorrection: (command: CorrectionCommand) => Promise<boolean>
 }) {
   const [titleDraft, setTitleDraft] = useState(() => userVisibleBlockLabel(block))
   const [categoryDraft, setCategoryDraft] = useState<AppCategory>(block.dominantCategory)
@@ -692,8 +709,29 @@ function BlockEditModal({
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [purgingKey, setPurgingKey] = useState<string | null>(null)
+  const [hidingKey, setHidingKey] = useState<string | null>(null)
+  const [assigningClient, setAssigningClient] = useState(false)
+  const [clients, setClients] = useState<ClientRecord[]>([])
+  const [projects, setProjects] = useState<AttributionProject[]>([])
   const [error, setError] = useState<string | null>(null)
-  const busy = saving || deleting || purgingKey !== null
+  const busy = saving || deleting || purgingKey !== null || hidingKey !== null || assigningClient
+
+  // Clients and projects for the attribution select — loaded once; an empty
+  // client list simply hides the control (nothing to assign to yet).
+  useEffect(() => {
+    let cancelled = false
+    Promise.all([
+      ipc.attribution.listClientsDetailed(),
+      ipc.attribution.listProjects().catch(() => [] as AttributionProject[]),
+    ])
+      .then(([clientList, projectList]) => {
+        if (cancelled) return
+        setClients(clientList.filter((client) => client.status === 'active'))
+        setProjects(projectList)
+      })
+      .catch(() => { /* the select just stays hidden */ })
+    return () => { cancelled = true }
+  }, [])
 
   // Escape = Discard, like closing GCal's editor without saving.
   useEffect(() => {
@@ -760,31 +798,81 @@ function BlockEditModal({
       setStartDraft(clampedStart)
       setEndDraft(clampedEnd)
       const spanDraft = blockSpanDraftChanged(clampedStart, clampedEnd, block)
-      const result = await ipc.db.updateTimelineBlock({
-        blockId: block.id,
-        date: payload.date,
-        label: title && title !== block.label.current ? title : undefined,
-        category: categoryDraft !== block.dominantCategory ? categoryDraft : undefined,
-        startMs: spanDraft?.changed ? spanDraft.startMs : undefined,
-        endMs: spanDraft?.changed ? spanDraft.endMs : undefined,
-      })
+      const label = title && title !== block.label.current ? title : undefined
+      const category = categoryDraft !== block.dominantCategory ? categoryDraft : undefined
+      const startMs = spanDraft?.changed ? spanDraft.startMs : undefined
+      const endMs = spanDraft?.changed ? spanDraft.endMs : undefined
+      if (label === undefined && category === undefined && startMs === undefined && endMs === undefined) {
+        onClose()
+        return
+      }
+      // The shared preview → apply flow: the dialog opens over this modal,
+      // and the modal only closes once the correction actually applied.
+      const applied = await onCorrection({ kind: 'edit', date: payload.date, blockId: block.id, label, category, startMs, endMs })
+      if (!applied) {
+        setSaving(false)
+        return
+      }
       // One event per save; when several fields changed, report the most
       // structural one (time > category > label).
-      const whatChanged = result.changedFields.includes('time')
+      const whatChanged = startMs !== undefined || endMs !== undefined
         ? 'time'
-        : result.changedFields.includes('category')
-          ? 'category'
-          : result.changedFields.includes('label') ? 'label' : null
-      if (whatChanged) {
-        track(ANALYTICS_EVENT.BLOCK_EDITED, { block_id: block.id, what_changed: whatChanged })
-      }
-      daySummaryRecapCache.delete(payload.date)
-      await onRefresh()
+        : category !== undefined ? 'category' : 'label'
+      track(ANALYTICS_EVENT.BLOCK_EDITED, { block_id: block.id, what_changed: whatChanged })
       onClose()
     } catch (err) {
       setError(sanitizeIpcError(err, "Couldn't save the changes. Try again in a moment.").message)
       setSaving(false)
     }
+  }
+
+  // Assign the block's time to a client and optional project (or clear). Runs
+  // through the same preview flow; the modal closes once applied because the
+  // day's attribution facts re-form underneath it.
+  const assignClient = async (clientId: string | null, projectId: string | null = null) => {
+    if (busy) return
+    setAssigningClient(true)
+    setError(null)
+    try {
+      const applied = await onCorrection({
+        kind: 'assign-client',
+        date: payload.date,
+        blockId: block.id,
+        clientId,
+        projectId: clientId == null ? null : projectId,
+      })
+      if (applied) {
+        track(ANALYTICS_EVENT.BLOCK_EDITED, { block_id: block.id, what_changed: 'client' })
+        onClose()
+        return
+      }
+    } catch (err) {
+      setError(sanitizeIpcError(err, "Couldn't assign the client. Try again in a moment.").message)
+    }
+    setAssigningClient(false)
+  }
+
+  // Hide a tracked record from the corrected facts without destroying it —
+  // the undoable counterpart to purgeRow's permanent erase.
+  const hideRow = async (row: { key: string; kind: 'app' | 'site'; bundleId?: string; appName?: string; domain?: string }) => {
+    if (busy) return
+    setHidingKey(row.key)
+    setError(null)
+    try {
+      const applied = await onCorrection({
+        kind: 'exclude-evidence',
+        date: payload.date,
+        blockId: block.id,
+        evidence: { kind: row.kind, bundleId: row.bundleId ?? null, appName: row.appName ?? null, domain: row.domain ?? null },
+      })
+      if (applied) {
+        onClose()
+        return
+      }
+    } catch (err) {
+      setError(sanitizeIpcError(err, "Couldn't hide the record. Try again in a moment.").message)
+    }
+    setHidingKey(null)
   }
 
   // Permanently remove a sensitive tracked record. The main process shows the
@@ -1006,6 +1094,51 @@ function BlockEditModal({
             )}
           </div>
 
+          {/* Attribution: assign this block's time to a client, or a project
+              under that client. Shown only when clients exist; runs through
+              the preview flow like every other correction. */}
+          {clients.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <select
+                aria-label="Assign to client or project"
+                value=""
+                disabled={busy}
+                onChange={(event) => {
+                  const value = event.target.value
+                  if (!value) return
+                  if (value === '__none__') {
+                    void assignClient(null, null)
+                    return
+                  }
+                  if (value.startsWith('project:')) {
+                    const projectId = value.slice('project:'.length)
+                    const project = projects.find((row) => row.id === projectId)
+                    if (!project) return
+                    void assignClient(project.client_id, project.id)
+                    return
+                  }
+                  void assignClient(value, null)
+                }}
+                style={{ ...inputBase, height: 32, padding: '0 8px', cursor: busy ? 'default' : 'pointer' }}
+              >
+                <option value="">{assigningClient ? 'Assigning…' : 'Assign to client or project…'}</option>
+                {clients.map((client) => (
+                  <option key={client.id} value={client.id}>{client.name}</option>
+                ))}
+                {projects.length > 0 && (
+                  <optgroup label="Projects">
+                    {projects.map((project) => (
+                      <option key={project.id} value={`project:${project.id}`}>
+                        {project.client_name} · {project.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                <option value="__none__">No client (clear assignment)</option>
+              </select>
+            </div>
+          )}
+
           {/* Tracked records, each permanently removable — real deletion of
               the underlying data, for anything the user doesn't want Daylens
               to hold (native confirm before anything is touched). */}
@@ -1027,6 +1160,16 @@ function BlockEditModal({
                     <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{formatDuration(row.seconds)}</span>
                     <button
                       type="button"
+                      aria-label={`Hide ${row.name} from this block`}
+                      title="Hide from timeline (undoable — the record itself is kept)"
+                      disabled={busy}
+                      onClick={() => { void hideRow(row) }}
+                      style={{ width: 26, height: 26, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', borderRadius: 7, border: 'none', background: 'transparent', color: 'var(--color-text-secondary)', cursor: busy ? 'default' : 'pointer', opacity: hidingKey && hidingKey !== row.key ? 0.4 : 1, flexShrink: 0 }}
+                    >
+                      <EyeOff size={14} strokeWidth={2} aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
                       aria-label={`Permanently remove ${row.name} from Daylens`}
                       title="Remove permanently"
                       disabled={purgingKey !== null}
@@ -1039,7 +1182,7 @@ function BlockEditModal({
                 ))}
               </div>
               <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginTop: 8, lineHeight: 1.5 }}>
-                Removing deletes the record from Daylens entirely — timeline, apps, and AI — not just from this view.
+                Hide keeps the record but drops it from timeline, apps, and AI (undoable). Remove deletes it from Daylens entirely.
               </div>
             </div>
           )}
@@ -1077,6 +1220,118 @@ function BlockEditModal({
             style={{ border: 'none', background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)', fontSize: 12.5, fontWeight: 700, cursor: busy ? 'default' : 'pointer', padding: '7px 16px', borderRadius: 9, opacity: saving ? 0.6 : 1 }}
           >
             {saving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Split dialog ────────────────────────────────────────────────────────────
+// Right-click → Split block…: pick the cut time (defaults to the midpoint),
+// then the shared preview flow shows exactly what the two halves will be
+// before anything applies. The service enforces a one-minute minimum on each
+// side of the cut.
+
+function SplitBlockDialog({
+  block,
+  onClose,
+  onSubmit,
+}: {
+  block: WorkContextBlock
+  onClose: () => void
+  // Runs the split through the preview flow; resolves true once applied.
+  onSubmit: (cutMs: number) => Promise<boolean>
+}) {
+  const midpointMs = block.startTime + Math.floor((block.endTime - block.startTime) / 2)
+  const [draft, setDraft] = useState(() => toTimeInputValue(midpointMs))
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape' && !busy) onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose, busy])
+
+  const submit = async () => {
+    if (busy) return
+    const cutMs = fromTimeInputValue(draft, block.startTime)
+    if (cutMs == null || cutMs <= block.startTime || cutMs >= block.endTime) {
+      setError('Pick a time inside the block.')
+      return
+    }
+    setBusy(true)
+    setError(null)
+    try {
+      const applied = await onSubmit(cutMs)
+      if (!applied) setBusy(false)
+    } catch (err) {
+      setError(sanitizeIpcError(err, "Couldn't preview the split. Try again in a moment.").message)
+      setBusy(false)
+    }
+  }
+
+  const rangeHint = `${new Date(block.startTime).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} – ${new Date(block.endTime).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+
+  return (
+    <div
+      data-timeline-inspector="true"
+      style={{ position: 'fixed', inset: 0, zIndex: 70, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}
+      onClick={() => { if (!busy) onClose() }}
+    >
+      <div
+        role="dialog"
+        aria-label="Split block"
+        style={{
+          width: 380,
+          maxWidth: '100%',
+          borderRadius: 16,
+          border: '1px solid var(--color-border-ghost)',
+          background: 'var(--color-surface)',
+          boxShadow: '0 24px 64px rgba(0,0,0,0.35)',
+          padding: '18px 22px',
+        }}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--color-text-primary)', lineHeight: 1.4 }}>
+          Split “{userVisibleBlockLabel(block)}”
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginTop: 4 }}>
+          {rangeHint} · each half needs at least a minute
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14 }}>
+          <span style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', fontWeight: 600 }}>Split at</span>
+          <input
+            type="time"
+            aria-label="Split time"
+            value={draft}
+            autoFocus
+            disabled={busy}
+            onChange={(event) => setDraft(draftTimeInputChange(event.target.value))}
+            onKeyDown={(event) => { if (event.key === 'Enter') void submit() }}
+            style={{ borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-low)', color: 'var(--color-text-primary)', fontSize: 13, outline: 'none', padding: '5px 8px' }}
+          />
+        </div>
+        {error && (
+          <div style={{ fontSize: 11.5, lineHeight: 1.5, color: '#f87171', marginTop: 10 }}>{error}</div>
+        )}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onClose}
+            style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: 12.5, fontWeight: 650, cursor: busy ? 'default' : 'pointer', padding: '7px 14px', borderRadius: 9 }}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => { void submit() }}
+            style={{ border: 'none', background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)', fontSize: 12.5, fontWeight: 700, cursor: busy ? 'default' : 'pointer', padding: '7px 16px', borderRadius: 9, opacity: busy ? 0.6 : 1 }}
+          >
+            {busy ? 'Previewing…' : 'Preview split'}
           </button>
         </div>
       </div>
@@ -2116,6 +2371,16 @@ export default function Timeline() {
   // read-only detail panel never hosts edit controls.
   const [editBlockId, setEditBlockId] = useState<string | null>(null)
   const [menuBusy, setMenuBusy] = useState(false)
+  // The block a split is being picked for (right-click → Split block…).
+  const [splitBlockId, setSplitBlockId] = useState<string | null>(null)
+
+  // The shared preview → apply → undo flow every non-destructive correction
+  // runs through (DEV-172). Applying or undoing re-forms the day, so the
+  // hook's callback owns the cache drop + refresh.
+  const correction = useCorrectionFlow(async () => {
+    daySummaryRecapCache.delete(date)
+    await timelineResource.refresh()
+  })
 
   // Filter the day by block type ("Focused work", "Meeting", "Leisure"…).
   // Filtering dims the other blocks in place — the day's shape stays honest.
@@ -2273,60 +2538,37 @@ export default function Timeline() {
   // neighbour items — the second merge gesture, sharing the same menu.
   const menuMergeSpanActive = !!menuBlock && spanMerge.isSpan && selectedSpanIds.has(menuBlock.id)
 
+  // Merges run through the shared preview flow: the menu closes, the preview
+  // dialog opens, and selection collapses onto the merged span only after the
+  // correction actually applied. A cancelled preview leaves the grid as-is.
+  const runMerge = async (blockIds: string[], selectAt: number | null) => {
+    setContextMenu(null)
+    try {
+      const applied = await correction.request({ kind: 'merge', date, blockIds })
+      if (applied) {
+        if (selectAt != null) pendingSelectAtRef.current = selectAt
+        setMergeRangeEndId(null)
+        setSelectedBlockId(null)
+      }
+    } catch {
+      // Preview failed (e.g. the day just rebuilt) — the grid stays honest.
+    }
+  }
+
   const menuMergeSpan = async () => {
     if (!contextMenu || menuBusy || !menuMergeSpanActive || !spanMerge.canMerge || !spanMerge.endpointIds) return
     const [startId] = spanMerge.endpointIds
-    const spanStartTime = blockMap.get(startId)?.startTime ?? null
-    setMenuBusy(true)
-    try {
-      await ipc.db.mergeTimelineEpisodes({ blockIds: spanMerge.endpointIds, date })
-      daySummaryRecapCache.delete(date)
-      if (spanStartTime != null) pendingSelectAtRef.current = spanStartTime
-      setMergeRangeEndId(null)
-      setSelectedBlockId(null)
-      await timelineResource.refresh()
-    } catch {
-      // Menu just closes; the merged/unmerged state is visible on the grid.
-    } finally {
-      setMenuBusy(false)
-      setContextMenu(null)
-    }
+    await runMerge(spanMerge.endpointIds, blockMap.get(startId)?.startTime ?? null)
   }
 
   const menuMergeAbove = async () => {
     if (!contextMenu || menuBusy || !menuBlock || !menuAboveBlock || menuMergeAboveDisabled) return
-    setMenuBusy(true)
-    try {
-      await ipc.db.mergeTimelineEpisodes({ blockIds: [menuAboveBlock.id, menuBlock.id], date })
-      daySummaryRecapCache.delete(date)
-      pendingSelectAtRef.current = menuAboveBlock.startTime
-      setMergeRangeEndId(null)
-      setSelectedBlockId(null)
-      await timelineResource.refresh()
-    } catch {
-      // Menu just closes; the merged/unmerged state is visible on the grid.
-    } finally {
-      setMenuBusy(false)
-      setContextMenu(null)
-    }
+    await runMerge([menuAboveBlock.id, menuBlock.id], menuAboveBlock.startTime)
   }
 
   const menuMergeBelow = async () => {
     if (!contextMenu || menuBusy || !menuBlock || !menuBelowBlock || menuMergeBelowDisabled) return
-    setMenuBusy(true)
-    try {
-      await ipc.db.mergeTimelineEpisodes({ blockIds: [menuBlock.id, menuBelowBlock.id], date })
-      daySummaryRecapCache.delete(date)
-      pendingSelectAtRef.current = menuBlock.startTime
-      setMergeRangeEndId(null)
-      setSelectedBlockId(null)
-      await timelineResource.refresh()
-    } catch {
-      // Menu just closes; the merged/unmerged state is visible on the grid.
-    } finally {
-      setMenuBusy(false)
-      setContextMenu(null)
-    }
+    await runMerge([menuBlock.id, menuBelowBlock.id], menuBlock.startTime)
   }
 
   const menuRegenerate = async () => {
@@ -2344,21 +2586,21 @@ export default function Timeline() {
     }
   }
 
+  // "Remove from day" hides the block from every corrected surface — an
+  // undoable exclude-block correction, not a purge. Raw activity survives;
+  // the permanent-erase path lives in the editor modal with its own confirm.
   const menuDelete = async () => {
     if (!contextMenu || menuBusy) return
-    setMenuBusy(true)
+    const blockId = contextMenu.blockId
+    setContextMenu(null)
     try {
-      const { deleted } = await ipc.db.deleteTimelineBlock({ blockId: contextMenu.blockId, date })
-      if (deleted) {
-        daySummaryRecapCache.delete(date)
+      const applied = await correction.request({ kind: 'exclude-block', date, blockId })
+      if (applied) {
         setSelectedBlockId(null)
-        await timelineResource.refresh()
+        setMergeRangeEndId(null)
       }
     } catch {
-      // Native dialog cancelled or delete failed — nothing to clean up.
-    } finally {
-      setMenuBusy(false)
-      setContextMenu(null)
+      // Preview failed — nothing changed on the grid.
     }
   }
 
@@ -2632,6 +2874,10 @@ export default function Timeline() {
                           setEditBlockId(contextMenu.blockId)
                           setContextMenu(null)
                         }}
+                        onSplit={menuBlock && !menuBlock.provisional ? () => {
+                          setSplitBlockId(contextMenu.blockId)
+                          setContextMenu(null)
+                        } : null}
                         mergeSpan={menuMergeSpanActive ? { count: spanMerge.count, disabled: !spanMerge.canMerge, onClick: () => { void menuMergeSpan() } } : null}
                         mergeAbove={menuAboveBlock ? { disabled: menuMergeAboveDisabled, onClick: () => { void menuMergeAbove() } } : null}
                         mergeBelow={menuBelowBlock ? { disabled: menuMergeBelowDisabled, onClick: () => { void menuMergeBelow() } } : null}
@@ -2650,6 +2896,22 @@ export default function Timeline() {
                           setMergeRangeEndId(null)
                         }}
                         onRefresh={timelineResource.refresh}
+                        onCorrection={correction.request}
+                      />
+                    )}
+                    {splitBlockId && blockMap.get(splitBlockId) && (
+                      <SplitBlockDialog
+                        block={blockMap.get(splitBlockId)!}
+                        onClose={() => setSplitBlockId(null)}
+                        onSubmit={async (cutMs) => {
+                          const applied = await correction.request({ kind: 'split', date, blockId: splitBlockId, cutMs })
+                          if (applied) {
+                            setSplitBlockId(null)
+                            setSelectedBlockId(null)
+                            setMergeRangeEndId(null)
+                          }
+                          return applied
+                        }}
                       />
                     )}
                     {/* The right column is one panel with two mutually
@@ -2698,6 +2960,9 @@ export default function Timeline() {
                     )}
                   </div>
                 )}
+                {/* The correction preview dialog + undo toast — outside the
+                    blocks gate so the toast survives excluding the last block. */}
+                {correction.overlay}
               </>
             )}
           </div>

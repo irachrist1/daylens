@@ -47,11 +47,78 @@ const APP_CATEGORIES = new Set<AppCategory>([
   'system', 'uncategorized',
 ])
 
-function reviewsTableExists(db: Database.Database): boolean {
+function tableExists(db: Database.Database, name: string): boolean {
   const row = db.prepare(
-    `SELECT name FROM sqlite_master WHERE type='table' AND name='timeline_block_reviews' LIMIT 1`,
-  ).get() as { name: string } | undefined
+    `SELECT name FROM sqlite_master WHERE type='table' AND name=? LIMIT 1`,
+  ).get(name) as { name: string } | undefined
   return Boolean(row)
+}
+
+function reviewsTableExists(db: Database.Database): boolean {
+  return tableExists(db, 'timeline_block_reviews')
+}
+
+// ─── Reversible evidence exclusions (timeline spec, Corrections) ─────────────
+// "Exclude specific evidence" hides one app or site inside a span from every
+// corrected read — Timeline, Apps, search, AI — without touching the raw rows,
+// so the correction can be undone. Matching mirrors the permanent purge's
+// identity rule (bundle id OR display name; domain for sites).
+
+export interface EvidenceExclusionSpan {
+  id: string
+  kind: 'app' | 'site'
+  bundleId: string | null
+  appName: string | null
+  domain: string | null
+  startMs: number
+  endMs: number
+}
+
+export function getEvidenceExclusionsForRange(
+  db: Database.Database,
+  fromMs: number,
+  toMs: number,
+): EvidenceExclusionSpan[] {
+  if (!tableExists(db, 'evidence_exclusions')) return []
+  const rows = db.prepare(`
+    SELECT id, kind, bundle_id, app_name, domain, span_start_ms, span_end_ms
+    FROM evidence_exclusions
+    WHERE span_start_ms < ? AND span_end_ms > ?
+  `).all(toMs, fromMs) as Array<{
+    id: string
+    kind: 'app' | 'site'
+    bundle_id: string | null
+    app_name: string | null
+    domain: string | null
+    span_start_ms: number
+    span_end_ms: number
+  }>
+  return rows.map((row) => ({
+    id: row.id,
+    kind: row.kind,
+    bundleId: row.bundle_id,
+    appName: row.app_name,
+    domain: row.domain,
+    startMs: row.span_start_ms,
+    endMs: row.span_end_ms,
+  }))
+}
+
+function sessionMatchesExclusion(session: AppSession, exclusion: EvidenceExclusionSpan): boolean {
+  if (exclusion.kind !== 'app') return false
+  return Boolean(
+    (exclusion.bundleId && session.bundleId === exclusion.bundleId)
+    || (exclusion.appName && session.appName === exclusion.appName),
+  )
+}
+
+function excludedSpansForSession(
+  session: AppSession,
+  exclusions: readonly EvidenceExclusionSpan[],
+): CorrectionSpan[] {
+  return exclusions
+    .filter((exclusion) => sessionMatchesExclusion(session, exclusion))
+    .map((exclusion) => ({ startMs: exclusion.startMs, endMs: exclusion.endMs }))
 }
 
 /** The time spans of every Timeline block the user deleted, clipped to the
@@ -206,8 +273,13 @@ export function applyTimelineCorrectionsToSessions(
 ): AppSession[] {
   const spans = getIgnoredBlockSpansForRange(db, fromMs, toMs)
   const categorySpans = getCategoryCorrectionSpansForRange(db, fromMs, toMs)
-  if (spans.length === 0 && categorySpans.length === 0) return [...sessions]
-  return sessions.flatMap((session) => correctedPiecesForSession(session, fromMs, toMs, spans, categorySpans))
+  const exclusions = getEvidenceExclusionsForRange(db, fromMs, toMs)
+  if (spans.length === 0 && categorySpans.length === 0 && exclusions.length === 0) return [...sessions]
+  return sessions.flatMap((session) => {
+    const excluded = excludedSpansForSession(session, exclusions)
+    const ignoredForSession = excluded.length > 0 ? mergeCorrectionSpans([...spans, ...excluded]) : spans
+    return correctedPiecesForSession(session, fromMs, toMs, ignoredForSession, categorySpans)
+  })
 }
 
 /** Aggregate corrected sessions into per-app usage summaries. Also feeds the
@@ -332,19 +404,45 @@ export function getCorrectedDomainIntervals(
   domainFilter?: (domain: string) => boolean,
 ): CorrectedDomainInterval[] {
   const ignored = getIgnoredBlockSpansForRange(db, fromMs, toMs)
+  const siteExclusions = getEvidenceExclusionsForRange(db, fromMs, toMs)
+    .filter((exclusion) => exclusion.kind === 'site' && exclusion.domain)
   // Page credit clips against the same corrected foreground ownership the app
   // totals are built from, so a domain's time can never exceed its browser's.
   const reconciled = getReconciledDomainIntervals(
     db, fromMs, toMs, domainFilter,
     (chunkFromMs, chunkToMs) => getCorrectedSessionsForRange(db, chunkFromMs, chunkToMs),
   )
-  return reconciled.flatMap((interval) =>
-    subtractSpansFromInterval(interval.start, interval.end, ignored).map((piece) => ({
+  return reconciled.flatMap((interval) => {
+    const excludedForDomain = siteExclusions
+      .filter((exclusion) => exclusion.domain === interval.domain)
+      .map((exclusion) => ({ startMs: exclusion.startMs, endMs: exclusion.endMs }))
+    const subtracted = excludedForDomain.length > 0
+      ? mergeCorrectionSpans([...ignored, ...excludedForDomain])
+      : ignored
+    return subtractSpansFromInterval(interval.start, interval.end, subtracted).map((piece) => ({
       domain: interval.domain,
       visitId: interval.visitId,
       ...piece,
-    })),
+    }))
+  })
+}
+
+/** Drop website summaries whose domain the user excluded anywhere inside the
+ *  queried range — the per-block site lists read raw summaries, and an
+ *  excluded site must vanish from the block's evidence, not just its totals. */
+export function filterExcludedWebsiteSummaries(
+  db: Database.Database,
+  summaries: readonly WebsiteSummary[],
+  fromMs: number,
+  toMs: number,
+): WebsiteSummary[] {
+  const excludedDomains = new Set(
+    getEvidenceExclusionsForRange(db, fromMs, toMs)
+      .filter((exclusion) => exclusion.kind === 'site' && exclusion.domain)
+      .map((exclusion) => exclusion.domain as string),
   )
+  if (excludedDomains.size === 0) return [...summaries]
+  return summaries.filter((summary) => !excludedDomains.has(summary.domain))
 }
 
 /** Website facts corrected by the same interval ledger as app facts. */
