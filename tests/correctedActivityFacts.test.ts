@@ -223,28 +223,25 @@ test('ignored spans subtract exact overlap instead of keeping or dropping a whol
   db.close()
 })
 
-test('past-day derived projection recomputes header totals, focus, and app count from corrected sessions', () => {
+test('past-day canonical projection recomputes header totals, focus, and app count from corrected sessions', () => {
   const db = createDb()
-  const insertDerived = db.prepare(`
-    INSERT INTO derived_sessions (
-      date, start_ts_ms, end_ts_ms, active_seconds, app_bundle_id, app_name,
-      window_title, confidence, category, is_browser, projection_version
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'observed', ?, 0, 1)
+  const insertEvent = db.prepare(`
+    INSERT INTO focus_events (
+      ts_ms, mono_ns, event_type, app_bundle_id, app_name, pid,
+      window_title, url, page_title, source, confidence, platform, schema_ver
+    ) VALUES (?, ?, ?, ?, ?, 4242, ?, NULL, NULL, 'foreground_poll', 'observed', 'darwin', 2)
   `)
-  insertDerived.run(TEST_DATE, localMs(9), localMs(10), 3600, 'ghostty', 'Ghostty', 'Work', 'development')
-  insertDerived.run(TEST_DATE, localMs(9, 15), localMs(9, 45), 1800, 'slack', 'Slack', 'Chat', 'communication')
-  db.prepare(`
-    INSERT INTO derived_projection_runs
-      (date, projection_version, events_in, sessions_out, blocks_out, finalized_at, started_at)
-    VALUES (?, 1, 0, 2, 0, ?, ?)
-  `).run(TEST_DATE, Date.now(), Date.now())
+  insertEvent.run(localMs(9), localMs(9) * 1_000_000, 'app_activated', 'ghostty', 'Ghostty', 'Work')
+  insertEvent.run(localMs(9, 30), localMs(9, 30) * 1_000_000, 'app_deactivated', 'ghostty', 'Ghostty', 'Work')
+  insertEvent.run(localMs(9, 30), localMs(9, 30) * 1_000_000 + 1, 'app_activated', 'slack', 'Slack', 'Chat')
+  insertEvent.run(localMs(10), localMs(10) * 1_000_000, 'app_deactivated', 'slack', 'Slack', 'Chat')
   const now = Date.now()
   db.prepare(`
     INSERT INTO timeline_block_reviews (
       id, block_id, date, evidence_key, review_state, original_block_json,
       correction_json, created_at, updated_at
-    ) VALUES ('review_derived_partial', 'derived_partial', ?, 'derived_partial', 'ignored', ?, '{}', ?, ?)
-  `).run(TEST_DATE, JSON.stringify({ startTime: localMs(9, 15), endTime: localMs(9, 45) }), now, now)
+    ) VALUES ('review_canonical_partial', 'canonical_partial', ?, 'canonical_partial', 'ignored', ?, '{}', ?, ?)
+  `).run(TEST_DATE, JSON.stringify({ startTime: localMs(9, 30), endTime: localMs(10) }), now, now)
 
   const payload = materializeTimelineDayProjection(db, TEST_DATE, null)
   assert.equal(payload.totalSeconds, 30 * 60)

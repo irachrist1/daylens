@@ -221,8 +221,8 @@ export function selectRecentCompleteDay(
       MIN(start_time) AS firstActivityMs,
       MAX(COALESCE(end_time, start_time + duration_sec * 1000)) AS lastActivityMs
     FROM app_sessions
-    WHERE start_time < strftime('%s', ?, 'localtime') * 1000
-      AND start_time >= strftime('%s', ?, 'localtime', ?) * 1000
+    WHERE start_time < strftime('%s', ?, 'utc') * 1000
+      AND start_time >= strftime('%s', ?, 'utc', ?) * 1000
     GROUP BY date
     ORDER BY date DESC
   `,

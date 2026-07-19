@@ -1,6 +1,7 @@
-// One query boundary for corrected activity facts (capture migration slices 6–7).
+// One query boundary for corrected activity facts (capture migration slices 6–8).
 // Live and historical reads share the same projection + correction path.
-// Consumers are not moved onto this boundary here — that is separate work.
+// Timeline day reads (renderer projection and direct payload) consume this
+// boundary; remaining consumers move in their own slices.
 
 import type Database from 'better-sqlite3'
 import type { AppCategory, AppSession } from '@shared/types'
@@ -26,7 +27,13 @@ import {
   listLegacyAppSessionInputs,
 } from '../evidence/legacyAdapter'
 
-export const ACTIVITY_FACTS_QUERY_VERSION = 1
+export const ACTIVITY_FACTS_QUERY_VERSION = 2
+
+// Synthetic ids for canonically projected sessions. They must stay negative
+// (no app_sessions row backs them) but clear of the live-session sentinel
+// (id -1) that marks the in-memory tracker session in block building.
+export const CANONICAL_SESSION_ID_BASE = -1000
+export const LIVE_SESSION_SENTINEL_ID = -1
 
 const APP_CATEGORIES: ReadonlySet<string> = new Set([
   'development',
@@ -83,13 +90,40 @@ export interface QueryCorrectedActivityFactsOptions {
   asOfMs?: number
 }
 
+export interface CorrectedActivityRangeFacts {
+  projectionVersion: number
+  queryVersion: number
+  evidenceSource: 'canonical' | 'legacy' | 'mixed'
+  sessions: AppSession[]
+  totalSeconds: number
+  focusSeconds: number
+  gaps: ActivityGapFact[]
+  focusEventCount: number
+  legacySessionCount: number
+}
+
+export interface QueryCorrectedActivityFactsForRangeOptions {
+  /**
+   * Wall-clock “now”. The canonical projection never extends an open session
+   * past it — a live read’s trailing session ends at now, not at the range
+   * end that midnight would otherwise supply.
+   */
+  nowMs?: number
+  /**
+   * Mark the trailing still-open canonical session with the live sentinel id
+   * so block building recognizes the in-progress session. Only live-day
+   * callers set this; historical reads leave every session non-live.
+   */
+  markTrailingOpenSessionLive?: boolean
+}
+
 function toAppCategory(category: string | null | undefined): AppCategory {
   return category && APP_CATEGORIES.has(category) ? (category as AppCategory) : 'uncategorized'
 }
 
 function derivedRowToAppSession(
   row: DerivedSessionRow,
-  index: number,
+  id: number,
   focusApps: string[] | undefined,
 ): AppSession {
   const bundleId = row.app_bundle_id ?? row.app_name ?? 'unknown'
@@ -97,7 +131,7 @@ function derivedRowToAppSession(
   const category = toAppCategory(row.category)
   const identity = resolveCanonicalApp(bundleId, appName)
   return {
-    id: -(index + 1),
+    id,
     bundleId,
     appName: identity.displayName || appName,
     startTime: row.start_ts_ms,
@@ -191,32 +225,50 @@ function totalsFromSessions(sessions: readonly AppSession[]): {
 }
 
 /**
- * Shared corrected activity-fact query for one local day.
- * Deterministic: same evidence + same corrections + same projection/query
- * versions + same asOfMs ⇒ same facts, whether the caller is live or rebuilt.
+ * Shared corrected activity-fact query for an arbitrary window. The Timeline
+ * payload calls this with its own day-ownership bounds; the day query wraps
+ * it with owned-day bounds and asOf clipping. Deterministic: same evidence +
+ * same corrections + same versions + same window ⇒ same facts.
  */
-export function queryCorrectedActivityFactsForDay(
+export function queryCorrectedActivityFactsForRange(
   db: Database.Database,
-  date: string,
-  options: QueryCorrectedActivityFactsOptions = {},
-): CorrectedActivityDayFacts {
+  fromMs: number,
+  toMs: number,
+  options: QueryCorrectedActivityFactsForRangeOptions = {},
+): CorrectedActivityRangeFacts {
   const nowMs = options.nowMs ?? Date.now()
-  const [fromMs, dayEndMs] = ownedDayBounds(db, date)
-  const asOfMs = Math.min(dayEndMs, Math.max(fromMs, options.asOfMs ?? nowMs))
+  // Evidence is read across the whole window, but an open canonical session
+  // is never closed past “now”: the live day’s window runs to midnight and
+  // the hours that have not happened yet are not activity.
+  const projectionEndMs = Math.max(fromMs, Math.min(toMs, nowMs))
   const focusApps = getSettings().focusApps
 
-  const focusEventCount = countFocusEventsInRange(db, fromMs, asOfMs)
-  const events = listFocusEventsInRange(db, fromMs, asOfMs)
-  const projected = projectSessionsFromFocusEvents(events, asOfMs)
-  const canonicalSessions = projected
+  const focusEventCount = countFocusEventsInRange(db, fromMs, toMs)
+  const events = listFocusEventsInRange(db, fromMs, toMs)
+  const projected = projectSessionsFromFocusEvents(events, projectionEndMs)
+  const visibleRows = projected
     .filter((row) => !isSystemNoiseApp({ bundleId: row.app_bundle_id, appName: row.app_name }))
-    .map((row, index) => derivedRowToAppSession(row, index, focusApps))
+  const canonicalSessions = visibleRows
+    .map((row, index) => derivedRowToAppSession(row, CANONICAL_SESSION_ID_BASE - index, focusApps))
+  if (options.markTrailingOpenSessionLive && canonicalSessions.length > 0) {
+    const last = canonicalSessions[canonicalSessions.length - 1]
+    // The trailing session is “open” when the fold closed it at the window
+    // edge rather than at an observed boundary event. Every event-closed
+    // session ends strictly before the projection end.
+    if (last.endTime === projectionEndMs) {
+      canonicalSessions[canonicalSessions.length - 1] = { ...last, id: LIVE_SESSION_SENTINEL_ID }
+    }
+  }
 
-  const legacyInputs = listLegacyAppSessionInputs(db, fromMs, asOfMs)
+  const legacyInputs = listLegacyAppSessionInputs(db, fromMs, toMs)
   const legacySessions = legacyAppSessionsAsAppSessions(legacyInputs)
+    .map((session) => {
+      const focused = isAppFocused(session.category, session.bundleId, session.appName, focusApps)
+      return focused === session.isFocused ? session : { ...session, isFocused: focused }
+    })
   const legacySessionCount = legacySessions.length
 
-  let evidenceSource: CorrectedActivityDayFacts['evidenceSource']
+  let evidenceSource: CorrectedActivityRangeFacts['evidenceSource']
   let rawSessions: AppSession[]
   if (canonicalSessions.length > 0 && legacySessionCount > 0) {
     evidenceSource = 'mixed'
@@ -229,12 +281,11 @@ export function queryCorrectedActivityFactsForDay(
     rawSessions = legacySessions
   }
 
-  const sessions = applyTimelineCorrectionsToSessions(db, rawSessions, fromMs, asOfMs)
+  const sessions = applyTimelineCorrectionsToSessions(db, rawSessions, fromMs, toMs)
   const { totalSeconds, focusSeconds } = totalsFromSessions(sessions)
-  const gaps = projectGapsFromFocusEvents(events, asOfMs)
+  const gaps = projectGapsFromFocusEvents(events, projectionEndMs)
 
   return {
-    date,
     projectionVersion: PROJECTION_VERSION,
     queryVersion: ACTIVITY_FACTS_QUERY_VERSION,
     evidenceSource,
@@ -245,6 +296,23 @@ export function queryCorrectedActivityFactsForDay(
     focusEventCount,
     legacySessionCount,
   }
+}
+
+/**
+ * Shared corrected activity-fact query for one local day.
+ * Deterministic: same evidence + same corrections + same projection/query
+ * versions + same asOfMs ⇒ same facts, whether the caller is live or rebuilt.
+ */
+export function queryCorrectedActivityFactsForDay(
+  db: Database.Database,
+  date: string,
+  options: QueryCorrectedActivityFactsOptions = {},
+): CorrectedActivityDayFacts {
+  const nowMs = options.nowMs ?? Date.now()
+  const [fromMs, dayEndMs] = ownedDayBounds(db, date)
+  const asOfMs = Math.min(dayEndMs, Math.max(fromMs, options.asOfMs ?? nowMs))
+  const facts = queryCorrectedActivityFactsForRange(db, fromMs, asOfMs, { nowMs: asOfMs })
+  return { date, ...facts }
 }
 
 /** Convenience: facts for “today” clipped to now, using the shared query. */

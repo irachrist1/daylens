@@ -10,4 +10,8 @@ export const app = {
 export const shell = {}
 export const ipcMain = { handle: () => {}, on: () => {} }
 export const BrowserWindow = class {}
-export default { app, shell, ipcMain, BrowserWindow }
+// tracking.ts (reached through the shared activity-fact query) imports
+// Notification and powerMonitor; the MCP server never constructs or calls them.
+export const Notification = class {}
+export const powerMonitor = { on: () => {}, getSystemIdleTime: () => 0 }
+export default { app, shell, ipcMain, BrowserWindow, Notification, powerMonitor }
