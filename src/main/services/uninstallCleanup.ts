@@ -18,6 +18,19 @@ function shQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
+// Delete is the suggested default (defaultId 0); Keep remains a real choice at index 1.
+export function uninstallPrimaryChoiceDialogOptions(): Electron.MessageBoxOptions {
+  return {
+    type: 'warning',
+    title: 'Reset and uninstall Daylens',
+    message: 'Remove Daylens from this computer?',
+    detail: 'Daylens will stop launching at login and quit. Choose what happens to your local data — the timeline database and settings on this machine.',
+    buttons: ['Delete local data', 'Keep local data', 'Cancel'],
+    defaultId: 0,
+    cancelId: 2,
+  }
+}
+
 // Maps the reset-and-uninstall dialog responses to a decision. The first
 // dialog's buttons are ['Delete local data', 'Keep local data', 'Cancel']
 // (0/1/2); deleting requires a second confirmation, requested lazily via

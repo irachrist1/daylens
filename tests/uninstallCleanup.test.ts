@@ -11,6 +11,7 @@ import {
   planUninstallCleanup,
   removalCommandForPackageType,
   resolveUninstallChoice,
+  uninstallPrimaryChoiceDialogOptions,
   windowsUninstallerPath,
 } from '../src/main/services/uninstallCleanup'
 import { listUserDataCandidatePaths } from '../src/main/services/userData'
@@ -41,6 +42,13 @@ test('candidate user-data paths cover the preferred and legacy directories per p
     path.join('/appdata', 'Daylens'),
     path.join('/appdata', 'DaylensWindows'),
   ])
+})
+
+test('uninstall primary-choice dialog suggests Delete as the default', () => {
+  const options = uninstallPrimaryChoiceDialogOptions()
+  assert.deepEqual(options.buttons, ['Delete local data', 'Keep local data', 'Cancel'])
+  assert.equal(options.defaultId, 0, 'Delete must be the suggested default')
+  assert.equal(options.cancelId, 2)
 })
 
 test('uninstall choice dialog maps keep, delete, and cancel responses correctly', async () => {

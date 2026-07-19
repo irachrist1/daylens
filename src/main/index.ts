@@ -130,7 +130,11 @@ import { registerCommandPaletteShortcut, unregisterCommandPaletteShortcut } from
 import { registerDistractionAlerterHandlers, resetDistractionStateOnResume, setDistractionAlertWindow, startDistractionAlerter } from './services/distractionAlerter'
 import { startExternalSignalCollection, stopExternalSignalCollection } from './services/externalSignals'
 import { getLinuxDesktopDiagnostics, syncLinuxLaunchOnLogin } from './services/linuxDesktop'
-import { performUninstallCleanup, resolveUninstallChoice } from './services/uninstallCleanup'
+import {
+  performUninstallCleanup,
+  resolveUninstallChoice,
+  uninstallPrimaryChoiceDialogOptions,
+} from './services/uninstallCleanup'
 import { detectCLITools } from './jobs/aiService'
 import { stopProcessMonitor } from './services/processMonitor'
 import { reconcileOnboardingState } from './services/onboarding'
@@ -1074,15 +1078,7 @@ ipcMain.handle(IPC.APP.RESET_AND_UNINSTALL, async (event): Promise<{ started: bo
     window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options)
   )
 
-  const { response } = await ask({
-    type: 'warning',
-    title: 'Reset and uninstall Daylens',
-    message: 'Remove Daylens from this computer?',
-    detail: 'Daylens will stop launching at login and quit. Choose what happens to your local data — the timeline database and settings on this machine.',
-    buttons: ['Delete local data', 'Keep local data', 'Cancel'],
-    defaultId: 1,
-    cancelId: 2,
-  })
+  const { response } = await ask(uninstallPrimaryChoiceDialogOptions())
   const choice = await resolveUninstallChoice(response, async () => {
     const confirm = await ask({
       type: 'warning',
