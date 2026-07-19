@@ -25,6 +25,7 @@ export const MODELS = [
     id: 'Xenova/all-MiniLM-L6-v2',
     revision: '751bff37182d3f1213fa05d7196b954e230abad9',
     label: 'all-MiniLM-L6-v2 (q8)',
+    pooling: 'mean',
     queryPrefix: '',
   },
   {
@@ -32,6 +33,7 @@ export const MODELS = [
     id: 'Xenova/bge-small-en-v1.5',
     revision: 'ea104dacec62c0de699686887e3f920caeb4f3e3',
     label: 'bge-small-en-v1.5 (q8, recommended query instruction)',
+    pooling: 'cls',
     queryPrefix: BGE_QUERY_PREFIX,
   },
 ]
@@ -224,7 +226,7 @@ async function downloadModels() {
   }
 }
 
-async function indexCorpus(extractor, records, db, tracker) {
+async function indexCorpus(extractor, model, records, db, tracker) {
   const insert = db.prepare('INSERT INTO vec_memory(rowid, embedding) VALUES (?, ?)')
   const startedAt = nowMs()
   const cpuStart = process.cpuUsage()
@@ -235,7 +237,7 @@ async function indexCorpus(extractor, records, db, tracker) {
     try {
       for (let start = commitStart; start < commitEnd; start += EMBED_BATCH_SIZE) {
         const end = Math.min(commitEnd, start + EMBED_BATCH_SIZE)
-        const tensor = await extractor(records.slice(start, end), { pooling: 'mean', normalize: true })
+        const tensor = await extractor(records.slice(start, end), { pooling: model.pooling, normalize: true })
         for (let row = start; row < end; row += 1) {
           const offset = (row - start) * DIMS
           insert.run(BigInt(row), vectorBlob(tensor.data.subarray(offset, offset + DIMS)))
@@ -276,7 +278,7 @@ async function queryIndex(extractor, model, db, targetRows, tracker) {
 
   for (const [index, text] of queryTexts.entries()) {
     const startedAt = nowMs()
-    const tensor = await extractor(`${model.queryPrefix}${text}`, { pooling: 'mean', normalize: true })
+    const tensor = await extractor(`${model.queryPrefix}${text}`, { pooling: model.pooling, normalize: true })
     const embeddedAt = nowMs()
     const hits = statement.all(vectorBlob(tensor.data), TOP_K)
     const completedAt = nowMs()
@@ -331,7 +333,7 @@ async function benchModel(model, recordCount) {
     createIndex(db)
     const sqliteVersion = db.prepare('SELECT sqlite_version() AS version').get().version
     const sqliteVecVersion = db.prepare('SELECT vec_version() AS version').get().version
-    const build = await indexCorpus(extractor, records, db, tracker)
+    const build = await indexCorpus(extractor, model, records, db, tracker)
     db.pragma('wal_checkpoint(TRUNCATE)')
     db.close()
     tracker.sample()
@@ -347,6 +349,7 @@ async function benchModel(model, recordCount) {
       model: model.label,
       modelId: model.id,
       modelRevision: model.revision,
+      pooling: model.pooling,
       queryInstruction: model.queryPrefix || null,
       modelFiles: modelFiles(model),
       loadMs,

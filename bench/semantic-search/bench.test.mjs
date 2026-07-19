@@ -3,7 +3,17 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { buildCorpus, openVectorDatabase, probeRows, PROBES } from './bench.mjs'
+import { buildCorpus, MODELS, openVectorDatabase, probeRows, PROBES } from './bench.mjs'
+
+test('models use their intended pooling strategies', () => {
+  assert.deepEqual(
+    MODELS.map(({ key, pooling }) => ({ key, pooling })),
+    [
+      { key: 'minilm', pooling: 'mean' },
+      { key: 'bge', pooling: 'cls' },
+    ],
+  )
+})
 
 test('probe rows are deterministic, distinct, and contain their expected targets', () => {
   for (const recordCount of [8_192, 109_500]) {

@@ -6,7 +6,7 @@ The conclusion and measured numbers are recorded in [the memory specification](.
 
 ## What it benchmarks
 
-- **Models:** pinned revisions of `all-MiniLM-L6-v2` and `bge-small-en-v1.5`, both int8-quantized ONNX under [transformers.js](https://huggingface.co/docs/transformers.js). BGE queries use its recommended retrieval instruction; documents do not.
+- **Models:** pinned revisions of `all-MiniLM-L6-v2` and `bge-small-en-v1.5`, both int8-quantized ONNX under [transformers.js](https://huggingface.co/docs/transformers.js). MiniLM uses mean pooling; BGE uses CLS pooling and its recommended query instruction for queries only.
 - **Runtime and index:** Electron 34 / Node 20 with [`better-sqlite3`](https://github.com/WiseLibs/better-sqlite3) and [`sqlite-vec`](https://github.com/asg017/sqlite-vec), matching Daylens's desktop runtime and database driver. The benchmark uses a temporary file-backed database with the product's WAL, cache, mmap, and synchronous pragmas, closes it after indexing, and reopens it before querying.
 - **Data:** a deterministic synthetic year of 109,500 memory records (300/day — pages, files, meetings, work blocks), generated from a seeded PRNG. The volume matches the 300 website visits/day in the existing heavy-year query fixture; the content is synthetic and is not a claim about a typical person's activity mix.
 - **Evidence per `docs/TO-DO.md`:** measured full-year build wall time and CPU, isolated worker RSS sampled throughout bounded embedding/index batches, on-disk database size, first query after reopen, and 50-run latency against the 1-second budget. Recall@10 is calculated from actual sqlite-vec row IDs for 24 deliberately non-lexical probes, and every returned top-10 set is checked for size, ordering, and valid values.

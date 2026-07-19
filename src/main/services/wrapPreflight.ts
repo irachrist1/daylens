@@ -29,7 +29,8 @@ const PARTIAL_CAPTURE_GAP_MINUTES = 90
 export function getWrapPreflight(
   db: Database.Database,
   date: string,
-  // The clock and boot time must share the same reference point.
+  // Injectable clock + boot time so the live-day / boot-gap logic is testable
+  // without mocking the global clock. Default to the real values.
   opts: { bootMs?: number; nowMs?: number } = {},
 ): WrapPreflightResult {
   const warnings: WrapPreflightWarning[] = []
