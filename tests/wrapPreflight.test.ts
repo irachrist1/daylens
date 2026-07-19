@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
 import { createProductionTestDatabase } from './support/testDatabase.ts'
+import { localDateString } from '../src/main/lib/localDate.ts'
 import { getWrapPreflight } from '../src/main/services/wrapPreflight.ts'
 
 // Wrap pre-flight: honest, specific warnings before generation. None block;
@@ -89,12 +90,13 @@ test('staleCapture warns only on the live day', () => {
   const past = getWrapPreflight(db, DATE)
   assert.equal(past.warnings.find((w) => w.kind === 'staleCapture'), undefined)
 
-  // The live day with the last session 3 hours ago must warn.
-  const today = new Date()
-  const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
-  const threeHoursAgo = Date.now() - 3 * 60 * 60 * 1000
+  // Pin an afternoon clock so "3 hours ago" stays inside the live local day.
+  // Wall-clock near midnight otherwise seeds yesterday and flakes on CI.
+  const nowMs = new Date(2026, 6, 19, 16, 0, 0, 0).getTime()
+  const todayStr = localDateString(new Date(nowMs))
+  const threeHoursAgo = nowMs - 3 * 60 * 60 * 1000
   seedSessions(db, 3, 1, threeHoursAgo - 40 * 60_000)
-  const live = getWrapPreflight(db, todayStr)
+  const live = getWrapPreflight(db, todayStr, { nowMs })
   const warning = live.warnings.find((w) => w.kind === 'staleCapture')
   assert.ok(warning, 'expected a staleCapture warning on the live day')
   assert.ok(/hours ago/.test(warning!.message))
