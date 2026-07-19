@@ -1,0 +1,34 @@
+{
+  "name": "daylens-bench-semantic-search",
+  "private": true,
+  "description": "DEV-179 research benchmark: local embedding models and a local vector index over a synthetic year of memory records. Standalone on purpose — nothing here may enter the product dependency tree.",
+  "type": "module",
+  "engines": {
+    "node": "20.x || 22.x || 23.x || 24.x || 25.x"
+  },
+  "scripts": {
+    "postinstall": "electron-rebuild -f -w better-sqlite3",
+    "models:download": "cross-env ELECTRON_RUN_AS_NODE=1 electron bench.mjs --download-models",
+    "bench": "cross-env ELECTRON_RUN_AS_NODE=1 electron bench.mjs",
+    "bench:full": "cross-env ELECTRON_RUN_AS_NODE=1 electron bench.mjs --full",
+    "test": "cross-env ELECTRON_RUN_AS_NODE=1 electron --test bench.test.mjs"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "3.8.1",
+    "better-sqlite3": "12.8.0",
+    "sqlite-vec": "0.1.9"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "3.7.2",
+    "cross-env": "10.1.0",
+    "electron": "34.5.8"
+  },
+  "allowScripts": {
+    "@huggingface/transformers": true,
+    "electron@34.5.8": true,
+    "onnxruntime-node@1.21.0": true,
+    "protobufjs@7.6.5": true,
+    "sharp@0.34.5": true,
+    "better-sqlite3@12.8.0": true
+  }
+}

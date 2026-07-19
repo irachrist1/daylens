@@ -108,6 +108,16 @@ The retrieval planner narrows time and entities before semantic search. Numeric 
 - A remote embedding provider requires explicit opt-in and receives only the minimized permitted text.
 - Changing models builds a new index before removing the previous valid one.
 
+### Chosen engine
+
+The default local engine is the pinned `Xenova/all-MiniLM-L6-v2` revision recorded by `bench/semantic-search` (384 dimensions, int8-quantized ONNX), running under transformers.js in the Electron runtime with `sqlite-vec` loaded through `better-sqlite3`. Embeddings can therefore live in the same SQLite database as the rest of memory and use the same deletion path. The decision run used a temporary file-backed database with the product's WAL, cache, mmap, and synchronous settings and a deterministic synthetic year of 109,500 memory records. That volume matches the 300 website visits/day in the existing heavy-year query fixture; it establishes a heavy synthetic scale, not a typical activity distribution.
+
+The 2026-07-19 full run used Electron 34.5.8 / Node 20.19.1 on a 16 GB Apple M2 Pro while drawing from battery from start to finish. Both workers were forced offline after their exact model revisions had been cached. MiniLM used mean pooling and indexed the year in 221.15 s at 495 records/s and 5.99 CPU-seconds per 1,000 records. Its isolated worker rose from 84 MB to a 352 MB process high-water RSS, and the vector database occupied 163.07 MB. After closing and reopening that database, its first query took 279.92 ms; across 50 query runs, end-to-end p95 was 80.37 ms against the 1-second budget. sqlite-vec returned valid ordered top-10 sets for all 50 runs, and actual indexed result IDs produced vague-memory recall@10 of 17/24.
+
+Under the same conditions, `bge-small-en-v1.5` used CLS pooling and its recommended query instruction and scored 15/24 recall@10. It took 212.52 s to index, consumed 8.58 CPU-seconds per 1,000 records, reached a 394 MB process high-water RSS, and produced 75.64 ms query p95. MiniLM is chosen because it had better measured retrieval quality while using 30% less CPU and 11% less peak memory in this run; BGE's full build was 4% faster, and both models remained inside the latency budget. The models ran sequentially in isolated workers, MiniLM first, so the exact comparative resource percentages include run-order and battery-state effects. The decision does not depend on those percentages: MiniLM won the retrieval probe and independently cleared the latency budget. The benchmark does not establish absolute semantic quality beyond its synthetic probes.
+
+The model choice stays versioned and replaceable per the invariants above; re-running the decision against a new candidate means re-running the benchmark, not re-opening the architecture. The committed evidence covers macOS arm64 on the named machine. Native-extension loading and the same latency/resource conclusions on packaged Windows, Linux, Intel macOS, and lower-powered supported machines must be verified during implementation; they are not inferred from this run.
+
 ## Ranking
 
 Ranking combines:
