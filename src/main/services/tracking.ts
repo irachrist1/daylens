@@ -1837,6 +1837,20 @@ async function poll(): Promise<void> {
       trackingStatus.backendTrace = backendTrace.length > 0
         ? backendTrace.slice(-8)
         : (support ? [support.supportMessage] : [])
+
+      // An unsupported session that produced no window is a capture-health
+      // fact, not an empty poll: report it once through the canonical
+      // capture_failed / capture_recovered transition instead of letting the
+      // generic no-window return below mark the poll healthy. Silent partial
+      // capture is exactly what the evidence contract forbids on Linux.
+      if (!win && support?.supportLevel === 'unsupported') {
+        flushActiveBrowserContext(getDb())
+        if (currentSession) currentSession.passivePresence = false
+        setPollHealth(support.supportMessage)
+        trackingStatus.lastRawWindow = null
+        trackingStatus.lastResolvedWindow = null
+        return
+      }
     } else {
       const awMod = getActiveWindowModule()
       if (!awMod) {

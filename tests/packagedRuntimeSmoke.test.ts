@@ -25,6 +25,7 @@ function fixture() {
     }),
   )
   const report = {
+    platform: 'linux',
     captureProbe: {
       required: true,
       foregroundTitle: 'Runtime Capture Foreground',
@@ -39,6 +40,22 @@ function fixture() {
           windowTitle: 'Runtime Capture Fullscreen',
           durationSec: 13,
           captureSource: 'foreground_poll',
+        },
+      ],
+      canonicalEvents: [
+        {
+          eventType: 'app_activated',
+          appName: 'Runtime Probe',
+          windowTitle: 'Runtime Capture Foreground',
+          source: 'foreground_poll',
+          platform: 'linux',
+        },
+        {
+          eventType: 'app_activated',
+          appName: 'Runtime Probe',
+          windowTitle: 'Runtime Capture Fullscreen',
+          source: 'foreground_poll',
+          platform: 'linux',
         },
       ],
     },
@@ -69,6 +86,40 @@ test('packaged runtime verifier fails clearly when fullscreen capture is absent'
     assert.throws(
       () => verifyRuntimeCapture(report, statePath, fail),
       /No persisted app session captured the fullscreen probe title/,
+    )
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('packaged runtime verifier fails when the canonical record missed a probe title', () => {
+  const { dir, statePath, report, fail } = fixture()
+  try {
+    const captureProbe = report.captureProbe as {
+      canonicalEvents: Array<{ windowTitle: string }>
+    }
+    captureProbe.canonicalEvents = captureProbe.canonicalEvents.filter(
+      (event) => event.windowTitle !== 'Runtime Capture Fullscreen',
+    )
+    assert.throws(
+      () => verifyRuntimeCapture(report, statePath, fail),
+      /No canonical focus event captured the fullscreen probe title/,
+    )
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('packaged runtime verifier fails when a canonical event carries the wrong platform', () => {
+  const { dir, statePath, report, fail } = fixture()
+  try {
+    const captureProbe = report.captureProbe as {
+      canonicalEvents: Array<{ platform: string }>
+    }
+    captureProbe.canonicalEvents[0].platform = 'darwin'
+    assert.throws(
+      () => verifyRuntimeCapture(report, statePath, fail),
+      /recorded platform "darwin" but the app ran on "linux"/,
     )
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })

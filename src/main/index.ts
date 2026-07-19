@@ -373,11 +373,38 @@ function readSmokeCaptureSessions(): SmokeCaptureSession[] {
   `).all(SMOKE_FOREGROUND_TITLE, SMOKE_FULLSCREEN_TITLE) as SmokeCaptureSession[]
 }
 
+interface SmokeCanonicalEvent {
+  eventType: string
+  appName: string | null
+  windowTitle: string | null
+  source: string
+  platform: string
+}
+
+// The canonical mirror of the probe capture: every desktop platform now emits
+// foreground observations into focus_events, so a packaged smoke that only
+// proved legacy app_sessions would let canonical capture regress silently.
+function readSmokeCanonicalEvents(): SmokeCanonicalEvent[] {
+  if (!SMOKE_FOREGROUND_TITLE || !SMOKE_FULLSCREEN_TITLE) return []
+  return getDb().prepare(`
+    SELECT
+      event_type AS eventType,
+      app_name AS appName,
+      window_title AS windowTitle,
+      source,
+      platform
+    FROM focus_events
+    WHERE window_title IN (?, ?)
+    ORDER BY ts_ms ASC, mono_ns ASC, id ASC
+  `).all(SMOKE_FOREGROUND_TITLE, SMOKE_FULLSCREEN_TITLE) as SmokeCanonicalEvent[]
+}
+
 async function waitForSmokeCapture(): Promise<{
   required: boolean
   foregroundTitle: string | null
   fullscreenTitle: string | null
   sessions: SmokeCaptureSession[]
+  canonicalEvents: SmokeCanonicalEvent[]
 }> {
   if (!SMOKE_FOREGROUND_TITLE || !SMOKE_FULLSCREEN_TITLE) {
     await new Promise((resolve) => setTimeout(resolve, 2_500))
@@ -386,6 +413,7 @@ async function waitForSmokeCapture(): Promise<{
       foregroundTitle: SMOKE_FOREGROUND_TITLE,
       fullscreenTitle: SMOKE_FULLSCREEN_TITLE,
       sessions: [],
+      canonicalEvents: [],
     }
   }
 
@@ -400,6 +428,7 @@ async function waitForSmokeCapture(): Promise<{
         foregroundTitle: SMOKE_FOREGROUND_TITLE,
         fullscreenTitle: SMOKE_FULLSCREEN_TITLE,
         sessions,
+        canonicalEvents: readSmokeCanonicalEvents(),
       }
     }
     await new Promise((resolve) => setTimeout(resolve, 1_000))
@@ -409,7 +438,8 @@ async function waitForSmokeCapture(): Promise<{
   throw new Error(
     `Timed out waiting for packaged foreground/fullscreen capture. `
     + `Expected titles ${JSON.stringify([SMOKE_FOREGROUND_TITLE, SMOKE_FULLSCREEN_TITLE])}; `
-    + `captured ${JSON.stringify(sessions)}; tracker ${JSON.stringify(trackingStatus)}; `
+    + `captured ${JSON.stringify(sessions)}; canonical ${JSON.stringify(readSmokeCanonicalEvents())}; `
+    + `tracker ${JSON.stringify(trackingStatus)}; `
     + `live ${JSON.stringify(getCurrentSession())}.`,
   )
 }
@@ -461,6 +491,7 @@ async function runSmokeValidation(win: BrowserWindow, trigger: SmokeValidationTr
         foregroundTitle: SMOKE_FOREGROUND_TITLE,
         fullscreenTitle: SMOKE_FULLSCREEN_TITLE,
         sessions: readSmokeCaptureSessions(),
+        canonicalEvents: readSmokeCanonicalEvents(),
       },
       trackingStatus: { ...trackingStatus },
       linuxTracking: getLinuxTrackingDiagnostics(),
