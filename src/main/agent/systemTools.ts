@@ -1,6 +1,22 @@
 // Read-only machine tools for the chat agent: file reads, directory
 // listings, and an allowlisted read-only git surface ("what did I ship"). No
 // write, edit, delete, or arbitrary shell — new capabilities are new tools.
+//
+// Two layers of policy compose here (DEV-184, agent-runtime-and-context.md
+// §File and document access):
+//
+//   1. The visible-home path FLOOR (resolveVisibleHomePath): the resolved real
+//      path must sit inside the user home with no hidden/excluded segment.
+//      This always runs first — no grant can resurrect what the floor denies.
+//   2. The three-state grant model ABOVE the floor: metadata-level operations
+//      (names, sizes, filename matches, repo rankings, git metadata) stay on
+//      the floor policy — that is Observed-level information the product
+//      already holds. CONTENT-bearing operations (read_file, the
+//      content-matching arm of search_files, content-bearing git subcommands)
+//      are deny-by-default: they require a covering model-readable grant, or
+//      they pause the turn with an in-chat permission request ("Allow once /
+//      Allow this folder / Deny"). Every content result records a
+//      file_disclosures row BEFORE it is returned toward the model.
 import { tool } from 'ai'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
@@ -12,6 +28,14 @@ import type Database from 'better-sqlite3'
 import { sanitizeForModel } from '@shared/aiSanitize'
 import { getTrackedWindowTitleCorpus } from '../db/queries'
 import { minimalChildEnv } from '../lib/childEnv'
+import {
+  addFileAccessGrant,
+  classifyFileSensitivity,
+  fileVersionFingerprint,
+  recordFileDisclosure,
+  resolveFileAccess,
+  type FileDisclosureRow,
+} from '../services/fileAccess'
 
 const execFileAsync = promisify(execFile)
 
@@ -44,6 +68,8 @@ const FORBIDDEN_GIT_ARG = /^(--output|--exec-path|--upload-pack|--receive-pack|-
 // `branch` mutates through flags, so it is forced to --list mode and its
 // mutating flags are rejected outright.
 const FORBIDDEN_BRANCH_ARG = /^(-d$|-D$|--delete|-m$|-M$|--move|-c$|-C$|--copy|-f$|--force|--edit-description|--set-upstream-to|--unset-upstream|-u$)/
+// Flags that turn `git log` from metadata into file content (patches).
+const GIT_PATCH_ARG = /^(-p$|-u$|--patch|--full-diff|-L)/
 // Read-only means read-only even for opportunistic writes: never take
 // optional locks (status index refresh) and never prompt for credentials.
 const GIT_ENV = { GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' }
@@ -58,10 +84,31 @@ function looksBinary(buffer: Buffer): boolean {
   return sample.length > 0 && suspicious / sample.length > 0.1
 }
 
+export type FileAccessAnswer = 'allow_once' | 'allow_folder' | 'deny'
+
+export interface FileAccessToolContext {
+  /** Where grants and disclosures live. Without it, content reads are denied. */
+  db?: Database.Database
+  threadId?: number | null
+  /** provider:model the excerpt would be disclosed to. */
+  destination: string
+  /** Pause the turn and ask the user. Absent → deny with permissionRequired. */
+  requestFileAccess?: (request: { path: string; sizeBytes: number | null; reason: string }) => Promise<FileAccessAnswer>
+  /** Observes each recorded disclosure so the turn can surface citations. */
+  onDisclosure?: (disclosure: FileDisclosureRow) => void
+}
+
 interface SystemToolDeps {
   db?: Database.Database
   homeDir?: string
+  fileAccess?: FileAccessToolContext
 }
+
+const PERMISSION_REQUIRED_REASON =
+  'Reading file contents needs your permission. The file exists and its metadata is visible, '
+  + 'but no file-access grant covers it — grant it in the chat prompt or in Settings → Agent file access.'
+const PERMISSION_DENIED_REASON =
+  'The user declined to open this file. Its name and metadata stay visible, but the contents were not read.'
 
 async function devRoots(homeDir: string): Promise<string[]> {
   const entries = await fs.readdir(homeDir, { withFileTypes: true })
@@ -149,8 +196,9 @@ const VISIBLE_HOME_DENIAL =
 // Every machine-read tool shares one path policy: the resolved real path
 // (symlinks followed) must sit inside the user home directory and contain no
 // hidden or excluded segment. Enforced on the realpath so a symlink inside a
-// visible folder cannot reach outside it.
-async function resolveVisibleHomePath(
+// visible folder cannot reach outside it. This is the deny FLOOR — the grant
+// model composes on top and can never widen it.
+export async function resolveVisibleHomePath(
   homeDir: string,
   requested: string,
 ): Promise<{ ok: true; real: string } | { ok: false; reason: string }> {
@@ -198,7 +246,24 @@ async function validatedSearchRoots(homeDir: string, requested?: string[]): Prom
   return [...new Set(roots)]
 }
 
-async function searchHomeFiles(homeDir: string, query: string, requestedRoots?: string[]) {
+interface SearchContentPolicy {
+  /** Content scanning (and its preview disclosure) only inside granted paths. */
+  allowed: (filePath: string) => boolean
+  /** Records the disclosure for one content preview BEFORE it is returned. */
+  onContentMatch: (
+    filePath: string,
+    stat: { size: number; mtimeMs: number },
+    content: string,
+    preview: string,
+  ) => void
+}
+
+async function searchHomeFiles(
+  homeDir: string,
+  query: string,
+  requestedRoots?: string[],
+  contentPolicy?: SearchContentPolicy,
+) {
   const tokens = query.toLowerCase().split(/\s+/).filter(Boolean)
   const roots = await validatedSearchRoots(homeDir, requestedRoots)
   const queue = [...roots]
@@ -211,6 +276,7 @@ async function searchHomeFiles(homeDir: string, query: string, requestedRoots?: 
     modifiedAt: number
   }> = []
   let filesInspected = 0
+  let contentSkippedForPermission = 0
 
   while (queue.length > 0 && filesInspected < MAX_SEARCH_FILES && matches.length < MAX_SEARCH_RESULTS) {
     const directory = queue.shift()
@@ -238,6 +304,7 @@ async function searchHomeFiles(homeDir: string, query: string, requestedRoots?: 
         continue
       }
       if (containsAllTokens(entry.name, tokens)) {
+        // Filename matches are Observed-level metadata — no grant needed.
         matches.push({
           path: entryPath,
           name: entry.name,
@@ -249,17 +316,26 @@ async function searchHomeFiles(homeDir: string, query: string, requestedRoots?: 
         continue
       }
       if (stat.size > MAX_SEARCH_FILE_BYTES || !SEARCHABLE_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) continue
+      // Content matching discloses file text to the model (the preview line),
+      // so it only runs inside a covering model-readable grant.
+      if (!contentPolicy) continue
+      if (!contentPolicy.allowed(entryPath)) {
+        contentSkippedForPermission += 1
+        continue
+      }
       try {
         const buffer = await fs.readFile(entryPath)
         if (looksBinary(buffer)) continue
         const content = buffer.toString('utf8')
         if (!containsAllTokens(content, tokens)) continue
         const line = content.split(/\r?\n/).find((candidate) => containsAllTokens(candidate, tokens)) ?? ''
+        const preview = sanitizeForModel(line.trim().slice(0, 240))
+        contentPolicy.onContentMatch(entryPath, stat, content, preview)
         matches.push({
           path: entryPath,
           name: entry.name,
           matchedBy: 'content',
-          preview: sanitizeForModel(line.trim().slice(0, 240)),
+          preview,
           sizeBytes: stat.size,
           modifiedAt: stat.mtimeMs,
         })
@@ -273,13 +349,104 @@ async function searchHomeFiles(homeDir: string, query: string, requestedRoots?: 
     Number(right.matchedBy === 'name') - Number(left.matchedBy === 'name')
     || right.modifiedAt - left.modifiedAt
   ))
-  return { roots, matches, filesInspected, truncated: filesInspected >= MAX_SEARCH_FILES || matches.length >= MAX_SEARCH_RESULTS }
+  return {
+    roots,
+    matches,
+    filesInspected,
+    contentSkippedForPermission,
+    truncated: filesInspected >= MAX_SEARCH_FILES || matches.length >= MAX_SEARCH_RESULTS,
+  }
 }
 
 export function buildSystemTools(deps: SystemToolDeps = {}) {
+  const fileCtx = deps.fileAccess
+  const grantDb = fileCtx?.db ?? deps.db
+  // "Allow once" answers cover exactly this turn: the set lives on the tool
+  // instance, which chatAgent builds fresh for every turn.
+  const allowOncePaths = new Set<string>()
+
+  type GateResult =
+    | { ok: true }
+    | { ok: false; result: { found: false; permissionRequired?: boolean; reason: string } }
+
+  /** The content gate: deny-by-default above the path floor. The floor has
+   *  ALREADY passed when this runs — the gate can only narrow, never widen. */
+  async function ensureModelReadable(
+    realPath: string,
+    options: { sizeBytes: number | null; reason: string; grantFolderPath?: string },
+  ): Promise<GateResult> {
+    if (allowOncePaths.has(realPath)) return { ok: true }
+    if (!grantDb) {
+      return { ok: false, result: { found: false, permissionRequired: true, reason: PERMISSION_REQUIRED_REASON } }
+    }
+    const decision = resolveFileAccess(grantDb, realPath)
+    if (decision.access === 'model_readable') return { ok: true }
+    if (decision.access === 'denied') {
+      return { ok: false, result: { found: false, reason: decision.reason ?? PERMISSION_REQUIRED_REASON } }
+    }
+    if (decision.sensitivity === 'high') {
+      // High sensitivity needs the explicit Settings permission in addition to
+      // access — the in-chat card can never grant it.
+      return {
+        ok: false,
+        result: {
+          found: false,
+          reason: 'This file looks high-sensitivity. Opening it needs an explicit high-sensitivity permission in Settings → Agent file access.',
+        },
+      }
+    }
+    if (!fileCtx?.requestFileAccess) {
+      return { ok: false, result: { found: false, permissionRequired: true, reason: PERMISSION_REQUIRED_REASON } }
+    }
+    const answer = await fileCtx.requestFileAccess({
+      path: realPath,
+      sizeBytes: options.sizeBytes,
+      reason: options.reason,
+    })
+    if (answer === 'allow_once') {
+      allowOncePaths.add(realPath)
+      return { ok: true }
+    }
+    if (answer === 'allow_folder') {
+      addFileAccessGrant(grantDb, {
+        scopeKind: 'folder',
+        path: options.grantFolderPath ?? path.dirname(realPath),
+        state: 'model_readable',
+        source: 'chat',
+      })
+      return { ok: true }
+    }
+    return { ok: false, result: { found: false, reason: PERMISSION_DENIED_REASON } }
+  }
+
+  /** Records the disclosure ledger row. MUST run before the content is
+   *  returned toward the model. Returns null only when no ledger exists. */
+  function disclose(
+    filePath: string,
+    stat: { size: number; mtimeMs: number },
+    content: Buffer | string,
+    excerptStart: number,
+    excerptEnd: number,
+    reason: string,
+  ): FileDisclosureRow | null {
+    if (!grantDb) return null
+    const row = recordFileDisclosure(grantDb, {
+      threadId: fileCtx?.threadId ?? null,
+      filePath,
+      versionFingerprint: fileVersionFingerprint(stat, content),
+      excerptStart,
+      excerptEnd,
+      reason,
+      sensitivity: classifyFileSensitivity(filePath),
+      destination: fileCtx?.destination ?? 'unknown',
+    })
+    fileCtx?.onDisclosure?.(row)
+    return row
+  }
+
   return {
     read_file: tool({
-      description: 'Read a text file from a visible, non-private folder in the user home directory, read-only. Returns up to 256KB. Hidden folders, system data, credentials, dependencies, and build output are excluded. Use absolute paths (the user\'s home is available in the environment note).',
+      description: 'Read a text file from a visible, non-private folder in the user home directory, read-only. Returns up to 256KB. Hidden folders, system data, credentials, dependencies, and build output are excluded, and reading contents requires the user\'s file-access permission (you may be paused to ask). Use absolute paths (the user\'s home is available in the environment note).',
       inputSchema: z.object({
         path: z.string().min(1).describe('Absolute file path inside the user home directory'),
         offsetBytes: z.number().int().min(0).optional(),
@@ -291,6 +458,11 @@ export function buildSystemTools(deps: SystemToolDeps = {}) {
         try {
           const stat = await fs.stat(filePath)
           if (!stat.isFile()) return { found: false, reason: 'Not a regular file.' }
+          const gate = await ensureModelReadable(filePath, {
+            sizeBytes: stat.size,
+            reason: 'The answer needs the contents of this file.',
+          })
+          if (!gate.ok) return gate.result
           const handle = await fs.open(filePath, 'r')
           try {
             const start = Math.min(offsetBytes ?? 0, stat.size)
@@ -298,10 +470,19 @@ export function buildSystemTools(deps: SystemToolDeps = {}) {
             const buffer = Buffer.alloc(length)
             await handle.read(buffer, 0, length, start)
             if (looksBinary(buffer)) return { found: false, reason: 'Binary file — not readable as text.' }
+            // Ledger first, content second: the disclosure row exists before
+            // the excerpt is returned toward the model.
+            const disclosure = disclose(
+              filePath, stat, buffer, start, start + length,
+              'read_file: the answer needed this file\'s contents.',
+            )
             return {
               found: true,
               sizeBytes: stat.size,
               truncated: start + length < stat.size,
+              versionFingerprint: disclosure?.version_fingerprint ?? null,
+              excerptStart: start,
+              excerptEnd: start + length,
               content: buffer.toString('utf8'),
             }
           } finally {
@@ -343,14 +524,34 @@ export function buildSystemTools(deps: SystemToolDeps = {}) {
     }),
 
     search_files: tool({
-      description: 'Search visible, non-private folders in the user home directory by filename and text content. Returns current local files with paths and short matching previews. Hidden folders, system data, credentials, dependencies, and build output are excluded.',
+      description: 'Search visible, non-private folders in the user home directory by filename, and by text content inside folders the user has granted. Returns current local files with paths and, for granted files, short matching previews. Hidden folders, system data, credentials, dependencies, and build output are excluded.',
       inputSchema: z.object({
         query: z.string().min(2),
         roots: z.array(z.string().min(1)).max(8).optional().describe('Optional absolute folders inside the user home directory'),
       }),
       execute: async ({ query, roots }) => {
         try {
-          const result = await searchHomeFiles(deps.homeDir ?? os.homedir(), query, roots)
+          // Filename matches are metadata (Observed). Content matches return
+          // file text to the model, so they only run inside covering
+          // model-readable grants, and each preview records a disclosure
+          // before the result is returned.
+          const contentPolicy: SearchContentPolicy | undefined = grantDb
+            ? {
+                allowed: (filePath) => {
+                  const decision = resolveFileAccess(grantDb, filePath)
+                  return decision.access === 'model_readable'
+                },
+                onContentMatch: (filePath, stat, content, preview) => {
+                  const previewStart = Math.max(0, content.indexOf(preview))
+                  disclose(
+                    filePath, stat, content,
+                    previewStart, previewStart + preview.length,
+                    'search_files: a matching line was previewed.',
+                  )
+                },
+              }
+            : undefined
+          const result = await searchHomeFiles(deps.homeDir ?? os.homedir(), query, roots, contentPolicy)
           if (result.matches.length === 0) {
             return { found: false, reason: 'No matching visible local files were found.', ...result }
           }
@@ -410,7 +611,7 @@ export function buildSystemTools(deps: SystemToolDeps = {}) {
     }),
 
     git: tool({
-      description: 'Read-only git against a local repository: log, show, diff, status, shortlog, branch, rev-parse, describe. Use for "what did I ship" — e.g. subcommand "log" with args ["--since=2026-07-01", "--oneline", "--author=..."]. Never mutates.',
+      description: 'Read-only git against a local repository: log, show, diff, status, shortlog, branch, rev-parse, describe. Use for "what did I ship" — e.g. subcommand "log" with args ["--since=2026-07-01", "--oneline", "--author=..."]. Content-bearing subcommands (show, diff, log with a patch flag) need the user\'s file-access permission for the repository. Never mutates.',
       inputSchema: z.object({
         repoPath: z.string().min(1).describe('Absolute path to the repository'),
         subcommand: z.string().min(1).describe('One of: log, show, diff, status, shortlog, branch, rev-parse, describe'),
@@ -430,6 +631,20 @@ export function buildSystemTools(deps: SystemToolDeps = {}) {
         const resolved = await resolveVisibleHomePath(deps.homeDir ?? os.homedir(), repoPath)
         if (!resolved.ok) return { found: false, reason: resolved.reason }
         repoPath = resolved.real
+        // Metadata git (log/status/shortlog/branch/rev-parse/describe) stays on
+        // the floor policy. `show`/`diff` — and `log` once a patch flag makes
+        // it content-bearing — reveal file contents, so they need a covering
+        // model-readable grant on the repository.
+        const contentBearing = subcommand === 'show' || subcommand === 'diff'
+          || (subcommand === 'log' && extraArgs.some((arg) => GIT_PATCH_ARG.test(arg)))
+        if (contentBearing) {
+          const gate = await ensureModelReadable(repoPath, {
+            sizeBytes: null,
+            reason: `git ${subcommand} discloses file contents from this repository.`,
+            grantFolderPath: repoPath,
+          })
+          if (!gate.ok) return gate.result
+        }
         const subcommandArgs = subcommand === 'branch' ? ['branch', '--list', ...extraArgs] : [subcommand, ...extraArgs]
         try {
           const { stdout } = await execFileAsync(
@@ -438,6 +653,16 @@ export function buildSystemTools(deps: SystemToolDeps = {}) {
             { timeout: GIT_TIMEOUT_MS, maxBuffer: MAX_GIT_OUTPUT, env: minimalChildEnv(GIT_ENV) },
           )
           const trimmed = stdout.length > MAX_GIT_OUTPUT ? `${stdout.slice(0, MAX_GIT_OUTPUT)}\n…(truncated)` : stdout
+          if (contentBearing) {
+            disclose(
+              repoPath,
+              { size: trimmed.length, mtimeMs: Date.now() },
+              trimmed,
+              0,
+              trimmed.length,
+              `git ${subcommand}: repository content was disclosed.`,
+            )
+          }
           return { found: true, output: trimmed }
         } catch (error) {
           return { found: false, reason: error instanceof Error ? error.message : String(error) }

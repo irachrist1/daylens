@@ -140,6 +140,7 @@ interface AnswerEnvelope {
     toolTrace: Array<{ tool: string; input: unknown; output: string }>
     stepCount: number
     groundingRetried: boolean
+    fileDisclosures?: import('@shared/types').AIMessageFileDisclosure[]
   }
   suggestedFollowUps: FollowUpSuggestion[]
   actions?: AIMessageAction[]
@@ -3403,6 +3404,7 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
       extraSystem,
       signal: getAmbientAbortSignal() ?? undefined,
       trackingStart,
+      threadId,
     })
   } catch (error) {
     if (!isAbortError(error)) {
@@ -3437,6 +3439,7 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
       toolTrace: agentResult.toolTrace,
       stepCount: agentResult.stepCount,
       groundingRetried: agentResult.groundingRetried,
+      fileDisclosures: agentResult.fileDisclosures,
     },
   })
 }
