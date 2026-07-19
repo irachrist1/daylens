@@ -97,6 +97,35 @@ test('a raw filename never leaks as an activity name', () => {
   }
 })
 
+test('corrected subject and label win over inferred page subjects in wrap facts', () => {
+  const block = makeBlock({
+    label: 'Competitor pricing pages',
+    start: NINE_AM,
+    durationSeconds: 90 * 60,
+    category: 'research',
+  })
+  block.websites = [{
+    domain: 'competitor.example',
+    totalSeconds: 45 * 60,
+    visitCount: 1,
+    pageTitles: ['Compare plans — Competitor'],
+  }]
+  block.review = {
+    ...DEFAULT_TIMELINE_BLOCK_REVIEW,
+    state: 'corrected',
+    correctedLabel: 'Acme pricing strategy research',
+    correctedIntentRole: 'research',
+    correctedIntentSubject: 'Acme pricing',
+  }
+  const facts = buildDayWrapFacts(makeDayPayload([block]))
+  assert.ok(
+    facts.workActivities.some((activity) => /Acme pricing/i.test(activity.name)),
+    `expected corrected subject in workActivities, got ${facts.workActivities.map((a) => a.name).join(' | ') || '(none)'}`,
+  )
+  assert.ok(facts.standout, 'expected a standout')
+  assert.match(facts.standout!.name, /Acme pricing/i)
+})
+
 test('the standout is the single longest work stretch and never exceeds the headline', () => {
   const facts = buildDayWrapFacts(makeDayPayload([
     makeBlock({ label: 'Short sync', start: NINE_AM, durationSeconds: 30 * 60, category: 'meetings' }),
