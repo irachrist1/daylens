@@ -151,6 +151,61 @@ test('WorkspaceLivePresence is allowlisted and rejects credential labels', () =>
   )
 })
 
+test('DEV-177/DEV-184 tables cannot serialize: entity rows, aliases, grants, and disclosures are rejected', () => {
+  // The durable-entity and file-access tables are LOCAL-ONLY. None of their
+  // shapes have allowlist keys, so any attempt to ride the sync payload —
+  // as a new root collection or nested onto an allowed object — must throw.
+  const cases: Array<{ name: string; mutate: (payload: ReturnType<typeof makeCleanRemoteSyncPayload>) => unknown }> = [
+    {
+      name: 'entities table rows as a root collection',
+      mutate: (payload) => ({
+        ...payload,
+        entityRecords: [{ id: 'ent_x', entity_type: 'person', identity_key: 'connector:someone@example.test', canonical_name: 'Someone' }],
+      }),
+    },
+    {
+      name: 'entity alias raw label nested onto a synced entity rollup',
+      mutate: (payload) => ({
+        ...payload,
+        entities: [{ ...payload.entities[0]!, rawLabel: 'Jamie <jamie@acme.test>' }],
+      }),
+    },
+    {
+      name: 'file access grants as a root collection',
+      mutate: (payload) => ({
+        ...payload,
+        fileAccessGrants: [{ id: 'fag_x', path: '/home/person/Documents', state: 'model_readable' }],
+      }),
+    },
+    {
+      name: 'file disclosures as a root collection',
+      mutate: (payload) => ({
+        ...payload,
+        fileDisclosures: [{ id: 'fdis_x', file_path: '/home/person/notes.md', version_fingerprint: '1-2-abc' }],
+      }),
+    },
+    {
+      name: 'a disclosure path nested onto a work block',
+      mutate: (payload) => ({
+        ...payload,
+        workBlocks: [{ ...payload.workBlocks[0]!, disclosedFilePath: '/home/person/notes.md' }],
+      }),
+    },
+  ]
+
+  for (const item of cases) {
+    assert.throws(
+      () => assertSyncPayloadAllowed(item.mutate(makeCleanRemoteSyncPayload())),
+      (error: unknown) => {
+        assert.ok(error instanceof SyncAllowlistViolation, item.name)
+        assert.ok(error.violations.some((violation) => violation.class === 'extra_field'), item.name)
+        return true
+      },
+      item.name,
+    )
+  }
+})
+
 test('excluded raw evidence classes cannot serialize into an allowed payload', () => {
   const cases: Array<{ name: string; mutate: (payload: ReturnType<typeof makeCleanRemoteSyncPayload>) => unknown }> = [
     {

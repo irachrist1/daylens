@@ -29,6 +29,7 @@ import { ipcRecord } from './support/electron-stub.mjs'
 import { setTestDb } from './support/database-stub.mjs'
 import { setupRealWorldDb, REAL_WORLD_DATE, localMs } from './support/realWorldActivityFixture.ts'
 import { registerDbHandlers } from '../src/main/ipc/db.handlers.ts'
+import { registerEntityHandlers } from '../src/main/ipc/entities.handlers.ts'
 import { registerErrorHandlers } from '../src/main/ipc/errors.handlers.ts'
 import { registerDebugHandlers } from '../src/main/ipc/debug.handlers.ts'
 import { registerFocusHandlers } from '../src/main/ipc/focus.handlers.ts'
@@ -47,6 +48,7 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 // booting the app, so the renderer-facing ones are grepped from source instead.
 const REGISTER_FNS: Array<[string, () => void]> = [
   ['db', registerDbHandlers],
+  ['entities', registerEntityHandlers],
   ['errors', registerErrorHandlers],
   ['debug', registerDebugHandlers],
   ['focus', registerFocusHandlers],

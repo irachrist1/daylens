@@ -70,7 +70,7 @@ function AIComposeImpl(
   const [empty, setEmpty] = useState(true)
   const [menu, setMenu] = useState<MenuState | null>(null)
   const [menuIndex, setMenuIndex] = useState(0)
-  const [entities, setEntities] = useState<{ apps: string[]; clients: { name: string; color: string | null }[] }>({ apps: [], clients: [] })
+  const [entities, setEntities] = useState<{ apps: string[]; clients: { name: string; color: string | null; aliases: string[] }[] }>({ apps: [], clients: [] })
   const entitiesLoadedRef = useRef(false)
   // The @-trigger text range to replace on selection (null while a slash menu is open).
   const triggerRangeRef = useRef<{ node: Text; start: number; end: number } | null>(null)
@@ -104,10 +104,18 @@ function AIComposeImpl(
     void Promise.all([
       ipc.db.getAppSummaries(7).catch(() => []),
       ipc.attribution.listClientsDetailed().catch(() => []),
-    ]).then(([apps, clients]) => {
+      // DEV-177: the entity repository carries aliases (including renames and
+      // merges made in Settings → Memory), so "@acme" finds "ACME Corporation".
+      ipc.entities.list({ type: 'client' }).catch(() => []),
+    ]).then(([apps, clients, clientEntities]) => {
+      const aliasesByName = new Map<string, string[]>(
+        clientEntities.map((entity) => [entity.name.toLowerCase(), entity.aliases]),
+      )
       setEntities({
         apps: apps.slice(0, 8).map((app) => app.appName).filter(Boolean),
-        clients: clients.map((client) => ({ name: client.name, color: client.color })).filter((c) => c.name),
+        clients: clients
+          .map((client) => ({ name: client.name, color: client.color, aliases: aliasesByName.get(client.name.toLowerCase()) ?? [] }))
+          .filter((c) => c.name),
       })
     })
   }, [])
@@ -115,11 +123,15 @@ function AIComposeImpl(
   const atItems = useMemo<MentionItem[]>(() => {
     const all: MentionItem[] = [
       ...entities.apps.map((name, i) => ({ id: `app-${i}`, label: name, insert: name, kind: 'App' as MentionKind })),
-      ...entities.clients.map((client, i) => ({ id: `client-${i}`, label: client.name, insert: client.name, kind: 'Client' as MentionKind, color: client.color })),
+      ...entities.clients.map((client, i) => ({ id: `client-${i}`, label: client.name, insert: client.name, kind: 'Client' as MentionKind, color: client.color, aliases: client.aliases })),
       ...DAY_MENTIONS.map((day, i) => ({ id: `day-${i}`, label: day.label, insert: day.insert, kind: 'Day' as MentionKind })),
     ]
     const q = (menu?.kind === 'at' ? menu.query : '').toLowerCase()
-    return (q ? all.filter((item) => item.label.toLowerCase().includes(q)) : all).slice(0, 8)
+    // An alias hit surfaces the canonical entity (DEV-177 alias resolution).
+    const matches = (item: MentionItem & { aliases?: string[] }) =>
+      item.label.toLowerCase().includes(q)
+      || (item.aliases ?? []).some((alias) => alias.toLowerCase().includes(q))
+    return (q ? all.filter(matches) : all).slice(0, 8)
   }, [entities, menu])
 
   const slashItems = useMemo<SlashCommand[]>(() => {

@@ -755,9 +755,26 @@ export interface AIAgentQuestionEvent {
   allowFreeText: boolean
 }
 
+/** One file whose contents were disclosed to the model during a turn
+ *  (DEV-184). Shown in the answer's sources row; the full record lives in the
+ *  file_disclosures ledger. */
+export interface AIMessageFileDisclosure {
+  path: string
+  name: string
+  versionFingerprint: string
+  excerptStart: number
+  excerptEnd: number
+  disclosedAt: number
+}
+
 export interface AIThreadMessageMetadata {
   /** Agent-turn evidence: which tools ran and what they returned. */
-  agent?: { toolTrace: Array<{ tool: string; input: unknown; output: string }>; stepCount: number; groundingRetried: boolean }
+  agent?: {
+    toolTrace: Array<{ tool: string; input: unknown; output: string }>
+    stepCount: number
+    groundingRetried: boolean
+    fileDisclosures?: AIMessageFileDisclosure[]
+  }
   answerKind?: AIAnswerKind | null
   suggestedFollowUps?: FollowUpSuggestion[]
   retryable?: boolean
@@ -2343,6 +2360,21 @@ export const IPC = {
     GET_APP_WORK_SESSIONS: 'attribution:get-app-work-sessions',
     REASSIGN_SESSION: 'attribution:reassign-session',
     REASSIGN_RANGE: 'attribution:reassign-range',
+  },
+  ENTITIES: {
+    LIST: 'entities:list',
+    DETAIL: 'entities:detail',
+    SUGGESTED_MERGES: 'entities:suggested-merges',
+    PREVIEW_CORRECTION: 'entities:preview-correction',
+    APPLY_CORRECTION: 'entities:apply-correction',
+    UNDO_CORRECTION: 'entities:undo-correction',
+    CREATE_PROJECT: 'entities:create-project',
+  },
+  FILE_ACCESS: {
+    LIST_GRANTS: 'file-access:list-grants',
+    ADD_GRANT: 'file-access:add-grant',
+    REVOKE_GRANT: 'file-access:revoke-grant',
+    LIST_DISCLOSURES: 'file-access:list-disclosures',
   },
   SHELL: {
     OPEN_EXTERNAL: 'shell:open-external',

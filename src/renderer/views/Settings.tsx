@@ -19,6 +19,8 @@ import type {
 } from '@shared/types'
 import { ACTIVITY_COLOR_CHOICES, ACTIVITY_COLOR_GROUPS, applyAppearanceSettings } from '@shared/activityColors'
 import { ipc } from '../lib/ipc'
+import { EntityMemorySection } from './settings/EntityMemorySection'
+import { FileAccessSection } from './settings/FileAccessSection'
 import { track } from '../lib/analytics'
 import { setPendingChatSeed } from '../lib/aiSeed'
 import { showIntercom } from '../lib/intercom'
@@ -1113,7 +1115,7 @@ function TrackingControlsContent({
 // just a new entry here plus a case in renderSection — the shell holds it.
 type SectionId =
   | 'general' | 'notifications' | 'billing' | 'usage'
-  | 'ai' | 'memory'
+  | 'ai' | 'memory' | 'entities' | 'fileAccess'
   | 'labels' | 'clients' | 'privacy'
   | 'mcp' | 'enrichment' | 'capture' | 'updates' | 'help'
 
@@ -1135,6 +1137,8 @@ const SECTION_GROUPS: SectionGroup[] = [
     items: [
       { id: 'ai', label: 'Provider & model', keywords: 'anthropic openai google claude api key model gpt gemini' },
       { id: 'memory', label: 'Memory', keywords: 'work memory facts remember knows about you' },
+      { id: 'entities', label: 'Entities', keywords: 'people meetings repositories projects clients files pages apps merge rename alias durable' },
+      { id: 'fileAccess', label: 'Agent file access', keywords: 'files folders grant revoke disclosure read permission model indexed observed' },
     ],
   },
   {
@@ -1173,6 +1177,8 @@ function SectionIcon({ id }: { id: SectionId }) {
     usage: <><path d="M2.6 11.5a5.4 5.4 0 1 1 10.8 0" /><path d="M8 11.5 10.4 8" /></>,
     ai: <path d="M8 2 L8.7 6 L12.8 7 L8.7 8 L8 12 L7.3 8 L3.2 7 L7.3 6 Z" />,
     memory: <><rect x="4" y="4" width="8" height="8" rx="1.6" /><path d="M8 1.8v1.6M8 12.6v1.6M1.8 8h1.6M12.6 8h1.6" /></>,
+    entities: <><circle cx="5" cy="5" r="1.8" /><circle cx="11" cy="5" r="1.8" /><circle cx="8" cy="11" r="1.8" /><path d="M6.2 6.4 7.4 9.4M9.8 6.4 8.6 9.4M6.8 5h2.4" /></>,
+    fileAccess: <><path d="M3 2.6h6l3 3v7.8H3Z" /><path d="M9 2.6v3h3" /><rect x="6" y="8" width="4" height="3.2" rx="0.8" /><path d="M7 8V7a1 1 0 0 1 2 0v1" /></>,
     labels: <><path d="M2.6 7.4 7.2 2.8h4.2v4.2L6.8 11.6Z" /><circle cx="9.4" cy="5.6" r="0.85" fill="currentColor" stroke="none" /></>,
     clients: <><rect x="2.3" y="5" width="11.4" height="7.6" rx="1.2" /><path d="M6 5V3.6h4V5" /></>,
     privacy: <path d="M8 1.9 13 3.7v4.1c0 3-2.2 5-5 6.3-2.8-1.3-5-3.3-5-6.3V3.7Z" />,
@@ -3243,6 +3249,28 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
           </div>
             )
           })()}
+        </SectionPage>
+      )
+      break
+    case 'entities':
+      content = (
+        <SectionPage
+          title="Entities"
+          description="The durable things your days are about — people, meetings, repositories, projects, clients, files, pages, apps. Rename or merge them here; your corrections outrank anything Daylens infers later and survive every rebuild."
+          maxWidth={760}
+        >
+          <EntityMemorySection />
+        </SectionPage>
+      )
+      break
+    case 'fileAccess':
+      content = (
+        <SectionPage
+          title="Agent file access"
+          description="What the AI may do with your files, in three separate states. Contents are never read without a grant, every read is logged before it happens, and revoking a grant deletes what was derived from it."
+          maxWidth={760}
+        >
+          <FileAccessSection />
         </SectionPage>
       )
       break
