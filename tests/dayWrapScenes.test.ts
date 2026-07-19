@@ -97,6 +97,63 @@ test('a raw filename never leaks as an activity name', () => {
   }
 })
 
+test('corrected subject and label win over inferred page subjects in wrap facts', () => {
+  const block = makeBlock({
+    label: 'Competitor pricing pages',
+    start: NINE_AM,
+    durationSeconds: 90 * 60,
+    category: 'research',
+  })
+  block.topApps = [{
+    bundleId: 'com.google.Chrome',
+    appName: 'Google Chrome',
+    category: 'browsing',
+    totalSeconds: 90 * 60,
+    sessionCount: 1,
+    isBrowser: true,
+  }]
+  block.websites = [{
+    domain: 'competitor.example',
+    totalSeconds: 45 * 60,
+    visitCount: 1,
+    pageTitles: ['Compare plans — Competitor'],
+  }]
+  // pageRefs are what inferWorkIntent reads — without them the correction
+  // would win by default and this test would not catch a regression.
+  block.pageRefs = [{
+    id: 'page:competitor.example:Compare plans',
+    artifactType: 'page',
+    displayTitle: 'Compare plans — Competitor',
+    pageTitle: 'Compare plans — Competitor',
+    domain: 'competitor.example',
+    totalSeconds: 45 * 60,
+    confidence: 0.9,
+    openTarget: { kind: 'external_url', value: 'https://competitor.example/plans' },
+    url: 'https://competitor.example/plans',
+    normalizedUrl: 'https://competitor.example/plans',
+  }]
+  block.review = {
+    ...DEFAULT_TIMELINE_BLOCK_REVIEW,
+    state: 'corrected',
+    correctedLabel: 'Acme pricing strategy research',
+    correctedIntentRole: 'research',
+    correctedIntentSubject: 'Acme pricing',
+  }
+  const facts = buildDayWrapFacts(makeDayPayload([block]))
+  const names = facts.workActivities.map((a) => a.name)
+  assert.ok(
+    names.some((name) => /Acme pricing/i.test(name)),
+    `expected corrected subject in workActivities, got ${names.join(' | ') || '(none)'}`,
+  )
+  assert.ok(
+    names.every((name) => !/Compare plans/i.test(name)),
+    `inferred page subject leaked into workActivities: ${names.join(' | ')}`,
+  )
+  assert.ok(facts.standout, 'expected a standout')
+  assert.match(facts.standout!.name, /Acme pricing/i)
+  assert.doesNotMatch(facts.standout!.name, /Compare plans/i)
+})
+
 test('the standout is the single longest work stretch and never exceeds the headline', () => {
   const facts = buildDayWrapFacts(makeDayPayload([
     makeBlock({ label: 'Short sync', start: NINE_AM, durationSeconds: 30 * 60, category: 'meetings' }),
