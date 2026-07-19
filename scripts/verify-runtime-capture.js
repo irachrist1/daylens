@@ -59,10 +59,40 @@ function verifyRuntimeCapture(report, statePathArg, fail) {
     }
   }
 
+  // Canonical evidence contract: every desktop platform mirrors foreground
+  // observations into focus_events, so each probe title must also appear as a
+  // canonical activation — a legacy-only capture is a silent regression.
+  if (!Array.isArray(captureProbe.canonicalEvents)) {
+    fail('The capture probe did not report canonical focus events.')
+  }
+  for (const [kind, title] of [
+    ['foreground', windowState.foreground.title],
+    ['fullscreen', windowState.fullscreen.title],
+  ]) {
+    const activation = captureProbe.canonicalEvents.find(
+      (candidate) =>
+        candidate.windowTitle === title
+        && (candidate.eventType === 'app_activated' || candidate.eventType === 'window_changed'),
+    )
+    if (!activation) {
+      fail(
+        `No canonical focus event captured the ${kind} probe title ${JSON.stringify(title)}. `
+        + `Canonical events: ${JSON.stringify(captureProbe.canonicalEvents)}`,
+      )
+    }
+    if (activation.platform !== report.platform) {
+      fail(
+        `The ${kind} canonical activation recorded platform ${JSON.stringify(activation.platform)} `
+        + `but the app ran on ${JSON.stringify(report.platform)}.`,
+      )
+    }
+  }
+
   return {
     foregroundTitle: windowState.foreground.title,
     fullscreenTitle: windowState.fullscreen.title,
     capturedSessions: captureProbe.sessions.length,
+    canonicalEvents: captureProbe.canonicalEvents.length,
   }
 }
 
