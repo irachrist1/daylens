@@ -119,7 +119,6 @@ test('deleting a Timeline block removes its minutes from Apps and AI totals imme
     paused: false,
     excludedApps: [],
     excludedSites: [],
-    skipIncognito: true,
   }
   const aiSearch = executeTool(
     'searchSessions',
@@ -280,7 +279,6 @@ test('a rename correction on a block is what Apps shows', () => {
     paused: false,
     excludedApps: [],
     excludedSites: [],
-    skipIncognito: true,
   }
   const aiDay = executeTool('getDaySummary', { date: TEST_DATE }, db, controls)
   assert.match(JSON.stringify(aiDay), /Building the absence guard/)

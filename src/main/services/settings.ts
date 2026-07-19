@@ -60,11 +60,11 @@ const DEFAULTS: AppSettings = {
   mcpServerEnabled: false,
   workMemoryConsolidationEnabled: true,
   useRemoteAI: false,
-  // T3 — opt-in, off by default; incognito-skip on once enabled.
+  // T3 — opt-in, off by default. Private/incognito windows are excluded
+  // unconditionally in trackingControls.ts — there is no setting for it.
   trackingControlsEnabled: false,
   trackingExcludedApps: [],
   trackingExcludedSites: [],
-  trackingSkipIncognito: true,
   trackingPaused: false,
   billingInstallationId: '',
   activityColorOverrides: {},
@@ -136,7 +136,8 @@ export function getSettings(): AppSettings {
     trackingControlsEnabled: (_store.get('trackingControlsEnabled', false) as boolean),
     trackingExcludedApps: (_store.get('trackingExcludedApps', []) as string[]),
     trackingExcludedSites: (_store.get('trackingExcludedSites', []) as string[]),
-    trackingSkipIncognito: (_store.get('trackingSkipIncognito', true) as boolean),
+    // trackingSkipIncognito may still exist in old persisted stores; it is
+    // intentionally not read — incognito exclusion is unconditional.
     trackingPaused: (_store.get('trackingPaused', false) as boolean),
     billingInstallationId: (_store.get('billingInstallationId', '') as string),
     activityColorOverrides: sanitizeActivityColorOverrides(_store.get('activityColorOverrides', {})),

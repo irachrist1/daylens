@@ -22,11 +22,11 @@ const EXCLUDED_SITE = 'youtube.com'  // real top domain that day
 const db = new Database(dbPath, { readonly: true })
 
 const OFF: TrackingControlsState = {
-  consented: true, enabled: false, paused: false, excludedApps: [], excludedSites: [], skipIncognito: true,
+  consented: true, enabled: false, paused: false, excludedApps: [], excludedSites: [],
 }
 const ON: TrackingControlsState = {
   consented: true, enabled: true, paused: false,
-  excludedApps: [EXCLUDED_APP], excludedSites: [EXCLUDED_SITE], skipIncognito: true,
+  excludedApps: [EXCLUDED_APP], excludedSites: [EXCLUDED_SITE],
 }
 
 // A word-bounded search: "dia" must hit the app "Dia" but never "diagram"/"media".

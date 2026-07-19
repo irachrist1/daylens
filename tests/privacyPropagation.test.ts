@@ -29,7 +29,6 @@ const controls: TrackingControlsState = {
   paused: false,
   excludedApps: ['app.zen-browser.zen', 'Zen'],
   excludedSites: ['private.example.com'],
-  skipIncognito: true,
 }
 
 test('private and excluded observations cannot reach storage or downstream product facts', async () => {
@@ -39,7 +38,6 @@ test('private and excluded observations cannot reach storage or downstream produ
     trackingControlsEnabled: true,
     trackingExcludedApps: controls.excludedApps,
     trackingExcludedSites: controls.excludedSites,
-    trackingSkipIncognito: true,
   })
 
   let scenario: 'allowed-app' | 'excluded-app' | 'private' | 'excluded-site' | 'allowed-site' =
