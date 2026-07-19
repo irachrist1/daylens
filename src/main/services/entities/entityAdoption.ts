@@ -23,9 +23,9 @@
 // that is the "correction outranks later inference" acceptance criterion.
 //
 // Person entities are NOT minted from meeting-notes first names: people
-// resolve by connector id first (spec §Identity rules), and no Wave-2 source
+// resolve by connector id first, and none of the currently adopted sources
 // carries one. Fixtures exercise people through the synthetic connected-source
-// envelopes below (spec §Entity evidence sources in Wave 2).
+// envelopes below.
 import type Database from 'better-sqlite3'
 import type {
   CalendarSignal,
@@ -261,9 +261,9 @@ function adoptExternalSignals(db: Database.Database): void {
   }
 }
 
-// ─── Synthetic connected-source envelopes (spec §Entity evidence sources in
-// Wave 2) — provisional payload shapes owned by the memory spec; acceptance
-// fixtures inject these until the connectors specification is accepted. ──────
+// ─── Synthetic connected-source envelopes — provisional payload shapes owned
+// by the memory spec; acceptance fixtures inject these until the connectors
+// specification is accepted. ──────
 
 export type ConnectedEnvelope =
   | { kind: 'calendar_event'; sourceEventId: string; title: string; startMs?: number; endMs?: number; attendees?: Array<{ connectorId: string; displayName: string }> }
