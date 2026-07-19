@@ -19,8 +19,10 @@ function currentOnboardingPlatform(): OnboardingPlatform {
   }
 }
 
-function initialTrackingPermissionState(platform: OnboardingPlatform): TrackingPermissionState {
-  return platform === 'macos' ? 'missing' : 'granted'
+function initialTrackingPermissionState(_platform: OnboardingPlatform): TrackingPermissionState {
+  // Every platform verifies capture readiness during onboarding. Windows checks
+  // the helper; Linux reports the session support level; macOS checks Accessibility.
+  return 'missing'
 }
 
 export function createDefaultOnboardingState(legacyComplete = false): OnboardingState {

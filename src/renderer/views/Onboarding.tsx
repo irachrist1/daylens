@@ -69,39 +69,30 @@ const RHYTHMS: Array<{ id: WorkRhythm; label: string; hint: string; emoji: strin
   { id: 'always', label: 'Always on', hint: 'It varies, all hours', emoji: '⚡' },
 ]
 
-const MAC_STEPS: Array<{ id: OnboardingStage[]; label: string }> = [
+const ONBOARDING_STEPS: Array<{ id: OnboardingStage[]; label: string }> = [
   { id: ['welcome', 'why'], label: 'Hello' },
   { id: ['permission', 'relaunch_required', 'verifying_permission'], label: 'Grant access' },
   { id: ['proof'], label: 'First signal' },
+  { id: ['privacy'], label: 'Privacy' },
   { id: ['tour', 'superpowers'], label: 'How it works' },
-  { id: ['about', 'voice', 'work', 'connections', 'privacy', 'personalize'], label: 'Make it yours' },
+  { id: ['about', 'voice', 'work', 'connections', 'personalize'], label: 'Make it yours' },
   { id: ['ai_setup'], label: 'Set up AI' },
   { id: ['ready'], label: 'Ready' },
 ]
 
-const NON_MAC_STEPS: Array<{ id: OnboardingStage[]; label: string }> = [
-  { id: ['welcome', 'why'], label: 'Hello' },
-  { id: ['proof'], label: 'First signal' },
-  { id: ['tour', 'superpowers'], label: 'How it works' },
-  { id: ['about', 'voice', 'work', 'connections', 'privacy', 'personalize'], label: 'Make it yours' },
-  { id: ['ai_setup'], label: 'Set up AI' },
-  { id: ['ready'], label: 'Ready' },
+// The four "Make it yours" screens share a progress group; we show a sub-count
+// in the eyebrow so the user feels momentum without the bar lurching.
+const MAKE_IT_YOURS: OnboardingStage[] = ['about', 'voice', 'work', 'connections']
+
+// Macro flow for Back and analytics. Permission auto-advances when granted, so
+// Back into it may bounce forward — that is intentional recovery after a revoke.
+const STAGE_FLOW: OnboardingStage[] = [
+  'welcome', 'why', 'permission', 'proof', 'privacy',
+  'tour', 'superpowers', 'about', 'voice', 'work', 'connections', 'ai_setup', 'ready',
 ]
-
-// The five "Make it yours" screens share a progress group; we show a sub-count
-// ("3 of 5") in the eyebrow so the user feels momentum without the bar lurching.
-const MAKE_IT_YOURS: OnboardingStage[] = ['about', 'voice', 'work', 'connections', 'privacy']
-
-// The macro flow used for the Back button. The mac permission stage is omitted:
-// it auto-advances once access is granted, so stepping back into it would bounce
-// the user forward again.
-const STAGE_FLOW: OnboardingStage[] = ['welcome', 'why', 'proof', 'tour', 'superpowers', 'about', 'voice', 'work', 'connections', 'privacy', 'ai_setup', 'ready']
 const SYSTEM_STAGES = new Set<OnboardingStage>(['relaunch_required', 'verifying_permission'])
 
-// Ordered flow for onboarding_step_completed indexing. Unlike STAGE_FLOW (the
-// Back button), this includes the mac permission stage — completing it is a
-// real funnel step the analytics must count.
-const MAC_ANALYTICS_FLOW: OnboardingStage[] = ['welcome', 'why', 'permission', 'proof', 'tour', 'superpowers', 'about', 'voice', 'work', 'connections', 'privacy', 'ai_setup', 'ready']
+const PROOF_TIMEOUT_MS = 8_000
 
 // Collapse system / legacy stages onto the funnel step they belong to.
 function analyticsStage(stage: OnboardingStage): OnboardingStage {
@@ -110,28 +101,30 @@ function analyticsStage(stage: OnboardingStage): OnboardingStage {
   return stage
 }
 
-// The "why am I installing this?" story, told one calm beat at a time, with Lumen
-// acting it out, not three stacked FAQ boxes.
-const WHY_BEATS: Array<{ scene: 'diary' | 'device' | 'recap'; expression: MascotExpression; title: string; body: string }> = [
-  {
-    scene: 'diary',
-    expression: 'curious',
-    title: 'So… why let an app watch my laptop?',
-    body: "Fair question. Most trackers feel like a boss over your shoulder. Daylens is the opposite: a quiet diary of your day that only you can read.",
-  },
-  {
-    scene: 'device',
-    expression: 'idle',
-    title: 'It all stays on this device.',
-    body: 'No screenshots. No video. Just the names of what you had open, and none of it leaves your computer unless you ask it to.',
-  },
-  {
-    scene: 'recap',
-    expression: 'happy',
-    title: 'At the end of the day, you get the good part.',
-    body: "Instead of “where did the day go?”, an honest little recap of what you actually got done, written like a friend caught you up, not a spreadsheet.",
-  },
+const CONSENT_CAPTURED = [
+  'Foreground apps and window titles',
+  'Active browser pages (not private or incognito)',
+  'Machine state like idle, locked, or asleep',
 ]
+
+const CONSENT_NEVER = [
+  'Screenshots, screen video, or audio',
+  'Keystrokes, message bodies, or file contents',
+  'Private or incognito browser windows',
+]
+
+function looksLikeSite(value: string): boolean {
+  const trimmed = value.trim().toLowerCase()
+  if (!trimmed || /\s/.test(trimmed)) return false
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) return true
+  return trimmed.includes('.') && !trimmed.startsWith('.')
+}
+
+function normalizeExclusionValue(value: string): string {
+  const trimmed = value.trim()
+  if (!looksLikeSite(trimmed)) return trimmed
+  return trimmed.replace(/^https?:\/\//i, '').replace(/^www\./i, '').split('/')[0] ?? trimmed
+}
 
 // Multi-select roles get a playful Duolingo-style nudge when the combo is funny.
 // Keyed by the two role ids sorted alphabetically and joined with '+'.
@@ -515,44 +508,27 @@ function TourStory({ index, name }: { index: number; name: string }) {
   )
 }
 
-// ── The "why" story scenes ───────────────────────────────────────────────────
+// ── Consent policy panel ─────────────────────────────────────────────────────
 
-function WhyScene({ scene, name }: { scene: 'diary' | 'device' | 'recap'; name: string }) {
-  if (scene === 'device') {
-    return (
-      <div className="ob-why-scene">
-        <div className="ob-why-device">
-          <div className="ob-why-device-screen"><span className="ob-why-lock">🔒</span></div>
-          <div className="ob-why-device-base" />
-        </div>
-        <div className="ob-why-tags">
-          {['No screenshots', 'No video', 'Never the cloud'].map((t, i) => (
-            <span key={t} className="ob-why-tag" style={{ animationDelay: `${0.1 + i * 0.1}s` }}>{t}</span>
-          ))}
-        </div>
-      </div>
-    )
-  }
-  if (scene === 'recap') {
-    return (
-      <div className="ob-why-scene">
-        <div className="ob-why-recap">
-          <div className="ob-why-recap-label">Evening recap</div>
-          <div className="ob-why-recap-body">
-            A solid day{name ? `, ${name}` : ''}, about 5 hours in. You stayed with the proposal and got it finished, made your team call, and cleared the inbox. Nice work.
-          </div>
-        </div>
-      </div>
-    )
-  }
+function ConsentPanel() {
   return (
-    <div className="ob-why-scene">
-      <div className="ob-why-diary">
-        <div className="ob-why-diary-line" style={{ width: '72%' }} />
-        <div className="ob-why-diary-line" style={{ width: '88%' }} />
-        <div className="ob-why-diary-line" style={{ width: '54%' }} />
-        <div className="ob-why-diary-seal">only you</div>
+    <div className="ob-consent">
+      <div className="ob-consent-col">
+        <div className="ob-consent-heading">What Daylens captures</div>
+        <ul className="ob-consent-list">
+          {CONSENT_CAPTURED.map((item) => <li key={item}>{item}</li>)}
+        </ul>
       </div>
+      <div className="ob-consent-col">
+        <div className="ob-consent-heading">What it never captures</div>
+        <ul className="ob-consent-list">
+          {CONSENT_NEVER.map((item) => <li key={item}>{item}</li>)}
+        </ul>
+      </div>
+      <p className="ob-consent-note">
+        Activity stays in the local database on this computer unless you later enable a feature that sends selected context elsewhere.
+        Pause, exclusions, deletion, and export are always available.
+      </p>
     </div>
   )
 }
@@ -656,7 +632,6 @@ export default function Onboarding({
   const [intentDraft, setIntentDraft] = useState(initialSettings.userIntent)
   const [aiConnected, setAiConnected] = useState(initialSettings.onboardingState.aiSetupState === 'connected')
   const [tourIndex, setTourIndex] = useState(0)
-  const [whyIndex, setWhyIndex] = useState(0)
   // T3: opt-in to Tracking Controls during onboarding. Off by default — picking
   // an app to keep private (below) flips it on implicitly at persist time.
   const [trackingOptIn] = useState(initialSettings.trackingControlsEnabled ?? false)
@@ -666,6 +641,7 @@ export default function Onboarding({
   const [focusApps, setFocusApps] = useState<Set<string>>(new Set(initialSettings.focusApps ?? []))
   const [interestedCategories, setInterestedCategories] = useState<Set<AppCategory>>(new Set(initialSettings.interestedCategories ?? []))
   const [excludedApps, setExcludedApps] = useState<Set<string>>(new Set(initialSettings.trackingExcludedApps ?? []))
+  const [excludedSites, setExcludedSites] = useState<Set<string>>(new Set(initialSettings.trackingExcludedSites ?? []))
   const [topApps, setTopApps] = useState<string[]>([])
   // Roles are multi-select. We seed from the persisted comma-joined label string.
   const [roleIds, setRoleIds] = useState<Set<string>>(() => {
@@ -687,7 +663,11 @@ export default function Onboarding({
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [proof, setProof] = useState<ProofSnapshot>({ liveSession: null, timeline: null, ready: false })
   const [proofLoadError, setProofLoadError] = useState<string | null>(null)
+  const [proofTimedOut, setProofTimedOut] = useState(false)
+  const [showProofDiagnostics, setShowProofDiagnostics] = useState(false)
+  const [proofDiagnosticsNote, setProofDiagnosticsNote] = useState<string | null>(null)
   const [linuxTracking, setLinuxTracking] = useState<LinuxTrackingDiagnostics | null>(null)
+  const [visibleActivity, setVisibleActivity] = useState<string[]>([])
   const [settingsHandoff, setSettingsHandoff] = useState(false)
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermissionState>('not-determined')
   const onboardingTrackedRef = useRef(false)
@@ -699,8 +679,9 @@ export default function Onboarding({
   const platform = settings.onboardingState.platform
   const stage = settings.onboardingState.stage
   const isMac = platform === 'macos'
+  const isWindows = platform === 'windows'
   const isLinux = platform === 'linux'
-  const steps = isMac ? MAC_STEPS : NON_MAC_STEPS
+  const steps = ONBOARDING_STEPS
   const activeStepIndex = useMemo(() => {
     const idx = steps.findIndex((s) => s.id.includes(stage))
     if (idx >= 0) return idx
@@ -783,7 +764,6 @@ export default function Onboarding({
   // first of its replacements so a mid-onboarding reload never lands nowhere.
   useEffect(() => {
     if (stage === 'personalize') void persistOnboarding('about')
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stage])
 
   useEffect(() => {
@@ -851,7 +831,7 @@ export default function Onboarding({
     // onboarding_step_completed fires here — the single choke point every
     // stage transition passes through — exactly once per forward step.
     // Backward navigation and same-stage state updates don't fire.
-    const flow = isMac ? MAC_ANALYTICS_FLOW : STAGE_FLOW
+    const flow = STAGE_FLOW
     const currentState = onboardingStateRef.current
     const fromIndex = flow.indexOf(analyticsStage(currentState.stage))
     const toIndex = flow.indexOf(analyticsStage(nextStage))
@@ -882,13 +862,27 @@ export default function Onboarding({
   }
 
   async function refreshPermissionState() {
-    if (!isMac) return
     const [nextState, details] = await Promise.all([
       ipc.tracking.getPermissionState(),
       ipc.tracking.getPermissionDetails(),
     ])
     setPermissionState(nextState)
     setPermissionDetails(details)
+
+    if (!isMac) {
+      if (stage !== 'permission') return
+      if (nextState === 'granted') {
+        await persistOnboarding('proof', {
+          trackingPermissionState: 'granted',
+          proofState: 'collecting',
+        })
+      } else if (onboardingStateRef.current.trackingPermissionState !== nextState) {
+        await persistOnboarding('permission', {
+          trackingPermissionState: nextState,
+        })
+      }
+      return
+    }
 
     if (nextState !== 'granted') {
       if (stage === 'verifying_permission') {
@@ -932,10 +926,22 @@ export default function Onboarding({
   }
 
   useEffect(() => {
-    if (!isMac || stage !== 'permission') return
+    if (stage !== 'permission') return
     void refreshPermissionState()
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isMac, stage, settings.onboardingState.permissionRequestedAt])
+  }, [isMac, isWindows, isLinux, stage, settings.onboardingState.permissionRequestedAt])
+
+  useEffect(() => {
+    if (stage !== 'permission' || !isLinux) return
+    let cancelled = false
+    void ipc.tracking.getDiagnostics()
+      .then((diagnostics) => {
+        if (cancelled) return
+        if (diagnostics?.linuxTracking) setLinuxTracking(diagnostics.linuxTracking)
+      })
+      .catch(() => { /* diagnostics are optional during permission */ })
+    return () => { cancelled = true }
+  }, [stage, isLinux])
 
   useEffect(() => {
     if (!isMac || stage !== 'verifying_permission') return
@@ -950,9 +956,11 @@ export default function Onboarding({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isMac, stage, settings.onboardingState.permissionRequestedAt])
 
-  // While the user is in System Settings we refocus-check on window focus.
+  // Poll while waiting on System Settings (mac) or the Windows helper.
   useEffect(() => {
-    if (!isMac || stage !== 'permission' || !settingsHandoff) return
+    if (stage !== 'permission') return
+    if (isMac && !settingsHandoff) return
+    if (!isMac && !isWindows) return
     const onFocus = () => { void refreshPermissionState() }
     window.addEventListener('focus', onFocus)
     const interval = window.setInterval(() => { void refreshPermissionState() }, 2_000)
@@ -961,23 +969,34 @@ export default function Onboarding({
       window.clearInterval(interval)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isMac, stage, settingsHandoff])
+  }, [isMac, isWindows, stage, settingsHandoff])
 
   useEffect(() => {
-    if (stage !== 'proof') return
+    if (stage !== 'proof') {
+      setProofTimedOut(false)
+      setShowProofDiagnostics(false)
+      setProofDiagnosticsNote(null)
+      return
+    }
 
     let cancelled = false
+    const timeout = window.setTimeout(() => {
+      if (!cancelled) setProofTimedOut(true)
+    }, PROOF_TIMEOUT_MS)
 
     async function loadProof() {
       try {
-        const [timeline, liveSession, diagnostics] = await Promise.all([
+        const [timeline, liveSession, diagnostics, permissionDetailsNext] = await Promise.all([
           ipc.db.getTimelineDay(todayString()),
           ipc.tracking.getLiveSession(),
-          isLinux ? ipc.tracking.getDiagnostics() : Promise.resolve(null),
+          ipc.tracking.getDiagnostics(),
+          ipc.tracking.getPermissionDetails(),
         ])
         if (cancelled) return
 
-        if (isLinux && diagnostics?.linuxTracking) {
+        setPermissionDetails(permissionDetailsNext)
+        setPermissionState(permissionDetailsNext.combined)
+        if (diagnostics?.linuxTracking) {
           setLinuxTracking(diagnostics.linuxTracking)
         }
 
@@ -993,6 +1012,37 @@ export default function Onboarding({
 
         setProof({ liveSession, timeline, ready })
         setProofLoadError(null)
+        if (ready) setProofTimedOut(false)
+
+        const activity = new Set<string>()
+        if (liveSession?.appName) activity.add(liveSession.appName)
+        for (const session of timeline?.sessions ?? []) {
+          if (session.appName) activity.add(session.appName)
+        }
+        for (const block of timeline?.blocks ?? []) {
+          for (const app of block.topApps ?? []) {
+            if (app.appName) activity.add(app.appName)
+          }
+        }
+        for (const site of timeline?.websites ?? []) {
+          if (site.domain) activity.add(site.domain)
+        }
+        setVisibleActivity(Array.from(activity).slice(0, 16))
+
+        const health = diagnostics?.captureHealth
+        if (health) {
+          const parts: string[] = []
+          if (health.permissions.combined !== 'granted') {
+            parts.push(health.permissions.platformNote?.trim() || 'Capture permission is not ready yet.')
+          }
+          if (health.captureHelperRunning === false) {
+            parts.push('The capture helper is not running.')
+          }
+          if (diagnostics.linuxTracking && diagnostics.linuxTracking.supportLevel !== 'ready') {
+            parts.push(diagnostics.linuxTracking.supportMessage)
+          }
+          setProofDiagnosticsNote(parts.join(' ') || null)
+        }
 
         const nextProofState: ProofState = ready ? 'ready' : 'collecting'
         const currentOnboardingState = onboardingStateRef.current
@@ -1002,6 +1052,7 @@ export default function Onboarding({
             stage: 'proof' as const,
             proofState: nextProofState,
           }
+          onboardingStateRef.current = nextState
           setSettings((current) => ({ ...current, onboardingState: nextState }))
           await ipc.settings.set({ onboardingState: nextState })
         }
@@ -1016,6 +1067,7 @@ export default function Onboarding({
     const interval = window.setInterval(() => { void loadProof() }, 2_500)
     return () => {
       cancelled = true
+      window.clearTimeout(timeout)
       window.clearInterval(interval)
     }
   }, [stage, isLinux])
@@ -1097,15 +1149,61 @@ export default function Onboarding({
     setCustomAppDraft('')
   }
 
-  function addPrivateApp(raw: string) {
-    const name = raw.trim()
-    if (!name) return
-    setExcludedApps((prev) => {
-      const next = new Set(prev)
-      next.add(name)
-      return next
+  async function persistExclusions(nextApps: Set<string>, nextSites: Set<string>) {
+    const apps = Array.from(nextApps)
+    const sites = Array.from(nextSites)
+    await ipc.settings.set({
+      trackingControlsEnabled: trackingOptIn || apps.length > 0 || sites.length > 0,
+      trackingExcludedApps: apps,
+      trackingExcludedSites: sites,
     })
+  }
+
+  function addPrivateItem(raw: string) {
+    const name = normalizeExclusionValue(raw)
+    if (!name) return
+    const asSite = looksLikeSite(name)
+    let nextApps = excludedApps
+    let nextSites = excludedSites
+    if (asSite) {
+      if (excludedSites.has(name)) {
+        setPrivateDraft('')
+        return
+      }
+      nextSites = new Set(excludedSites)
+      nextSites.add(name)
+      setExcludedSites(nextSites)
+    } else {
+      if (excludedApps.has(name)) {
+        setPrivateDraft('')
+        return
+      }
+      nextApps = new Set(excludedApps)
+      nextApps.add(name)
+      setExcludedApps(nextApps)
+    }
     setPrivateDraft('')
+    void persistExclusions(nextApps, nextSites).catch((error) => {
+      setErrorMessage(error instanceof Error ? error.message : String(error))
+    })
+  }
+
+  function removePrivateItem(name: string) {
+    const asSite = looksLikeSite(name) || excludedSites.has(name)
+    let nextApps = excludedApps
+    let nextSites = excludedSites
+    if (asSite) {
+      nextSites = new Set(excludedSites)
+      nextSites.delete(name)
+      setExcludedSites(nextSites)
+    } else {
+      nextApps = new Set(excludedApps)
+      nextApps.delete(name)
+      setExcludedApps(nextApps)
+    }
+    void persistExclusions(nextApps, nextSites).catch((error) => {
+      setErrorMessage(error instanceof Error ? error.message : String(error))
+    })
   }
 
   async function finishOnboarding() {
@@ -1125,6 +1223,7 @@ export default function Onboarding({
 
     try {
       const nextExcludedApps = Array.from(excludedApps)
+      const nextExcludedSites = Array.from(excludedSites)
       await ipc.attribution.ensureClients(clients)
       await ipc.settings.set({
         onboardingComplete: true,
@@ -1138,8 +1237,9 @@ export default function Onboarding({
         summaryVoice,
         focusApps: Array.from(focusApps),
         interestedCategories: Array.from(interestedCategories),
-        trackingControlsEnabled: trackingOptIn || nextExcludedApps.length > 0,
+        trackingControlsEnabled: trackingOptIn || nextExcludedApps.length > 0 || nextExcludedSites.length > 0,
         trackingExcludedApps: nextExcludedApps,
+        trackingExcludedSites: nextExcludedSites,
         dailySummaryEnabled: true,
         morningNudgeEnabled: true,
         distractionAlertsEnabled: true,
@@ -1192,7 +1292,7 @@ export default function Onboarding({
   // proceed without granting (capture simply has nothing to read until they do)
   // and grant later in Settings.
   async function skipPermission() {
-    await persistOnboarding('proof', { proofState: 'collecting' })
+    await continueFromPermissionWithoutGrant()
   }
 
   async function handleContinueFromWelcome() {
@@ -1208,7 +1308,7 @@ export default function Onboarding({
     }
   }
 
-  // Finishing the capture explainer records consent before live proof begins.
+  // Explicit consent records the gate before platform permission and live proof.
   async function consentAndLeaveWhy() {
     try {
       await ipc.app.setCaptureConsent(true)
@@ -1216,17 +1316,9 @@ export default function Onboarding({
       setErrorMessage(error instanceof Error ? error.message : String(error))
       return
     }
-    await persistOnboarding(isMac ? 'permission' : 'proof', {
-      proofState: isMac ? 'idle' : 'collecting',
+    await persistOnboarding('permission', {
+      proofState: 'idle',
     })
-  }
-
-  function advanceWhy() {
-    if (whyIndex < WHY_BEATS.length - 1) {
-      setWhyIndex((i) => i + 1)
-      return
-    }
-    void consentAndLeaveWhy()
   }
 
   async function skipWhy() {
@@ -1239,8 +1331,18 @@ export default function Onboarding({
   }
 
   async function continueFromProof() {
-    await persistOnboarding('tour', {
+    await persistOnboarding('privacy', {
       proofState: proof.ready ? 'ready' : settings.onboardingState.proofState,
+    })
+  }
+
+  async function continueFromPermissionWithoutGrant() {
+    const granted = permissionState === 'granted'
+      || permissionDetails?.captureHelperRunning === true
+      || (isLinux && (linuxTracking?.supportLevel === 'ready'))
+    await persistOnboarding('proof', {
+      trackingPermissionState: granted ? 'granted' : 'missing',
+      proofState: 'collecting',
     })
   }
 
@@ -1305,29 +1407,28 @@ export default function Onboarding({
   const customFocusApps = Array.from(focusApps).filter((a) => !appChoices.includes(a))
   // Persisted, human-readable role label ("Designer, Consultant").
   const userRoleLabel = ROLES.filter((r) => roleIds.has(r.id)).map((r) => r.label).join(', ')
-  // Keep-private autosuggest: popular apps + the user's real apps, filtered by
-  // what they're typing, excluding anything already marked private.
-  const privatePool = Array.from(new Set([...appChoices, ...POPULAR_APPS_AND_SITES]))
+  // Keep-private autosuggest: seed from activity already visible in the proof step.
+  const privatePool = Array.from(new Set([
+    ...visibleActivity,
+    ...appChoices,
+    ...(visibleActivity.length === 0 ? POPULAR_APPS_AND_SITES : []),
+  ]))
   const privateQuery = privateDraft.trim().toLowerCase()
   const privateMatches = (privateQuery
     ? privatePool.filter((a) => a.toLowerCase().includes(privateQuery))
     : privatePool
-  ).filter((a) => !excludedApps.has(a)).slice(0, 8)
+  ).filter((a) => !excludedApps.has(a) && !excludedSites.has(a)).slice(0, 8)
+  const privateItems = [...Array.from(excludedApps), ...Array.from(excludedSites)]
 
   const flowIndex = STAGE_FLOW.indexOf(stage)
   const canGoBack = !SYSTEM_STAGES.has(stage) && (
     (stage === 'tour' && tourIndex > 0)
-    || (stage === 'why' && whyIndex > 0)
     || flowIndex > 0
   )
 
   function goBack() {
     if (stage === 'tour' && tourIndex > 0) {
       setTourIndex((index) => index - 1)
-      return
-    }
-    if (stage === 'why' && whyIndex > 0) {
-      setWhyIndex((index) => index - 1)
       return
     }
     const previous = STAGE_FLOW[flowIndex - 1]
@@ -1353,7 +1454,7 @@ export default function Onboarding({
     try {
       await ipc.attribution.ensureClients(clients)
       await ipc.settings.set({ workRhythm })
-      await persistOnboarding('privacy')
+      await persistOnboarding('ai_setup', { personalizationState: 'completed' })
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : String(error))
     } finally {
@@ -1362,15 +1463,9 @@ export default function Onboarding({
   }
 
   async function continueFromPrivacy() {
-    const nextExcludedApps = Array.from(excludedApps)
     try {
-      await ipc.settings.set({
-        // Excluding specific apps requires the controls master switch on. Turn it
-        // on implicitly when the user actually picked something to keep private.
-        trackingControlsEnabled: trackingOptIn || nextExcludedApps.length > 0,
-        trackingExcludedApps: nextExcludedApps,
-      })
-      await persistOnboarding('ai_setup', { personalizationState: 'completed' })
+      await persistExclusions(excludedApps, excludedSites)
+      await persistOnboarding('tour')
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : String(error))
     }
@@ -1466,59 +1561,100 @@ export default function Onboarding({
           </Stage>
         )
 
-      case 'why': {
-        const beat = WHY_BEATS[Math.min(whyIndex, WHY_BEATS.length - 1)]
-        const last = whyIndex >= WHY_BEATS.length - 1
-        return (
-          <Stage
-            {...railProps}
-            expression={beat.expression}
-            eyebrow={`${eyebrow} · ${whyIndex + 1} of ${WHY_BEATS.length}`}
-            title={beat.title}
-            subtitle={beat.body}
-            centered
-            contentKey={`why-${beat.scene}`}
-            primary={{ label: last ? "Makes sense, let's go" : 'Continue', onClick: () => advanceWhy() }}
-            skip={{ label: 'Skip', onClick: () => void skipWhy() }}
-          >
-            <WhyScene scene={beat.scene} name={greetName} />
-            <div className="ob-why-dots" aria-hidden="true">
-              {WHY_BEATS.map((_, i) => <span key={i} className={`ob-why-dot${i === whyIndex ? ' is-active' : ''}`} />)}
-            </div>
-          </Stage>
-        )
-      }
-
-      case 'permission':
+      case 'why':
         return (
           <Stage
             {...railProps}
             expression="curious"
             eyebrow={eyebrow}
-            title="One quick permission to read window titles"
-            subtitle="Daylens needs macOS Accessibility to read just the names of what you have open. No screenshots, no video, ever."
-            contentKey="permission"
-            primary={{ label: busy ? 'Opening System Settings…' : 'Open Privacy & Security', onClick: () => void beginPermissionRequest(), disabled: busy }}
-            secondary={{ label: 'I already enabled it', onClick: () => void refreshPermissionState() }}
+            title="Before Daylens starts watching"
+            subtitle="Capture begins only after you agree. Here is exactly what that means."
+            contentKey="consent"
+            primary={{ label: 'I agree — start capture', onClick: () => void consentAndLeaveWhy(), disabled: busy }}
+            skip={{ label: 'Not now', onClick: () => void skipWhy() }}
+          >
+            <ConsentPanel />
+            <p className="ob-reassure">Declining leaves Daylens open with capture off. You can allow capture later in Settings.</p>
+          </Stage>
+        )
+
+      case 'permission': {
+        const macTitle = 'One quick permission to read window titles'
+        const macSubtitle = 'Daylens needs macOS Accessibility to read just the names of what you have open. No screenshots, no video, ever.'
+        const winTitle = 'Checking the capture helper'
+        const winSubtitle = 'Windows does not need a system privacy grant for foreground capture. Daylens just needs its capture helper running.'
+        const linuxTitle = 'How much this desktop can share'
+        const linuxSubtitle = 'Linux capture depends on your desktop session. Daylens reports the support level honestly instead of pretending everything works.'
+        const title = isMac ? macTitle : isWindows ? winTitle : linuxTitle
+        const subtitle = isMac ? macSubtitle : isWindows ? winSubtitle : linuxSubtitle
+        const helperRunning = permissionDetails?.captureHelperRunning
+        const linuxReady = linuxTracking?.supportLevel === 'ready' || permissionState === 'granted'
+        return (
+          <Stage
+            {...railProps}
+            expression="curious"
+            eyebrow={eyebrow}
+            title={title}
+            subtitle={subtitle}
+            contentKey={`permission-${platform}`}
+            primary={isMac
+              ? { label: busy ? 'Opening System Settings…' : 'Open Privacy & Security', onClick: () => void beginPermissionRequest(), disabled: busy }
+              : isWindows
+                ? { label: busy ? 'Checking…' : helperRunning ? 'Continue' : 'Check again', onClick: () => void (helperRunning ? continueFromPermissionWithoutGrant() : refreshPermissionState()), disabled: busy }
+                : { label: 'Continue', onClick: () => void continueFromPermissionWithoutGrant(), disabled: busy }}
+            secondary={isMac
+              ? { label: 'I already enabled it', onClick: () => void refreshPermissionState() }
+              : isLinux
+                ? { label: 'Show capture details', onClick: () => setShowProofDiagnostics(true) }
+                : undefined}
             skip={{ label: 'Skip for now', onClick: () => void skipPermission() }}
           >
-            <SettingsPreview />
+            {isMac && <SettingsPreview />}
+            {isWindows && (
+              <div className="ob-callout">
+                <div className="ob-callout-title">{helperRunning ? 'Capture helper is running' : 'Capture helper not detected yet'}</div>
+                <div className="ob-callout-body">
+                  {helperRunning
+                    ? 'Foreground capture is ready. Continue to see your own activity.'
+                    : 'Keep Daylens open for a moment, then check again. If it still fails, Capture health in Settings has the fix.'}
+                </div>
+              </div>
+            )}
+            {isLinux && (
+              <div className="ob-callout">
+                <div className="ob-callout-title">{linuxReady ? 'Session looks ready' : 'Limited or unknown support'}</div>
+                <div className="ob-callout-body">
+                  {linuxTracking?.supportMessage
+                    || permissionDetails?.platformNote
+                    || 'Open Capture health in Settings after setup for the full picture.'}
+                </div>
+              </div>
+            )}
             <div className={`ob-status ob-status-${permissionStatusTone}`}>
               <span className="ob-status-dot" />
               <span className="ob-status-label">{permissionStatusLabel}</span>
-              {settingsHandoff && (
-                <span className="ob-status-note">Keep this window open. We'll pick up the moment the toggle flips.</span>
+              {isMac && settingsHandoff && (
+                <span className="ob-status-note">Keep this window open. We will pick up the moment the toggle flips.</span>
               )}
             </div>
-            {permissionDetails && (
+            {isMac && permissionDetails && (
               <div className="ob-status ob-status-pending">
                 <span className="ob-status-label">
                   Accessibility: {permissionDetails.accessibility === 'granted' ? 'Enabled' : 'Missing'}
                 </span>
               </div>
             )}
+            {showProofDiagnostics && (permissionDetails?.platformNote || linuxTracking?.supportMessage) && (
+              <div className="ob-callout">
+                <div className="ob-callout-title">Capture health</div>
+                <div className="ob-callout-body">
+                  {linuxTracking?.supportMessage || permissionDetails?.platformNote}
+                </div>
+              </div>
+            )}
           </Stage>
         )
+      }
 
       case 'relaunch_required':
         return (
@@ -1561,18 +1697,37 @@ export default function Onboarding({
           </Stage>
         )
 
-      case 'proof':
+      case 'proof': {
+        const permissionMissing = permissionState !== 'granted' && permissionState !== 'awaiting_relaunch'
+        const canContinue = proof.ready || proofTimedOut || Boolean(proofLoadError)
+        const emptyTitle = permissionMissing
+          ? 'Capture is not ready yet'
+          : 'Nothing captured yet'
+        const emptySubtitle = permissionMissing
+          ? 'Daylens cannot show real activity until the platform permission above is fixed.'
+          : 'We waited briefly and still have no real activity from this machine. That is OK — you can continue and fix capture from diagnostics.'
         return (
           <Stage
             {...railProps}
-            expression={proof.ready ? 'happy' : 'watch'}
+            expression={proof.ready ? 'happy' : proofTimedOut ? 'idle' : 'watch'}
             eyebrow={eyebrow}
-            title={proof.ready ? "Here's what I can already see" : 'Watching for your first signal…'}
+            title={proof.ready ? "Here's what I can already see" : emptyTitle}
             subtitle={proof.ready
-              ? 'Real activity from this machine, captured the Daylens way, not a canned demo.'
-              : 'No fake progress bars. The moment real work shows up, it lands right here.'}
-            contentKey={proof.ready ? 'proof-ready' : 'proof-wait'}
-            primary={{ label: proof.ready ? 'Continue' : 'Waiting for the first signal…', onClick: () => void continueFromProof(), disabled: !proof.ready }}
+              ? 'Real activity from this machine, captured the Daylens way — never a canned demo.'
+              : proofTimedOut || proofLoadError
+                ? emptySubtitle
+                : 'Waiting briefly for real capture from this machine.'}
+            contentKey={proof.ready ? 'proof-ready' : proofTimedOut ? 'proof-empty' : 'proof-wait'}
+            primary={{
+              label: proof.ready ? 'Continue' : canContinue ? 'Continue anyway' : 'Listening…',
+              onClick: () => void continueFromProof(),
+              disabled: !canContinue || busy,
+            }}
+            secondary={!proof.ready && (permissionMissing || proofTimedOut)
+              ? { label: showProofDiagnostics ? 'Hide diagnostics' : 'Open capture diagnostics', onClick: () => setShowProofDiagnostics((v) => !v) }
+              : permissionMissing
+                ? { label: 'Fix permissions', onClick: () => void persistOnboarding('permission', { proofState: 'idle' }) }
+                : undefined}
           >
             {proof.ready ? (
               <div className="onboarding-live-activity">
@@ -1603,19 +1758,33 @@ export default function Onboarding({
             ) : (
               <div className="ob-proof-pending">
                 {proofLoadError ? (
-                  <p>Daylens could not check the first signal yet: {proofLoadError}. It will retry automatically.</p>
+                  <p>Daylens could not check the first signal yet: {proofLoadError}.</p>
+                ) : proofTimedOut ? (
+                  <p>Nothing captured yet on this machine.</p>
                 ) : (
-                  <div className="onboarding-breath" aria-hidden="true"><span /><span /><span /></div>
+                  <p>Listening for your own activity…</p>
                 )}
-                {!proofLoadError && isLinux && linuxTracking && linuxTracking.supportLevel !== 'ready' ? (
-                  <p>{linuxTracking.supportMessage} Open Settings → Capture health after setup for the full picture.</p>
-                ) : !proofLoadError ? (
-                  <p>Go about your day. Daylens keeps listening for real work signal.</p>
-                ) : null}
+                {(showProofDiagnostics || proofTimedOut) && (
+                  <div className="ob-callout">
+                    <div className="ob-callout-title">Capture diagnostics</div>
+                    <div className="ob-callout-body">
+                      {proofDiagnosticsNote
+                        || permissionDetails?.platformNote
+                        || linuxTracking?.supportMessage
+                        || 'After setup, open Settings → Capture health for permission, helper, and browser page-context state.'}
+                    </div>
+                    {permissionMissing && (
+                      <button type="button" className="ob-btn-secondary ob-btn-sm" style={{ marginTop: 10 }} onClick={() => void persistOnboarding('permission', { proofState: 'idle' })}>
+                        Back to permissions
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </Stage>
         )
+      }
 
       case 'tour': {
         const isLast = tourIndex >= STORY_BEATS.length - 1
@@ -1866,17 +2035,22 @@ export default function Onboarding({
             expression="idle"
             eyebrow={eyebrow}
             title="Anything to keep private?"
-            subtitle="Name any app or website Daylens should never track. Nothing here is ever recorded, and you can change it anytime in Settings."
+            subtitle="Exclude apps and sites before history accumulates. Private browser windows are always excluded, and pause is one click away later."
             contentKey="privacy"
             primary={{ label: 'Continue', onClick: () => void continueFromPrivacy() }}
-            skip={excludedApps.size > 0 ? undefined : { label: 'Nothing to hide', onClick: () => void continueFromPrivacy() }}
+            skip={privateItems.length > 0 ? undefined : { label: 'Nothing to hide', onClick: () => void continueFromPrivacy() }}
           >
             <div className="ob-section">
+              <div className="ob-hint">
+                {visibleActivity.length > 0
+                  ? 'Suggested from activity Daylens can already see on this machine.'
+                  : 'Nothing visible yet — type an app or site to exclude, or continue.'}
+              </div>
               <div className="ob-addbox">
                 <AddItemRow
                   value={privateDraft}
                   onChange={setPrivateDraft}
-                  onAdd={addPrivateApp}
+                  onAdd={(value) => addPrivateItem(value)}
                   placeholder="Start typing an app or site… (Messages, reddit.com)"
                   maxLength={80}
                   buttonLabel="Keep private"
@@ -1884,7 +2058,7 @@ export default function Onboarding({
                 {privateMatches.length > 0 && (
                   <div className="ob-suggest">
                     {privateMatches.map((app) => (
-                      <button key={app} className="ob-suggest-item" onClick={() => addPrivateApp(app)}>
+                      <button key={app} className="ob-suggest-item" onClick={() => addPrivateItem(app)}>
                         <span>{app}</span><span className="ob-suggest-plus">+</span>
                       </button>
                     ))}
@@ -1893,10 +2067,10 @@ export default function Onboarding({
               </div>
 
               <TokenChips
-                items={Array.from(excludedApps)}
+                items={privateItems}
                 kind="private"
-                onRemove={(app) => toggleInSet(app, setExcludedApps)}
-                removeLabel={(app) => `Stop keeping ${app} private`}
+                onRemove={(item) => removePrivateItem(item)}
+                removeLabel={(item) => `Stop keeping ${item} private`}
               />
             </div>
           </Stage>
@@ -2001,7 +2175,7 @@ export default function Onboarding({
               {voiceSample && <div className="ob-profile-row"><span>Voice</span><strong>{voiceSample.label}</strong></div>}
               {focusApps.size > 0 && <div className="ob-profile-row"><span>Real work</span><strong>{Array.from(focusApps).slice(0, 3).join(', ')}{focusApps.size > 3 ? ` +${focusApps.size - 3}` : ''}</strong></div>}
               {clients.length > 0 && <div className="ob-profile-row"><span>Clients</span><strong>{clients.slice(0, 3).join(', ')}{clients.length > 3 ? ` +${clients.length - 3}` : ''}</strong></div>}
-              {excludedApps.size > 0 && <div className="ob-profile-row"><span>Private</span><strong>🔒 {excludedApps.size} app{excludedApps.size !== 1 ? 's' : ''}</strong></div>}
+              {privateItems.length > 0 && <div className="ob-profile-row"><span>Private</span><strong>🔒 {privateItems.length} exclusion{privateItems.length !== 1 ? 's' : ''}</strong></div>}
             </div>
 
             <div className="ob-try">
@@ -2210,6 +2384,12 @@ const ONBOARDING_CSS = `
 .ob-name-field input::placeholder { color: #a2a8b4; font-weight: 500; }
 .ob-name-field input:focus { border-color: rgba(79,110,240,0.6); box-shadow: 0 0 0 4px rgba(79,110,240,0.12); }
 .ob-reassure { margin: 0; font-size: 11.5px; color: var(--ob-ink-3); }
+
+.ob-consent { display: grid; gap: 14px; width: min(460px, 100%); text-align: left; }
+.ob-consent-col { display: grid; gap: 8px; padding: 12px 14px; border: 1px solid var(--ob-line); border-radius: 14px; background: #fafbff; }
+.ob-consent-heading { font-size: 12.5px; font-weight: 760; color: var(--ob-ink); }
+.ob-consent-list { margin: 0; padding-left: 18px; display: grid; gap: 6px; color: var(--ob-ink-2); font-size: 13px; line-height: 1.45; }
+.ob-consent-note { margin: 0; font-size: 12.5px; line-height: 1.55; color: var(--ob-ink-3); }
 
 .ob-input {
   flex: 1 1 auto; min-width: 0; border: 1px solid var(--ob-line); border-radius: 12px; background: #fff;
