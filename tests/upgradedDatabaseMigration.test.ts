@@ -107,6 +107,33 @@ function seedRepresentativeDay(
     '[]',
     now,
   )
+
+  // Attribution-era rows the v50 entity adoption must carry into the entity
+  // store KEEPING their identifiers, and the projects rebuild must preserve.
+  db.prepare(`
+    INSERT INTO clients (id, name, status, created_at, updated_at)
+    VALUES ('legacy-client-acme', 'Acme Corp', 'active', ?, ?)
+  `).run(now, now)
+  db.prepare(`
+    INSERT INTO client_aliases (id, client_id, alias, alias_normalized, source, created_at)
+    VALUES ('legacy-ca-1', 'legacy-client-acme', 'acme', 'acme', 'user', ?)
+  `).run(now)
+  db.prepare(`
+    INSERT INTO projects (id, client_id, name, status, created_at, updated_at)
+    VALUES ('legacy-project-portal', 'legacy-client-acme', 'Portal checkout', 'active', ?, ?)
+  `).run(now, now)
+  db.prepare(`
+    INSERT INTO project_aliases (id, project_id, alias, alias_normalized, source, created_at)
+    VALUES ('legacy-pa-1', 'legacy-project-portal', 'portal', 'portal', 'user', ?)
+  `).run(now)
+  db.prepare(`
+    INSERT INTO artifacts (id, artifact_type, canonical_key, display_title, first_seen_at, last_seen_at)
+    VALUES ('legacy-art-doc', 'document', 'doc:/notes/checkout-plan.md', 'checkout-plan.md', ?, ?)
+  `).run(now - 3_600_000, now)
+  db.prepare(`
+    INSERT INTO app_identities (app_instance_id, bundle_id, raw_app_name, canonical_app_id, display_name, first_seen_at, last_seen_at)
+    VALUES ('legacy-app-figma', 'com.figma.Desktop', 'Figma', 'figma', 'Figma', ?, ?)
+  `).run(now - 86_400_000, now)
   db.prepare(
     `INSERT INTO ai_threads (id, title, created_at, updated_at, last_message_at)
      VALUES (1, 'Acme launch questions', ?, ?, ?)`,
@@ -232,6 +259,63 @@ test('a representative v25 database upgrades through every migration and keeps i
       .prepare('SELECT content FROM ai_messages WHERE thread_id = 1')
       .get() as { content: string } | undefined
     assert.match(message?.content ?? '', /Acme/)
+
+    // v50 durable entities: adoption kept the legacy identifiers, the alias
+    // came along, and the app identity + artifact became entities too.
+    const clientEntity = db
+      .prepare(`SELECT entity_type, origin, canonical_name FROM entities WHERE id = 'legacy-client-acme'`)
+      .get() as { entity_type: string; origin: string; canonical_name: string } | undefined
+    assert.equal(clientEntity?.entity_type, 'client', 'the legacy client became a client entity with the SAME id')
+    assert.equal(clientEntity?.origin, 'supplied')
+    assert.equal(
+      (db.prepare(`SELECT entity_type FROM entities WHERE id = 'legacy-project-portal'`).get() as { entity_type: string } | undefined)?.entity_type,
+      'project',
+    )
+    assert.equal(
+      (db.prepare(`SELECT entity_type FROM entities WHERE id = 'legacy-art-doc'`).get() as { entity_type: string } | undefined)?.entity_type,
+      'file',
+    )
+    assert.equal(
+      (db.prepare(`SELECT entity_type FROM entities WHERE id = 'legacy-app-figma'`).get() as { entity_type: string } | undefined)?.entity_type,
+      'application',
+    )
+    assert.equal(
+      (db.prepare(`SELECT COUNT(*) AS c FROM entity_aliases WHERE entity_id = 'legacy-client-acme' AND alias_normalized = 'acme'`).get() as { c: number }).c,
+      1,
+      'the client alias was adopted',
+    )
+
+    // v50 projects rebuild: client_id relaxed to nullable with FKs enforced —
+    // a client-less project inserts cleanly, existing rows and aliases intact.
+    const projectsSql = (db
+      .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'projects'`)
+      .get() as { sql: string }).sql
+    assert.ok(!/client_id\s+TEXT\s+NOT\s+NULL/i.test(projectsSql), 'projects.client_id lost its NOT NULL')
+    db.prepare(`
+      INSERT INTO projects (id, client_id, name, status, created_at, updated_at)
+      VALUES ('clientless-project', NULL, 'Side quest', 'active', ?, ?)
+    `).run(Date.now(), Date.now())
+    assert.equal(
+      (db.prepare(`SELECT client_id FROM projects WHERE id = 'clientless-project'`).get() as { client_id: string | null }).client_id,
+      null,
+    )
+    assert.equal(
+      (db.prepare(`SELECT name FROM projects WHERE id = 'legacy-project-portal'`).get() as { name: string }).name,
+      'Portal checkout',
+      'existing projects survived the table rebuild',
+    )
+    assert.equal(
+      (db.prepare(`SELECT COUNT(*) AS c FROM project_aliases WHERE project_id = 'legacy-project-portal'`).get() as { c: number }).c,
+      1,
+      'project aliases survived the rebuild backup dance',
+    )
+    // The FK still enforces valid clients for projects that HAVE one.
+    assert.throws(() => {
+      db.prepare(`
+        INSERT INTO projects (id, client_id, name, status, created_at, updated_at)
+        VALUES ('bad-project', 'no-such-client', 'Broken', 'active', ?, ?)
+      `).run(Date.now(), Date.now())
+    }, /FOREIGN KEY/)
 
     // Corrections work on the upgraded database and survive a rebuild.
     const firstBlock = payload.blocks[0]

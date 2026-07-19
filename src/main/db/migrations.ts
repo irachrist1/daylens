@@ -2,6 +2,7 @@ import { getDb } from '../services/database'
 import { normalizeUrlForStorage, pageKeyForUrl, resolveCanonicalApp, resolveCanonicalBrowser } from '../lib/appIdentity'
 import { deriveClientAliasTokens } from '../lib/clientAliases'
 import { ensureAIMessageFeedbackSchema, ensureAIThreadSchema } from './aiThreadSchema'
+import { runEntityAdoptionBackfill } from '../services/entities/entityAdoption'
 import type Database from 'better-sqlite3'
 import { randomUUID } from 'node:crypto'
 
@@ -2389,6 +2390,154 @@ const migrations: Migration[] = [
         );
         CREATE INDEX IF NOT EXISTS idx_correction_undo_log_date
           ON correction_undo_log (date, created_at);
+      `)
+    },
+  },
+  {
+    version: 50,
+    description:
+      'Durable entities (memory-and-entities.md, DEV-177): entities, entity_aliases, entity_evidence_refs, entity_relationships; relax projects.client_id to nullable (a project may exist without a client); adopt existing clients, projects, app identities, artifacts, and external signals into the entity store keeping their identifiers',
+    up: () => {
+      const db = getDb()
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS entities (
+          id                TEXT PRIMARY KEY,
+          entity_type       TEXT NOT NULL CHECK(entity_type IN (
+            'application', 'page', 'file', 'person', 'meeting', 'repository',
+            'project', 'client', 'timeline_block', 'ai_thread'
+          )),
+          identity_key      TEXT NOT NULL,
+          canonical_name    TEXT NOT NULL,
+          name_source       TEXT NOT NULL DEFAULT 'inferred' CHECK(name_source IN ('inferred', 'user')),
+          origin            TEXT NOT NULL DEFAULT 'observed' CHECK(origin IN ('observed', 'connected', 'supplied', 'inferred')),
+          sensitivity       TEXT NOT NULL DEFAULT 'standard' CHECK(sensitivity IN ('standard', 'personal', 'high')),
+          status            TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'merged', 'deleted')),
+          merged_into_id    TEXT,
+          first_observed_at INTEGER,
+          last_observed_at  INTEGER,
+          metadata_json     TEXT NOT NULL DEFAULT '{}',
+          created_at        INTEGER NOT NULL,
+          updated_at        INTEGER NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_entities_identity ON entities (entity_type, identity_key);
+        CREATE INDEX IF NOT EXISTS idx_entities_type_status ON entities (entity_type, status, last_observed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_entities_merged_into ON entities (merged_into_id);
+
+        CREATE TABLE IF NOT EXISTS entity_aliases (
+          id               TEXT PRIMARY KEY,
+          entity_id        TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+          alias            TEXT NOT NULL,
+          alias_normalized TEXT NOT NULL,
+          raw_label        TEXT,
+          source           TEXT NOT NULL DEFAULT 'inferred',
+          created_at       INTEGER NOT NULL,
+          UNIQUE (entity_id, alias_normalized)
+        );
+        CREATE INDEX IF NOT EXISTS idx_entity_aliases_norm ON entity_aliases (alias_normalized);
+
+        CREATE TABLE IF NOT EXISTS entity_evidence_refs (
+          id            TEXT PRIMARY KEY,
+          entity_id     TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+          source_type   TEXT NOT NULL,
+          source_id     TEXT NOT NULL,
+          span_start_ms INTEGER,
+          span_end_ms   INTEGER,
+          created_at    INTEGER NOT NULL,
+          UNIQUE (entity_id, source_type, source_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_entity_evidence_refs_source ON entity_evidence_refs (source_type, source_id);
+        CREATE INDEX IF NOT EXISTS idx_entity_evidence_refs_entity ON entity_evidence_refs (entity_id);
+
+        CREATE TABLE IF NOT EXISTS entity_relationships (
+          id                TEXT PRIMARY KEY,
+          entity_id         TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+          related_entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+          kind              TEXT NOT NULL,
+          confidence        REAL NOT NULL DEFAULT 0.5,
+          source            TEXT NOT NULL DEFAULT 'inferred' CHECK(source IN ('inferred', 'user', 'connected')),
+          created_at        INTEGER NOT NULL,
+          UNIQUE (entity_id, related_entity_id, kind)
+        );
+        CREATE INDEX IF NOT EXISTS idx_entity_relationships_related ON entity_relationships (related_entity_id);
+      `)
+
+      // Relax the NOT NULL foreign key from projects to clients (spec
+      // migration slice 4): SQLite cannot drop NOT NULL in place, so the
+      // table is rebuilt. project_aliases rows are backed up first because
+      // with foreign_keys ON (the production pragma) dropping the old
+      // projects table would cascade-delete them.
+      const projectsSql = getTableSql('projects') ?? ''
+      if (/client_id\s+TEXT\s+NOT\s+NULL/i.test(projectsSql)) {
+        db.exec(`
+          CREATE TABLE projects_v50 (
+            id          TEXT PRIMARY KEY,
+            client_id   TEXT REFERENCES clients(id) ON DELETE CASCADE,
+            name        TEXT NOT NULL,
+            code        TEXT,
+            color       TEXT,
+            status      TEXT NOT NULL DEFAULT 'active',
+            created_at  INTEGER NOT NULL,
+            updated_at  INTEGER NOT NULL
+          );
+          INSERT INTO projects_v50 (id, client_id, name, code, color, status, created_at, updated_at)
+            SELECT id, client_id, name, code, color, status, created_at, updated_at FROM projects;
+          CREATE TABLE project_aliases_v50_backup AS SELECT * FROM project_aliases;
+          -- With foreign_keys ON, DROP TABLE's implicit DELETE raises an FK
+          -- violation while child rows exist, so the aliases are cleared first
+          -- and restored from the backup once the rebuilt table is in place.
+          DELETE FROM project_aliases;
+          DROP TABLE projects;
+          ALTER TABLE projects_v50 RENAME TO projects;
+          INSERT INTO project_aliases (id, project_id, alias, alias_normalized, source, created_at)
+            SELECT id, project_id, alias, alias_normalized, source, created_at FROM project_aliases_v50_backup;
+          DROP TABLE project_aliases_v50_backup;
+          CREATE INDEX IF NOT EXISTS idx_projects_client ON projects (client_id, status);
+        `)
+      }
+
+      // Adoption backfill (spec migration slice 3, extended per type):
+      // idempotent, keeps existing identifiers, never overwrites a
+      // user-corrected name.
+      runEntityAdoptionBackfill(db)
+    },
+  },
+  {
+    version: 51,
+    description:
+      'Safe agent file access (agent-runtime-and-context.md §File and document access, DEV-184): file_access_grants (three-state grants above the visible-home floor) and file_disclosures (per-request disclosure ledger shaped like the spec ContextDisclosure)',
+    up: () => {
+      getDb().exec(`
+        CREATE TABLE IF NOT EXISTS file_access_grants (
+          id                     TEXT PRIMARY KEY,
+          scope_kind             TEXT NOT NULL CHECK(scope_kind IN ('file', 'folder')),
+          path                   TEXT NOT NULL,
+          state                  TEXT NOT NULL CHECK(state IN ('indexed', 'model_readable')),
+          allow_high_sensitivity INTEGER NOT NULL DEFAULT 0,
+          source                 TEXT NOT NULL DEFAULT 'settings' CHECK(source IN ('settings', 'chat')),
+          derived_text           TEXT,
+          derived_text_extracted_at INTEGER,
+          created_at             INTEGER NOT NULL,
+          revoked_at             INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_file_access_grants_active ON file_access_grants (revoked_at, state, path);
+
+        CREATE TABLE IF NOT EXISTS file_disclosures (
+          id                  TEXT PRIMARY KEY,
+          thread_id           INTEGER,
+          message_id          INTEGER,
+          file_path           TEXT NOT NULL,
+          display_name        TEXT NOT NULL,
+          version_fingerprint TEXT NOT NULL,
+          excerpt_start       INTEGER NOT NULL,
+          excerpt_end         INTEGER NOT NULL,
+          reason              TEXT NOT NULL,
+          sensitivity         TEXT NOT NULL DEFAULT 'standard' CHECK(sensitivity IN ('standard', 'personal', 'high')),
+          destination         TEXT NOT NULL,
+          left_device         INTEGER NOT NULL DEFAULT 1,
+          disclosed_at        INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_file_disclosures_time ON file_disclosures (disclosed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_file_disclosures_thread ON file_disclosures (thread_id, disclosed_at DESC);
       `)
     },
   },

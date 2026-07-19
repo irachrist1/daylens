@@ -22,6 +22,7 @@ import { collectCalendarEvents } from './calendarSignals'
 import { collectFocusAppSignals } from './enrichmentDiscovery'
 import { localDateString, shiftLocalDateString } from '../lib/localDate'
 import { isCaptureConsentCurrent } from '@shared/captureConsent'
+import { adoptExternalSignalEntities } from './entities/entityAdoption'
 
 // ─── Store ────────────────────────────────────────────────────────────────────
 
@@ -38,6 +39,14 @@ export function putExternalSignal(
       payload_json = excluded.payload_json,
       captured_at = excluded.captured_at
   `).run(date, source, JSON.stringify(payload), Date.now())
+  // DEV-177: the daily refresh REPLACES this (date, source) row, but the
+  // durable entities it feeds resolve by source event identity through the
+  // entity repository, so meetings and repositories survive the overwrite
+  // instead of being re-minted every day. Best-effort — an entity failure
+  // never blocks storing the signal (pre-v50 DBs simply skip it).
+  try {
+    adoptExternalSignalEntities(db, date, source, payload)
+  } catch { /* entity adoption is additive; the signal row is the source of truth */ }
 }
 
 /** Tombstone a (date, source): remove the stored row so a connector that now

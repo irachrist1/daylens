@@ -43,6 +43,10 @@ import {
   writeSplitCorrection,
   writeTimelineBlockReview,
 } from './workBlocks'
+import {
+  isEntityCorrectionSnapshot,
+  restoreEntityCorrectionSnapshot,
+} from './entities/entityCorrections'
 
 const MIN_SPLIT_EDGE_MS = 60_000
 
@@ -502,9 +506,19 @@ export function undoCorrection(db: Database.Database, correctionId: string): Cor
   `).get(row.date, row.created_at, row.id) as { id: string } | undefined
   if (newer) throw new Error('A newer correction exists for this day — undo that one first.')
 
-  const snapshot = JSON.parse(row.snapshot_json) as LedgerSnapshot
+  const snapshot = JSON.parse(row.snapshot_json) as unknown
+  // Entity corrections (DEV-177) live in the same ledger; their snapshots
+  // restore entity tables instead of the timeline correction overlay.
+  if (isEntityCorrectionSnapshot(snapshot)) {
+    const commit = db.transaction(() => {
+      restoreEntityCorrectionSnapshot(db, snapshot)
+      db.prepare(`UPDATE correction_undo_log SET undone_at = ? WHERE id = ?`).run(Date.now(), row.id)
+    })
+    commit()
+    return { undone: true, description: row.description }
+  }
   const commit = db.transaction(() => {
-    restoreSnapshot(db, row.date, snapshot)
+    restoreSnapshot(db, row.date, snapshot as LedgerSnapshot)
     db.prepare(`UPDATE correction_undo_log SET undone_at = ? WHERE id = ?`).run(Date.now(), row.id)
     invalidateTimelineDayBlocks(db, row.date)
   })

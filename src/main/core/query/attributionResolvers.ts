@@ -18,7 +18,8 @@ interface ClientRow {
 
 interface ProjectRow {
   id: string
-  client_id: string
+  /** Nullable since migration v50 — a project may exist without a client. */
+  client_id: string | null
   name: string
 }
 
@@ -232,8 +233,9 @@ export interface ProjectQueryPayload {
   target: {
     project_id: string
     project_name: string
-    client_id: string
-    client_name: string
+    /** Null for a client-less project (allowed since migration v50). */
+    client_id: string | null
+    client_name: string | null
     aliases: string[]
   }
   totals: ClientQueryPayload['totals']
@@ -629,8 +631,11 @@ export function resolveProjectQuery(
   const project = db.prepare(`SELECT id, client_id, name FROM projects WHERE id = ?`).get(projectId) as ProjectRow | undefined
   if (!project) return null
 
-  const client = db.prepare(`SELECT id, name FROM clients WHERE id = ?`).get(project.client_id) as ClientRow | undefined
-  if (!client) return null
+  // A project may exist without a client (migration v50); the payload then
+  // carries null client fields instead of failing the whole query.
+  const client = project.client_id
+    ? db.prepare(`SELECT id, name FROM clients WHERE id = ?`).get(project.client_id) as ClientRow | undefined
+    : undefined
 
   const aliases = (db.prepare(`
     SELECT alias FROM project_aliases WHERE project_id = ?
@@ -679,8 +684,8 @@ export function resolveProjectQuery(
     target: {
       project_id: project.id,
       project_name: project.name,
-      client_id: client.id,
-      client_name: client.name,
+      client_id: client?.id ?? null,
+      client_name: client?.name ?? null,
       aliases,
     },
     totals: {
@@ -1366,6 +1371,40 @@ export function resolveDayContext(
 
 // ─── Client lookup helpers ──────────────────────────────────────────────────
 
+/** Entity-repository alias fallback (DEV-177): resolve a label through
+ *  entity_aliases (which keeps rename/merge corrections) to a row of `table`.
+ *  Adopted client/project entities keep the source row's id, so the surviving
+ *  entity id maps straight back. Tolerates a pre-v50 database. */
+function findViaEntityAliases(
+  db: Database.Database,
+  entityType: 'client' | 'project',
+  normalized: string,
+): string | null {
+  try {
+    const rows = db.prepare(`
+      SELECT e.id, e.status, e.merged_into_id FROM entities e
+      JOIN entity_aliases a ON a.entity_id = e.id
+      WHERE e.entity_type = ? AND a.alias_normalized = ?
+    `).all(entityType, normalized) as Array<{ id: string; status: string; merged_into_id: string | null }>
+    const survivors = new Set<string>()
+    for (const row of rows) {
+      let current = row
+      const seen = new Set([current.id])
+      while (current.status === 'merged' && current.merged_into_id) {
+        const next = db.prepare(`SELECT id, status, merged_into_id FROM entities WHERE id = ?`)
+          .get(current.merged_into_id) as { id: string; status: string; merged_into_id: string | null } | undefined
+        if (!next || seen.has(next.id)) break
+        seen.add(next.id)
+        current = next
+      }
+      if (current.status !== 'deleted') survivors.add(current.id)
+    }
+    return survivors.size === 1 ? [...survivors][0] : null
+  } catch {
+    return null
+  }
+}
+
 export function findClientByName(
   name: string,
   db: Database.Database = getDb(),
@@ -1387,6 +1426,15 @@ export function findClientByName(
   `).get(normalized) as ClientRow | undefined
   if (alias) return alias
 
+  // Entity-repository aliases (renames/merges made in Settings → Memory).
+  const entityId = findViaEntityAliases(db, 'client', normalized)
+  if (entityId) {
+    const viaEntity = db.prepare(`
+      SELECT id, name FROM clients WHERE id = ? AND status = 'active'
+    `).get(entityId) as ClientRow | undefined
+    if (viaEntity) return viaEntity
+  }
+
   // Fuzzy: contains match
   const fuzzy = db.prepare(`
     SELECT id, name FROM clients
@@ -1402,26 +1450,40 @@ export function findProjectByName(
   db: Database.Database = getDb(),
 ): ProjectRow | null {
   const normalized = name.toLowerCase().trim()
+  // LEFT JOIN since v50: a client-less project is resolvable; a project that
+  // HAS a client still requires that client to be active.
+  const clientGate = `(p.client_id IS NULL OR c.status = 'active')`
 
   const direct = db.prepare(`
     SELECT p.id, p.client_id, p.name FROM projects p
-    JOIN clients c ON c.id = p.client_id
-    WHERE LOWER(p.name) = ? AND p.status = 'active' AND c.status = 'active'
+    LEFT JOIN clients c ON c.id = p.client_id
+    WHERE LOWER(p.name) = ? AND p.status = 'active' AND ${clientGate}
   `).get(normalized) as ProjectRow | undefined
   if (direct) return direct
 
   const alias = db.prepare(`
     SELECT p.id, p.client_id, p.name FROM projects p
     JOIN project_aliases pa ON pa.project_id = p.id
-    JOIN clients c ON c.id = p.client_id
-    WHERE pa.alias_normalized = ? AND p.status = 'active' AND c.status = 'active'
+    LEFT JOIN clients c ON c.id = p.client_id
+    WHERE pa.alias_normalized = ? AND p.status = 'active' AND ${clientGate}
   `).get(normalized) as ProjectRow | undefined
   if (alias) return alias
 
+  // Entity-repository aliases (renames/merges made in Settings → Memory).
+  const entityId = findViaEntityAliases(db, 'project', normalized)
+  if (entityId) {
+    const viaEntity = db.prepare(`
+      SELECT p.id, p.client_id, p.name FROM projects p
+      LEFT JOIN clients c ON c.id = p.client_id
+      WHERE p.id = ? AND p.status = 'active' AND ${clientGate}
+    `).get(entityId) as ProjectRow | undefined
+    if (viaEntity) return viaEntity
+  }
+
   const fuzzy = db.prepare(`
     SELECT p.id, p.client_id, p.name FROM projects p
-    JOIN clients c ON c.id = p.client_id
-    WHERE LOWER(p.name) LIKE ? AND p.status = 'active' AND c.status = 'active'
+    LEFT JOIN clients c ON c.id = p.client_id
+    WHERE LOWER(p.name) LIKE ? AND p.status = 'active' AND ${clientGate}
     ORDER BY LENGTH(p.name) ASC
     LIMIT 1
   `).get(`%${normalized}%`) as ProjectRow | undefined
@@ -1443,14 +1505,42 @@ export function listClients(
 
 export function listProjects(
   db: Database.Database = getDb(),
-): Array<{ id: string; client_id: string; name: string; client_name: string }> {
+): Array<{ id: string; client_id: string | null; name: string; client_name: string | null }> {
   return db.prepare(`
     SELECT p.id, p.client_id, p.name, c.name AS client_name
     FROM projects p
-    JOIN clients c ON c.id = p.client_id
-    WHERE p.status = 'active' AND c.status = 'active'
+    LEFT JOIN clients c ON c.id = p.client_id
+    WHERE p.status = 'active' AND (p.client_id IS NULL OR c.status = 'active')
     ORDER BY p.name ASC
-  `).all() as Array<{ id: string; client_id: string; name: string; client_name: string }>
+  `).all() as Array<{ id: string; client_id: string | null; name: string; client_name: string | null }>
+}
+
+// Create a project, with or without a client (memory-and-entities.md: "A
+// project may exist without a client"). Seeds a user alias like createClient.
+export function createProject(
+  payload: { name: string; clientId?: string | null; color?: string | null },
+  db: Database.Database = getDb(),
+): { id: string; client_id: string | null; name: string } {
+  const name = payload.name.trim()
+  if (!name) throw new Error('Project name is required.')
+  const clash = db.prepare(`
+    SELECT id FROM projects WHERE LOWER(name) = ? AND status = 'active'
+  `).get(normalizeAlias(name)) as { id: string } | undefined
+  if (clash) throw new Error(`A project named "${name}" already exists.`)
+  const now = Date.now()
+  const id = randomUUID()
+  const tx = db.transaction(() => {
+    db.prepare(`
+      INSERT INTO projects (id, client_id, name, code, color, status, created_at, updated_at)
+      VALUES (?, ?, ?, NULL, ?, 'active', ?, ?)
+    `).run(id, payload.clientId ?? null, name, payload.color?.trim() || null, now, now)
+    db.prepare(`
+      INSERT INTO project_aliases (id, project_id, alias, alias_normalized, source, created_at)
+      VALUES (?, ?, ?, ?, 'user', ?)
+    `).run(randomUUID(), id, name, normalizeAlias(name), now)
+  })
+  tx()
+  return { id, client_id: payload.clientId ?? null, name }
 }
 
 export function getRollupSummary(
