@@ -822,6 +822,14 @@ export function searchSessions(
           AND app_sessions.start_time >= json_extract(review.original_block_json, '$.startTime')
           AND app_sessions.start_time < json_extract(review.original_block_json, '$.endTime')
       )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM evidence_exclusions exclusion
+        WHERE exclusion.kind = 'app'
+          AND (exclusion.bundle_id = app_sessions.bundle_id OR exclusion.app_name = app_sessions.app_name)
+          AND app_sessions.start_time >= exclusion.span_start_ms
+          AND app_sessions.start_time < exclusion.span_end_ms
+      )
     ORDER BY app_sessions.start_time DESC
     LIMIT ?
   `).all(SEARCH_HIGHLIGHT_START, SEARCH_HIGHLIGHT_END, ftsQuery, fromMs, toMs, limit) as {
@@ -965,6 +973,14 @@ export function searchBrowser(
         WHERE review.review_state = 'ignored'
           AND website_visits.visit_time >= json_extract(review.original_block_json, '$.startTime')
           AND website_visits.visit_time < json_extract(review.original_block_json, '$.endTime')
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM evidence_exclusions exclusion
+        WHERE exclusion.kind = 'site'
+          AND exclusion.domain = website_visits.domain
+          AND website_visits.visit_time >= exclusion.span_start_ms
+          AND website_visits.visit_time < exclusion.span_end_ms
       )
     ORDER BY website_visits.visit_time DESC
     LIMIT ?

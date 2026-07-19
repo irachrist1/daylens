@@ -2358,6 +2358,40 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 49,
+    description:
+      'Reversible evidence exclusions and the correction undo ledger (timeline spec, Corrections)',
+    up: () => {
+      const db = getDb()
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS evidence_exclusions (
+          id TEXT PRIMARY KEY,
+          date TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK(kind IN ('app', 'site')),
+          bundle_id TEXT,
+          app_name TEXT,
+          domain TEXT,
+          span_start_ms INTEGER NOT NULL,
+          span_end_ms INTEGER NOT NULL,
+          created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_evidence_exclusions_span
+          ON evidence_exclusions (span_start_ms, span_end_ms);
+        CREATE TABLE IF NOT EXISTS correction_undo_log (
+          id TEXT PRIMARY KEY,
+          date TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          description TEXT NOT NULL,
+          snapshot_json TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          undone_at INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_correction_undo_log_date
+          ON correction_undo_log (date, created_at);
+      `)
+    },
+  },
 ]
 
 export const LATEST_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0

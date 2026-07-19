@@ -412,6 +412,45 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_timeline_boundary_corrections_pair
 CREATE INDEX IF NOT EXISTS idx_timeline_boundary_corrections_date
   ON timeline_boundary_corrections (date);
 
+-- Reversible evidence exclusions (timeline spec, Corrections: "exclude
+-- specific evidence"). Unlike the permanent purge, an exclusion leaves the raw
+-- rows untouched: the corrected activity-fact reads subtract the matching
+-- identity inside the span, so Timeline, Apps, search, and the AI all skip it,
+-- and undo simply deletes the exclusion row.
+CREATE TABLE IF NOT EXISTS evidence_exclusions (
+  id TEXT PRIMARY KEY,
+  date TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('app', 'site')),
+  bundle_id TEXT,
+  app_name TEXT,
+  domain TEXT,
+  span_start_ms INTEGER NOT NULL,
+  span_end_ms INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_evidence_exclusions_span
+  ON evidence_exclusions (span_start_ms, span_end_ms);
+
+-- Undo ledger for correction commands. Each applied correction snapshots the
+-- correction-ledger rows it may touch (reviews, boundary corrections, label
+-- overrides, evidence exclusions, work-session attribution); undo restores the
+-- snapshot in one transaction. Raw evidence never appears here — only the
+-- correction overlay, so the log stays small and undo can never resurrect
+-- purged data.
+CREATE TABLE IF NOT EXISTS correction_undo_log (
+  id TEXT PRIMARY KEY,
+  date TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  description TEXT NOT NULL,
+  snapshot_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  undone_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_correction_undo_log_date
+  ON correction_undo_log (date, created_at);
+
 CREATE TABLE IF NOT EXISTS app_identities (
   app_instance_id TEXT PRIMARY KEY,
   bundle_id TEXT NOT NULL,
