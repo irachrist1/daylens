@@ -3137,6 +3137,168 @@ export function getWebsiteVisitsForRange(
   `).all(fromMs, toMs) as WebsiteVisitRecord[]
 }
 
+// ─── Identity-scoped discovery reads (repository boundary) ───────────────────
+// Lightweight lookups that AI tools and other consumers need without touching
+// raw evidence tables themselves (capture spec, storage and repository
+// boundaries). They discover identity and candidate days; totals always come
+// from the corrected activity-fact reads.
+
+export interface SessionIdentitySelector {
+  canonicalAppIds: string[]
+  bundleIds: string[]
+}
+
+function sessionIdentityWhereClause(selector: SessionIdentitySelector): { clause: string; params: string[] } {
+  const clauses: string[] = []
+  const params: string[] = []
+  if (selector.canonicalAppIds.length > 0) {
+    clauses.push(`canonical_app_id IN (${selector.canonicalAppIds.map(() => '?').join(', ')})`)
+    params.push(...selector.canonicalAppIds)
+  }
+  if (selector.bundleIds.length > 0) {
+    clauses.push(`bundle_id IN (${selector.bundleIds.map(() => '?').join(', ')})`)
+    params.push(...selector.bundleIds)
+  }
+  return {
+    clause: clauses.length > 0 ? `(${clauses.join(' OR ')})` : '0',
+    params,
+  }
+}
+
+/** Distinct visited domains in a window — identity discovery for site-usage
+ *  lookups; carries no durations. */
+export function listDistinctVisitDomains(
+  db: Database.Database,
+  fromMs: number,
+  toMs: number,
+): string[] {
+  const rows = db.prepare(`
+    SELECT DISTINCT domain FROM website_visits
+    WHERE visit_time >= ? AND visit_time < ? AND domain IS NOT NULL AND domain != ''
+  `).all(fromMs, toMs) as { domain: string }[]
+  return rows.map((row) => row.domain)
+}
+
+/** Local calendar days on which any session matched the identity selector —
+ *  candidate-day discovery; per-day totals come from corrected reads. */
+export function listSessionActivityDays(
+  db: Database.Database,
+  fromMs: number,
+  toMs: number,
+  selector: SessionIdentitySelector,
+  limit = 90,
+): string[] {
+  if (selector.canonicalAppIds.length === 0 && selector.bundleIds.length === 0) return []
+  const identity = sessionIdentityWhereClause(selector)
+  const rows = db.prepare(`
+    SELECT DISTINCT strftime('%Y-%m-%d', start_time / 1000, 'unixepoch', 'localtime') AS day
+    FROM app_sessions
+    WHERE start_time >= ? AND start_time < ?
+      AND ${identity.clause}
+    ORDER BY day DESC
+    LIMIT ?
+  `).all(fromMs, toMs, ...identity.params, limit) as { day: string }[]
+  return rows.map((row) => row.day)
+}
+
+/** Recent distinct window titles for an identity selector — visible-context
+ *  evidence for “what was the user doing in this app”. */
+export function listRecentSessionWindowTitles(
+  db: Database.Database,
+  fromMs: number,
+  toMs: number,
+  selector: SessionIdentitySelector,
+  limit = 10,
+): string[] {
+  if (selector.canonicalAppIds.length === 0 && selector.bundleIds.length === 0) return []
+  const identity = sessionIdentityWhereClause(selector)
+  const rows = db.prepare(`
+    SELECT DISTINCT window_title FROM app_sessions
+    WHERE window_title IS NOT NULL
+      AND start_time >= ? AND start_time < ?
+      AND ${identity.clause}
+    ORDER BY start_time DESC LIMIT ?
+  `).all(fromMs, toMs, ...identity.params, limit) as { window_title: string }[]
+  return rows.map((row) => row.window_title)
+}
+
+/** Latest recorded display name per bundle id from legacy session rows —
+ *  identity fallback for bundle ids the apps registry has not resolved. */
+export function getLatestSessionAppNames(
+  db: Database.Database,
+  bundleIds: readonly string[],
+): Map<string, string> {
+  const map = new Map<string, string>()
+  if (bundleIds.length === 0) return map
+  const marks = bundleIds.map(() => '?').join(', ')
+  const rows = db.prepare(`
+    SELECT sessions.bundle_id, sessions.app_name
+    FROM app_sessions sessions
+    JOIN (
+      SELECT bundle_id, MAX(start_time) AS latest_start
+      FROM app_sessions
+      WHERE bundle_id IN (${marks})
+      GROUP BY bundle_id
+    ) latest
+      ON latest.bundle_id = sessions.bundle_id
+     AND latest.latest_start = sessions.start_time
+  `).all(...bundleIds) as Array<{ bundle_id: string; app_name: string }>
+  for (const row of rows) {
+    if (!map.has(row.bundle_id)) map.set(row.bundle_id, row.app_name)
+  }
+  return map
+}
+
+export interface LegacyCaptureTitleStats {
+  recentSamples: number
+  withTitle: number
+  lastCapturedAtMs: number | null
+}
+
+/** Capture-health counts over legacy session rows — the poll path's title
+ *  coverage on platforms without a native helper. Counts only. */
+export function getLegacySessionTitleStats(
+  db: Database.Database,
+  sinceMs: number,
+): LegacyCaptureTitleStats {
+  const row = db.prepare(`
+    SELECT
+      COUNT(*) AS recent_samples,
+      SUM(CASE WHEN window_title IS NOT NULL AND trim(window_title) <> '' THEN 1 ELSE 0 END) AS with_title,
+      MAX(CASE WHEN window_title IS NOT NULL AND trim(window_title) <> '' THEN start_time ELSE NULL END) AS last_captured_at
+    FROM app_sessions
+    WHERE start_time >= ?
+  `).get(sinceMs) as {
+    recent_samples: number
+    with_title: number | null
+    last_captured_at: number | null
+  }
+  return {
+    recentSamples: row.recent_samples,
+    withTitle: row.with_title ?? 0,
+    lastCapturedAtMs: row.last_captured_at,
+  }
+}
+
+/** Lower-cased captured window/title text in a window, for corroborating a
+ *  repository's activity against what was actually on screen. Titles only —
+ *  no identities, no durations. */
+export function getTrackedWindowTitleCorpus(
+  db: Database.Database,
+  fromMs: number,
+  toMs: number,
+): string {
+  const rows = db.prepare(`
+    SELECT window_title AS title FROM focus_events
+    WHERE ts_ms >= ? AND ts_ms < ? AND window_title IS NOT NULL
+    UNION ALL
+    SELECT window_title AS title FROM app_sessions
+    WHERE start_time < ? AND COALESCE(end_time, start_time) >= ? AND window_title IS NOT NULL
+    LIMIT 10000
+  `).all(fromMs, toMs, toMs, fromMs) as Array<{ title: string }>
+  return rows.map((row) => row.title).join('\n').toLowerCase()
+}
+
 export interface ActivityStateEventRecord {
   id: number
   eventTs: number

@@ -9,7 +9,15 @@ import { z } from 'zod'
 import type Database from 'better-sqlite3'
 import { executeTool } from '../services/aiTools'
 import { getMomentEvidence } from '../lib/momentEvidence'
-import { getSessionsForRange, getWebsiteVisitsForRange } from '../db/queries'
+import { getWebsiteVisitsForRange } from '../db/queries'
+import {
+  getCorrectedSessionsForRange,
+  getIgnoredBlockSpansForRange,
+} from '../services/activityFacts'
+import {
+  listFocusEventTimesInRange,
+  listMachineStateEventsBefore,
+} from '../db/focusEventRepository'
 import { sanitizeToolResult } from '@shared/aiSanitize'
 import { filterTrackingExcludedEvidence } from '@shared/evidencePrivacy'
 import { trackingControlsStateFromSettings } from '@shared/trackingControls'
@@ -36,19 +44,8 @@ function captureStateForDay(db: Database.Database, date: string) {
   const fromMs = dayStartMs(date)
   const toMs = fromMs + DAY_MS
   try {
-    const prior = db.prepare(`
-      SELECT ts_ms, event_type
-      FROM focus_events
-      WHERE ts_ms < ? AND event_type IN ('sleep', 'wake', 'lock', 'unlock')
-      ORDER BY ts_ms DESC
-      LIMIT 20
-    `).all(fromMs) as Array<{ ts_ms: number; event_type: string }>
-    const events = db.prepare(`
-      SELECT ts_ms, event_type
-      FROM focus_events
-      WHERE ts_ms >= ? AND ts_ms < ?
-      ORDER BY ts_ms
-    `).all(fromMs, toMs) as Array<{ ts_ms: number; event_type: string }>
+    const prior = listMachineStateEventsBefore(db, fromMs)
+    const events = listFocusEventTimesInRange(db, fromMs, toMs)
 
     const states = new Set<'asleep' | 'locked'>()
     for (const event of prior.reverse()) {
@@ -165,13 +162,22 @@ function timeChunks(
   }
 
   const dayStart = dayStartMs(date)
+  const spanStartMs = dayStart + startOffset * 60_000
+  const spanEndMs = dayStart + endOffset * 60_000
   const state = captureStateForDay(db, date)
-  const visits = getWebsiteVisitsForRange(db, dayStart + startOffset * 60_000, dayStart + endOffset * 60_000)
+  // Corrected facts: a deleted Timeline block's stretch is empty space in the
+  // chunk view too, for sessions and page visits alike.
+  const ignoredSpans = getIgnoredBlockSpansForRange(db, spanStartMs, spanEndMs)
+  const visits = getWebsiteVisitsForRange(db, spanStartMs, spanEndMs)
+    .filter((visit) => !ignoredSpans.some((span) => span.startMs <= visit.visitTime && span.endMs > visit.visitTime))
+  const spanSessions = getCorrectedSessionsForRange(db, spanStartMs, spanEndMs)
   const chunks = []
   for (let offset = startOffset; offset < endOffset; offset += incrementMinutes) {
     const chunkStart = dayStart + offset * 60_000
     const chunkEnd = chunkStart + incrementMinutes * 60_000
-    const sessions = getSessionsForRange(db, chunkStart, chunkEnd, { minimumDurationSeconds: 1 })
+    const sessions = spanSessions.filter((session) =>
+      session.startTime < chunkEnd
+      && (session.endTime ?? session.startTime + session.durationSeconds * 1000) > chunkStart)
     const activity = sessions.map((session) => ({
       appName: session.appName,
       windowTitle: session.windowTitle ?? null,
