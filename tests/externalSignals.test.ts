@@ -58,6 +58,12 @@ test('a DB without the table reads as no signal, never an error', () => {
 
 import { collectExternalSignals, deleteExternalSignal, type CollectExternalSignalsDeps } from '../src/main/services/externalSignals.ts'
 import type { CalendarSignal, FocusAppSignal } from '../src/shared/types.ts'
+import {
+  CAPTURE_POLICY_VERSION,
+  grantedCaptureConsent,
+  isCaptureConsentCurrent,
+  type CaptureConsentState,
+} from '../src/shared/captureConsent.ts'
 
 function baseDeps(db: Database.Database, over: Partial<CollectExternalSignalsDeps> = {}): CollectExternalSignalsDeps {
   return {
@@ -66,9 +72,127 @@ function baseDeps(db: Database.Database, over: Partial<CollectExternalSignalsDep
     collectCalendar: async () => null,
     collectFocus: async () => null,
     enrichmentSources: {},
+    isConsentCurrent: () => true,
     ...over,
   }
 }
+
+test('unset, declined, and stale consent prevent every connector from running', async () => {
+  const states: CaptureConsentState[] = [
+    { status: 'unset', policyVersion: null, decidedAt: null },
+    { status: 'declined', policyVersion: CAPTURE_POLICY_VERSION, decidedAt: 1 },
+    { status: 'granted', policyVersion: CAPTURE_POLICY_VERSION - 1, decidedAt: 1 },
+  ]
+
+  for (const consent of states) {
+    const db = makeDb()
+    let calls = 0
+    const fired = await collectExternalSignals('2026-07-07', {
+      force: true,
+      deps: baseDeps(db, {
+        collectGit: async () => { calls += 1; return GIT_SIGNAL },
+        collectCalendar: async () => { calls += 1; return { events: [] } },
+        collectFocus: async () => { calls += 1; return [] },
+        isConsentCurrent: () => isCaptureConsentCurrent(consent),
+      }),
+    })
+
+    assert.deepEqual(fired, [])
+    assert.equal(calls, 0)
+    assert.equal((db.prepare('SELECT COUNT(*) AS count FROM external_signals').get() as { count: number }).count, 0)
+    db.close()
+  }
+})
+
+test('current granted consent allows external-signal collection', async () => {
+  const db = makeDb()
+  const consent = grantedCaptureConsent(1)
+
+  const fired = await collectExternalSignals('2026-07-07', {
+    force: true,
+    deps: baseDeps(db, {
+      collectGit: async () => GIT_SIGNAL,
+      isConsentCurrent: () => isCaptureConsentCurrent(consent),
+    }),
+  })
+
+  assert.deepEqual(fired, ['git'])
+  assert.equal(getExternalSignal<GitActivitySignal>(db, '2026-07-07', 'git')?.payload.totalCommits, 3)
+  db.close()
+})
+
+test('revoking consent during collection prevents later persistence and connector calls', async () => {
+  const db = makeDb()
+  let consent: CaptureConsentState = grantedCaptureConsent(1)
+  let calendarCalls = 0
+
+  const fired = await collectExternalSignals('2026-07-07', {
+    force: true,
+    deps: baseDeps(db, {
+      collectGit: async () => {
+        consent = { status: 'declined', policyVersion: CAPTURE_POLICY_VERSION, decidedAt: 2 }
+        return GIT_SIGNAL
+      },
+      collectCalendar: async () => {
+        calendarCalls += 1
+        return { events: [] }
+      },
+      isConsentCurrent: () => isCaptureConsentCurrent(consent),
+    }),
+  })
+
+  assert.deepEqual(fired, [])
+  assert.equal(calendarCalls, 0)
+  assert.equal(getExternalSignal(db, '2026-07-07', 'git'), null)
+  db.close()
+})
+
+test('revoking consent during calendar collection prevents its result and focus collection', async () => {
+  const db = makeDb()
+  let consent: CaptureConsentState = grantedCaptureConsent(1)
+  let focusCalls = 0
+
+  const fired = await collectExternalSignals('2026-07-07', {
+    force: true,
+    deps: baseDeps(db, {
+      collectCalendar: async () => {
+        consent = { status: 'declined', policyVersion: CAPTURE_POLICY_VERSION, decidedAt: 2 }
+        return { events: [{ title: 'Private meeting', startClock: '9am', durationMinutes: 30, attendeeCount: 2 }] }
+      },
+      collectFocus: async () => {
+        focusCalls += 1
+        return []
+      },
+      isConsentCurrent: () => isCaptureConsentCurrent(consent),
+    }),
+  })
+
+  assert.deepEqual(fired, [])
+  assert.equal(focusCalls, 0)
+  assert.equal(getExternalSignal(db, '2026-07-07', 'calendar'), null)
+  db.close()
+})
+
+test('revoking consent during focus collection prevents its result', async () => {
+  const db = makeDb()
+  let consent: CaptureConsentState = grantedCaptureConsent(1)
+
+  const fired = await collectExternalSignals('2026-07-07', {
+    force: true,
+    deps: baseDeps(db, {
+      collectFocus: async () => {
+        consent = { status: 'declined', policyVersion: CAPTURE_POLICY_VERSION, decidedAt: 2 }
+        return [{ app: 'Session', sessions: [{ startClock: '9am', durationMinutes: 50, label: null }] }]
+      },
+      enrichmentSources: { 'focus:Session': true },
+      isConsentCurrent: () => isCaptureConsentCurrent(consent),
+    }),
+  })
+
+  assert.deepEqual(fired, [])
+  assert.equal(getExternalSignal(db, '2026-07-07', 'focus_app'), null)
+  db.close()
+})
 
 test('deleteExternalSignal tombstones a stored row', () => {
   const db = makeDb()

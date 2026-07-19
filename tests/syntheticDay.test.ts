@@ -59,6 +59,7 @@ test('synthetic day agrees from source boundaries through every local fact surfa
         collectCalendar: async () => calendar,
         collectFocus: async () => null,
         enrichmentSources: {},
+        isConsentCurrent: () => true,
       },
     })
     assert.deepEqual(external, ['calendar'])

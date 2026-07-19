@@ -21,6 +21,7 @@ import { collectGitActivity } from './gitSignals'
 import { collectCalendarEvents } from './calendarSignals'
 import { collectFocusAppSignals } from './enrichmentDiscovery'
 import { localDateString, shiftLocalDateString } from '../lib/localDate'
+import { isCaptureConsentCurrent } from '@shared/captureConsent'
 
 // ─── Store ────────────────────────────────────────────────────────────────────
 
@@ -94,6 +95,11 @@ export interface CollectExternalSignalsDeps {
   collectCalendar: (date: string) => Promise<import('@shared/types').CalendarSignal | null>
   collectFocus: (date: string) => Promise<import('@shared/types').FocusAppSignal[] | null>
   enrichmentSources: Record<string, boolean>
+  isConsentCurrent: () => boolean
+}
+
+function currentConsentIsGranted(): boolean {
+  try { return isCaptureConsentCurrent(getSettings().captureConsent) } catch { return false }
 }
 
 function defaultDeps(): CollectExternalSignalsDeps {
@@ -108,6 +114,7 @@ function defaultDeps(): CollectExternalSignalsDeps {
     // disabled app's store is never opened).
     collectFocus: (date) => collectFocusAppSignals(date, {}, (app) => enrichmentSources[`focus:${app}`] === true),
     enrichmentSources,
+    isConsentCurrent: currentConsentIsGranted,
   }
 }
 
@@ -118,6 +125,8 @@ export async function collectExternalSignals(
   date: string,
   options: { force?: boolean; deps?: CollectExternalSignalsDeps } = {},
 ): Promise<ExternalSignalSource[]> {
+  const isConsentCurrent = options.deps?.isConsentCurrent ?? currentConsentIsGranted
+  if (!isConsentCurrent()) return []
   if (collecting) return []
   collecting = true
   const fired: ExternalSignalSource[] = []
@@ -140,8 +149,10 @@ export async function collectExternalSignals(
     }
 
     if (options.force || !isFresh(db, date, 'git')) {
+      if (!isConsentCurrent()) return fired
       try {
         const git = await collectGit(date)
+        if (!isConsentCurrent()) return fired
         if (git && (git.repos.length > 0 || git.prs.length > 0)) {
           putExternalSignal(db, date, 'git', git)
           fired.push('git')
@@ -152,8 +163,10 @@ export async function collectExternalSignals(
     }
 
     if (options.force || !isFresh(db, date, 'calendar')) {
+      if (!isConsentCurrent()) return fired
       try {
         const calendar = await collectCalendar(date)
+        if (!isConsentCurrent()) return fired
         if (calendar && calendar.events.length > 0) {
           putExternalSignal(db, date, 'calendar', calendar)
           fired.push('calendar')
@@ -164,8 +177,10 @@ export async function collectExternalSignals(
     }
 
     if (options.force || !isFresh(db, date, 'focus_app')) {
+      if (!isConsentCurrent()) return fired
       try {
         const focus = await collectFocus(date)
+        if (!isConsentCurrent()) return fired
         // Only store the apps the user turned on (belt-and-suspenders: the real
         // collector already reads only enabled apps).
         const enabled = (focus ?? []).filter((f) => focusEnabledFor(f.app))
@@ -179,7 +194,7 @@ export async function collectExternalSignals(
     }
 
     // Which connectors fired, never the data: tells us what to build next.
-    if (fired.length > 0) {
+    if (fired.length > 0 && isConsentCurrent()) {
       capture(ANALYTICS_EVENT.WRAPPED_EXTERNAL_SOURCES, {
         external_sources: fired,
         source_count: fired.length,
