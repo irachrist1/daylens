@@ -77,13 +77,31 @@ test('journal entries roundtrip through append and read', () => {
   }, 1_000))
   assert.ok(appendDeletionJournalEntry(userData, {
     kind: 'purge-block',
-    params: { fromMs: 10, toMs: 20 },
+    params: {
+      fromMs: 10,
+      toMs: 20,
+      date: '2026-06-18',
+      blockId: 'blk_test',
+      evidenceKey: 'sessions:1',
+      originalBlockJson: '{"blockId":"blk_test"}',
+    },
   }, 2_000))
 
   const entries = readDeletionJournal(userData)
   assert.deepEqual(entries, [
     { kind: 'site-history', recordedAtMs: 1_000, params: { domain: 'private.example.com' } },
-    { kind: 'purge-block', recordedAtMs: 2_000, params: { fromMs: 10, toMs: 20 } },
+    {
+      kind: 'purge-block',
+      recordedAtMs: 2_000,
+      params: {
+        fromMs: 10,
+        toMs: 20,
+        date: '2026-06-18',
+        blockId: 'blk_test',
+        evidenceKey: 'sessions:1',
+        originalBlockJson: '{"blockId":"blk_test"}',
+      },
+    },
   ])
 
   // The journal lives inside the backup root — the one directory both restore
@@ -213,13 +231,26 @@ test('restoring a pre-update backup replays a journaled block purge', () => {
   // The span the purged block covered — everything seeded falls inside it.
   const fromMs = SEED_START - 60_000
   const toMs = SEED_START + 30 * 60_000
-  appendDeletionJournalEntry(userData, { kind: 'purge-block', params: { fromMs, toMs } })
+  const date = '2026-06-18'
+  const blockId = 'blk_purge_regression'
+  const evidenceKey = 'span:100:200:apps::artifacts:'
+  const originalBlockJson = JSON.stringify({
+    blockId,
+    startTime: fromMs,
+    endTime: toMs,
+    label: 'Confidential plan',
+  })
+  appendDeletionJournalEntry(userData, {
+    kind: 'purge-block',
+    params: { fromMs, toMs, date, blockId, evidenceKey, originalBlockJson },
+  })
 
   fs.copyFileSync(path.join(backupDir, 'daylens.sqlite'), dbPath)
 
   const restored = new Database(dbPath)
   try {
     assert.ok(count(restored, 'SELECT COUNT(*) AS count FROM app_sessions WHERE start_time >= ? AND start_time < ?', fromMs, toMs) >= 1)
+    assert.equal(count(restored, 'SELECT COUNT(*) AS count FROM timeline_block_reviews'), 0)
 
     const outcome = replayDeletionJournal(restored, userData)
     assert.equal(outcome.failed, 0)
@@ -228,8 +259,47 @@ test('restoring a pre-update backup replays a journaled block purge', () => {
     assert.equal(count(restored, 'SELECT COUNT(*) AS count FROM app_sessions WHERE start_time >= ? AND start_time < ?', fromMs, toMs), 0)
     assert.equal(count(restored, 'SELECT COUNT(*) AS count FROM website_visits WHERE visit_time >= ? AND visit_time < ?', fromMs, toMs), 0)
     assert.equal(count(restored, 'SELECT COUNT(*) AS count FROM focus_events WHERE ts_ms >= ? AND ts_ms < ?', fromMs, toMs), 0)
+
+    const review = restored.prepare(`
+      SELECT block_id, date, evidence_key, review_state, original_block_json
+      FROM timeline_block_reviews
+      WHERE block_id = ? OR (date = ? AND evidence_key = ?)
+    `).get(blockId, date, evidenceKey) as {
+      block_id: string
+      date: string
+      evidence_key: string
+      review_state: string
+      original_block_json: string
+    } | undefined
+    assert.ok(review)
+    assert.equal(review.review_state, 'ignored')
+    assert.equal(review.block_id, blockId)
+    assert.equal(review.date, date)
+    assert.equal(review.evidence_key, evidenceKey)
+    assert.equal(review.original_block_json, originalBlockJson)
   } finally {
     restored.close()
+  }
+})
+
+test('legacy purge-block journal entries still purge span rows without backstop fields', () => {
+  const userData = makeTempUserData()
+  const dbPath = path.join(userData, 'daylens.sqlite')
+  createSeededDatabaseFile(dbPath)
+
+  const fromMs = SEED_START - 60_000
+  const toMs = SEED_START + 30 * 60_000
+  appendDeletionJournalEntry(userData, { kind: 'purge-block', params: { fromMs, toMs } })
+
+  const db = new Database(dbPath)
+  try {
+    const outcome = replayDeletionJournal(db, userData)
+    assert.equal(outcome.failed, 0)
+    assert.equal(outcome.replayed, 1)
+    assert.equal(count(db, 'SELECT COUNT(*) AS count FROM app_sessions WHERE start_time >= ? AND start_time < ?', fromMs, toMs), 0)
+    assert.equal(count(db, 'SELECT COUNT(*) AS count FROM timeline_block_reviews'), 0)
+  } finally {
+    db.close()
   }
 })
 

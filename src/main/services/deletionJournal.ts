@@ -34,6 +34,18 @@ import {
   type PurgeTrackedEvidenceRowsInput,
   type PurgeTimelineBlockSpanInput,
 } from './trackingHistory'
+import {
+  invalidateTimelineDayBlocks,
+  writeIgnoredBlockReviewBackstop,
+} from './workBlocks'
+
+// Backstop fields are optional so older {fromMs,toMs}-only journal lines still parse.
+export type PurgeBlockJournalParams = PurgeTimelineBlockSpanInput & {
+  date?: string
+  blockId?: string
+  evidenceKey?: string
+  originalBlockJson?: string
+}
 
 export const BACKUP_ROOT_DIRNAME = 'pre-update-backups'
 export const DELETION_JOURNAL_FILENAME = 'deletion-journal.jsonl'
@@ -45,7 +57,7 @@ export type DeletionJournalEntry =
   | { kind: 'app-history'; recordedAtMs: number; params: { bundleId?: string | null; appName?: string | null } }
   | { kind: 'tracked-activity'; recordedAtMs: number; params: DeleteTrackedActivityInput }
   | { kind: 'purge-evidence'; recordedAtMs: number; params: PurgeTrackedEvidenceRowsInput }
-  | { kind: 'purge-block'; recordedAtMs: number; params: PurgeTimelineBlockSpanInput }
+  | { kind: 'purge-block'; recordedAtMs: number; params: PurgeBlockJournalParams }
 
 // Distributive omit so each union member keeps its kind/params pairing.
 type WithoutStamp<T> = T extends { recordedAtMs: number } ? Omit<T, 'recordedAtMs'> : never
@@ -169,9 +181,20 @@ function replayEntry(db: Database.Database, entry: DeletionJournalEntry): void {
     case 'purge-evidence':
       purgeTrackedEvidenceRows(db, entry.params)
       break
-    case 'purge-block':
-      purgeTimelineBlockSpanRows(db, entry.params)
+    case 'purge-block': {
+      const { fromMs, toMs, date, blockId, evidenceKey, originalBlockJson } = entry.params
+      purgeTimelineBlockSpanRows(db, { fromMs, toMs })
+      if (
+        typeof date === 'string' && date.length > 0
+        && typeof blockId === 'string' && blockId.length > 0
+        && typeof evidenceKey === 'string' && evidenceKey.length > 0
+        && typeof originalBlockJson === 'string' && originalBlockJson.length > 0
+      ) {
+        writeIgnoredBlockReviewBackstop(db, { date, blockId, evidenceKey, originalBlockJson })
+        invalidateTimelineDayBlocks(db, date)
+      }
       break
+    }
   }
 }
 

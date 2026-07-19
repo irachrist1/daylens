@@ -64,7 +64,18 @@ import {
 } from '../services/trackingHistory'
 import { appendDeletionJournalEntry, type DeletionJournalEntryInput } from '../services/deletionJournal'
 import { getProcessMetrics } from '../services/processMonitor'
-import { getBlockDetailPayload, getDistractionCostPayload, getRecapRange, writeTimelineBlockReview, mergeTimelineEpisodes, trimTimelineBlockSpan, invalidateTimelineDayBlocks } from '../services/workBlocks'
+import {
+  getBlockDetailPayload,
+  getDistractionCostPayload,
+  getRecapRange,
+  writeTimelineBlockReview,
+  writeIgnoredBlockReviewBackstop,
+  reviewEvidenceKeyForBlock,
+  originalReviewSnapshotForBlock,
+  mergeTimelineEpisodes,
+  trimTimelineBlockSpan,
+  invalidateTimelineDayBlocks,
+} from '../services/workBlocks'
 import { applyCorrection, previewCorrection, undoCorrection } from '../services/correctionCommands'
 import { getTimelineRangeBlocks } from '../services/timelineCalendarRange'
 import { computeAppActivityDigest } from '../services/appActivityDigest'
@@ -830,13 +841,23 @@ export function registerDbHandlers(): void {
 
     const fromMs = block.startTime
     const toMs = block.endTime
+    const evidenceKey = reviewEvidenceKeyForBlock(block)
+    const originalBlockJson = JSON.stringify(originalReviewSnapshotForBlock(block))
     purgeTimelineBlockSpanRows(db, { fromMs, toMs })
-    recordDeletionInJournal({ kind: 'purge-block', params: { fromMs, toMs } })
+    recordDeletionInJournal({
+      kind: 'purge-block',
+      params: { fromMs, toMs, date: dateStr, blockId: block.id, evidenceKey, originalBlockJson },
+    })
 
     // Backstop: a session that started before the block's edge and bled in
     // survives the span delete — the ignored review keeps any remnant from
     // re-forming into a visible block on the next rebuild.
-    writeTimelineBlockReview(db, dateStr, block, { state: 'ignored' })
+    writeIgnoredBlockReviewBackstop(db, {
+      date: dateStr,
+      blockId: block.id,
+      evidenceKey,
+      originalBlockJson,
+    })
 
     invalidateTimelineDayBlocks(db, dateStr)
     invalidateProjectionScope('timeline', 'block_purge')
