@@ -29,15 +29,19 @@ function seedSingleBlockDay(db: Database.Database): void {
       category, is_focused, window_title, capture_source, capture_version
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `)
-  // Kiro is tracked for the first 50 minutes; the Safari visit sits in the
-  // untracked tail of the hour. Site time only counts while its browser was
-  // frontmost or while nothing was tracked at all — a visit behind another
-  // focused app is a background tab and reconciles to zero.
+  // Kiro is tracked for the first 50 minutes; Safari is frontmost for the
+  // final 10, and its visit sits inside that foreground window. Site time
+  // only counts while its browser was frontmost — a history visit with no
+  // foreground overlap contributes no active time (apps spec, active time).
   const info = sessionStmt.run(
     'com.kiro.kiro', 'Kiro', start, start + 50 * 60_000, 3000,
     'development', 1, 'src/main/services/workBlocks.ts — daylens', 'foreground_poll', 1,
   )
   const sessionId = String(info.lastInsertRowid)
+  sessionStmt.run(
+    'com.apple.Safari', 'Safari', start + 50 * 60_000, end, 600,
+    'browsing', 0, 'daylens-v1 pull request', 'foreground_poll', 1,
+  )
 
   db.prepare(`
     INSERT INTO website_visits (
@@ -115,11 +119,11 @@ test('getRecapRange lightweight payload populates every field recap consumers re
   assert.equal(payload.date, PAST_DATE)
   assert.ok(payload.totalSeconds > 0, 'totalSeconds must be populated')
   assert.equal(typeof payload.focusSeconds, 'number', 'focusSeconds must be a number')
-  assert.equal(payload.focusSeconds, payload.totalSeconds, 'development session counts as focused')
-  assert.ok(Array.isArray(payload.sessions) && payload.sessions.length === 1, 'sessions must be real day sessions')
+  assert.equal(payload.focusSeconds, 3000, 'only the development session counts as focused')
+  assert.ok(Array.isArray(payload.sessions) && payload.sessions.length === 2, 'sessions must be real day sessions')
   assert.ok(Array.isArray(payload.websites) && payload.websites.length === 1, 'websites must be real day websites')
   assert.ok(Array.isArray(payload.segments) && payload.segments.some((segment) => segment.kind === 'work_block'), 'segments must include work blocks')
-  assert.equal(payload.appCount, 1, 'appCount must be populated from real sessions')
+  assert.equal(payload.appCount, 2, 'appCount must be populated from real sessions')
   assert.equal(payload.siteCount, 1, 'siteCount must be populated from real websites')
   assert.ok(Array.isArray(payload.blocks) && payload.blocks.length === 1, 'blocks must be populated')
   assert.ok(Array.isArray(payload.focusSessions), 'focusSessions must be an array')

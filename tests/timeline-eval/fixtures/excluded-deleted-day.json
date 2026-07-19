@@ -201,7 +201,7 @@
     ],
     "apps": [
       {
-        "appName": "Code",
+        "appName": "Visual Studio Code",
         "durationMinutes": 120,
         "durationToleranceMinutes": 10
       },

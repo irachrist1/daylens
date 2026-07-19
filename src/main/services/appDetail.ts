@@ -9,13 +9,12 @@ import type {
   PageRef,
 } from '@shared/types'
 import { appDetailRangeKey } from '@shared/appNarrativeContract'
-import { withLiveAppSummary } from '@shared/liveAppSummaries'
 import {
   getBrowserActivityBreakdown,
 } from '../db/queries'
 import {
   getCorrectedAppSummariesForRange,
-  getCorrectedSessionsForRange,
+  getCorrectedSessionFactsForRange,
   getIgnoredBlockSpansForRange,
 } from './activityFacts'
 import { localDayBounds, shiftLocalDateString } from '../lib/localDate'
@@ -146,9 +145,14 @@ export function getAppDetailPayload(
   // deleted are subtracted from EVERY fact this payload derives — sessions,
   // totals, domain/page credit, appearances — so the Apps panel never
   // disagrees with the Timeline. Raw capture stays stored untouched.
+  // Canonical facts already contain the open live interval; the in-memory
+  // tracker session is merged only when the range fell back to legacy rows.
   const correctionSpans = getIgnoredBlockSpansForRange(db, fromMs, todayTo)
-  const rawSessions = getCorrectedSessionsForRange(db, fromMs, todayTo)
-  const allSessions = mergeLiveSession(rawSessions, effectiveLiveSession)
+  const sessionFacts = getCorrectedSessionFactsForRange(db, fromMs, todayTo)
+  const rawSessions = sessionFacts.sessions
+  const allSessions = sessionFacts.evidenceSource === 'legacy'
+    ? mergeLiveSession(rawSessions, effectiveLiveSession)
+    : rawSessions
   const sessions = allSessions.filter((session) => {
     const identity = resolveCanonicalApp(session.bundleId, session.appName)
     return (session.canonicalAppId ?? identity.canonicalAppId ?? session.bundleId) === canonicalAppId
@@ -235,11 +239,11 @@ export function getAppDetailPayload(
   const blockAppearances = Array.from(mergedByLabel.values()).sort((a, b) => b.startTime - a.startTime).slice(0, 12)
   const blockMemoryRollups = memoryRollupsForBlocks(db, blockAppearances)
 
-  const summariesForRange = withLiveAppSummary(
-    getCorrectedAppSummariesForRange(db, fromMs, todayTo),
-    effectiveLiveSession ?? null,
-    fromMs,
-    Date.now(),
+  // The corrected summaries include the live stretch themselves (canonical
+  // facts carry it; legacy fallback merges the tracker session), so no
+  // renderer-style live addition on top — that would double-count.
+  const summariesForRange = getCorrectedAppSummariesForRange(
+    db, fromMs, todayTo, effectiveLiveSession ?? null,
   )
   const canonicalSummary = summariesForRange.find((row) => row.canonicalAppId === canonicalAppId)
     ?? summariesForRange.find((row) => row.bundleId === canonicalAppId)

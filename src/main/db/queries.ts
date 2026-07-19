@@ -2510,6 +2510,10 @@ function reconcileWebsiteVisits(
   fromMs: number,
   toMs: number,
   browserBundleId?: string,
+  // Foreground ownership used to clip page credit. The corrected read model
+  // passes shared-query sessions here so page totals can never exceed the
+  // browser total it reports; raw callers keep the legacy session read.
+  foregroundSessions?: readonly AppSession[],
 ): ReconciledVisitCredit[] {
   const whereExtra = browserBundleId ? ' AND browser_bundle_id = ?' : ''
   const params: (number | string)[] = browserBundleId
@@ -2542,7 +2546,7 @@ function reconcileWebsiteVisits(
   const foregroundByBundle = new Map<string, { start: number; end: number }[]>()
   const foregroundByCanonical = new Map<string, { start: number; end: number }[]>()
   const allForeground: { start: number; end: number }[] = []
-  for (const session of getSessionsForRange(db, fromMs, toMs)) {
+  for (const session of foregroundSessions ?? getSessionsForRange(db, fromMs, toMs)) {
     const interval = {
       start: session.startTime,
       end: session.endTime ?? (session.startTime + session.durationSeconds * 1000),
@@ -2629,6 +2633,19 @@ function reconcileWebsiteVisits(
 
   const credits: ReconciledVisitCredit[] = []
 
+  // Overlap-merge so an interval reachable under two keys (a session indexed
+  // by both its bundle id and its canonical id) can't credit a second twice.
+  const mergeIntervals = (intervals: { start: number; end: number }[]): { start: number; end: number }[] => {
+    const sorted = [...intervals].sort((a, b) => a.start - b.start)
+    const merged: { start: number; end: number }[] = []
+    for (const interval of sorted) {
+      const last = merged[merged.length - 1]
+      if (last && interval.start <= last.end) last.end = Math.max(last.end, interval.end)
+      else merged.push({ ...interval })
+    }
+    return merged
+  }
+
   // Inside one browser exactly one tab is active at a time, so its visits
   // must partition the browser's time, never share it - a Meet tab's history
   // duration keeps accruing while the user reads x.com in the same window.
@@ -2645,28 +2662,32 @@ function reconcileWebsiteVisits(
     // forms of the same browser credit the same second twice.
     const browserKey = visit.canonical_browser_id ?? visit.browser_bundle_id
     if (!browserKey) {
-      // Unknown browser: nothing to reconcile against - clip to the range.
+      // Unknown browser: nothing browser-specific to reconcile against. The
+      // corrected path still clips to overall foreground ownership so an
+      // orphaned history row cannot invent active time; the raw path keeps
+      // its clip-to-range behavior.
       const start = Math.max(visit.visit_time, fromMs)
       const end = Math.min(visit.visit_time + visit.duration_sec * 1000, toMs)
-      credits.push({ visit, freeIntervals: end > start ? [{ start, end }] : [] })
+      if (end <= start) {
+        credits.push({ visit, freeIntervals: [] })
+        continue
+      }
+      if (!foregroundSessions) {
+        credits.push({ visit, freeIntervals: [{ start, end }] })
+        continue
+      }
+      const clipped: { start: number; end: number }[] = []
+      for (const interval of mergeIntervals(allForeground)) {
+        const overlapStart = Math.max(start, interval.start)
+        const overlapEnd = Math.min(end, interval.end)
+        if (overlapEnd > overlapStart) clipped.push({ start: overlapStart, end: overlapEnd })
+      }
+      credits.push({ visit, freeIntervals: clipped })
       continue
     }
     const list = visitsByBrowser.get(browserKey)
     if (list) list.push(visit)
     else visitsByBrowser.set(browserKey, [visit])
-  }
-
-  // Overlap-merge so an interval reachable under two keys (a session indexed
-  // by both its bundle id and its canonical id) can't credit a second twice.
-  const mergeIntervals = (intervals: { start: number; end: number }[]): { start: number; end: number }[] => {
-    const sorted = [...intervals].sort((a, b) => a.start - b.start)
-    const merged: { start: number; end: number }[] = []
-    for (const interval of sorted) {
-      const last = merged[merged.length - 1]
-      if (last && interval.start <= last.end) last.end = Math.max(last.end, interval.end)
-      else merged.push({ ...interval })
-    }
-    return merged
   }
 
   // First index whose interval could touch or overlap `x` from the left — the
@@ -2723,7 +2744,14 @@ function reconcileWebsiteVisits(
         foregroundPieces.push(...(foregroundByCanonical.get(visit.canonical_browser_id) ?? []))
       }
     }
-    const allowed = mergeIntervals([...foregroundPieces, ...untracked])
+    // The corrected read model clips strictly to foreground browser time
+    // (capture spec: history with no foreground overlap supports retrieval
+    // but contributes no active time — page totals can never exceed the
+    // browser's own total). The raw path keeps the untracked-gap allowance
+    // for legacy surfaces that reconcile spotty early capture.
+    const allowed = mergeIntervals(
+      foregroundSessions ? foregroundPieces : [...foregroundPieces, ...untracked],
+    )
     // The observed active tab beats a history record; among equals the later
     // navigation supersedes the earlier one.
     const ordered = [...browserVisits].sort((a, b) => {
@@ -3051,12 +3079,14 @@ export function getReconciledDomainIntervals(
   fromMs: number,
   toMs: number,
   domainFilter?: (domain: string) => boolean,
+  foregroundSessionsForRange?: (fromMs: number, toMs: number) => readonly AppSession[],
 ): DomainCreditInterval[] {
   const DAY_MS = 24 * 60 * 60 * 1000
   const out: DomainCreditInterval[] = []
   for (let chunkStart = fromMs; chunkStart < toMs; chunkStart += DAY_MS) {
     const chunkEnd = Math.min(chunkStart + DAY_MS, toMs)
-    for (const { visit, freeIntervals } of reconcileWebsiteVisits(db, chunkStart, chunkEnd)) {
+    const foreground = foregroundSessionsForRange?.(chunkStart, chunkEnd)
+    for (const { visit, freeIntervals } of reconcileWebsiteVisits(db, chunkStart, chunkEnd, undefined, foreground)) {
       if (!visit.domain) continue
       if (domainFilter && !domainFilter(visit.domain)) continue
       for (const interval of freeIntervals) {

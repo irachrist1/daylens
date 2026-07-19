@@ -2,14 +2,13 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { ANALYTICS_EVENT, trackedTimeBucket } from '@shared/analytics'
 import { activityCategoryLabel } from '@shared/activityCategories'
 import { ALL_TIME_DAYS } from '@shared/types'
-import type { AISurfaceSummary, AppCategory, AppDetailPayload, AppUsageSummary, LiveSession } from '@shared/types'
+import type { AISurfaceSummary, AppCategory, AppDetailPayload, AppUsageSummary } from '@shared/types'
 import { appDetailRangeKey, appNarrativeScopeKey, isThinAppNarrative } from '@shared/appNarrativeContract'
-import { withLiveAppSummary } from '@shared/liveAppSummaries'
 import PeriodNavigator from '../components/PeriodNavigator'
 import { useCompactLayout } from '../hooks/useCompactLayout'
 import { useProjectionResource } from '../hooks/useProjectionResource'
 import { track } from '../lib/analytics'
-import { dayBounds, shiftDateString, todayString } from '../lib/format'
+import { shiftDateString, todayString } from '../lib/format'
 import { ipc } from '../lib/ipc'
 import AppDetail, { type GenerationStatus } from './apps/AppDetail'
 import AppList from './apps/AppList'
@@ -40,31 +39,22 @@ export default function Apps() {
     track(ANALYTICS_EVENT.APPS_OPENED, { surface: 'apps', trigger: 'navigation', view: 'apps' })
   }, [])
 
-  const appsResource = useProjectionResource<{ summaries: AppUsageSummary[]; live: LiveSession | null }>({
+  const appsResource = useProjectionResource<{ summaries: AppUsageSummary[] }>({
     scope: 'apps',
     dependencies: [days, dateMode ? selectedDate : null],
     intervalMs: isAppsToday ? 30_000 : 0,
     load: async () => {
-      const summariesPromise = dateMode
+      const summaries = await (dateMode
         ? (isAppsToday ? ipc.db.getAppSummaries(1) : ipc.db.getAppSummariesForDate(selectedDate))
-        : ipc.db.getAppSummaries(days)
-      const livePromise = isAppsToday ? ipc.tracking.getLiveSession() : Promise.resolve(null)
-      const [summaries, live] = await Promise.all([summariesPromise, livePromise])
-      return { summaries, live }
+        : ipc.db.getAppSummaries(days))
+      return { summaries }
     },
   })
 
-  const summaries = useMemo(() => {
-    const rangeStart = days >= ALL_TIME_DAYS
-      ? 0
-      : dayBounds(shiftDateString(todayString(), -Math.max(0, days - 1)))[0]
-    return withLiveAppSummary(
-      appsResource.data?.summaries ?? [],
-      appsResource.data?.live ?? null,
-      rangeStart,
-      Date.now(),
-    )
-  }, [appsResource.data, days])
+  // The main process returns live-inclusive summaries (canonical facts carry
+  // the open live interval; legacy fallback merges the tracker session), so
+  // adding live seconds here again would double-count the in-progress stretch.
+  const summaries = appsResource.data?.summaries ?? []
 
   const categories = useMemo(() => {
     const categories = [...new Set(summaries.map((summary) => summary.category))]

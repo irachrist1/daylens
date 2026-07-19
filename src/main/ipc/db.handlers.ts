@@ -27,6 +27,7 @@ import {
   getCorrectedPeakHours as getPeakHours,
   getCorrectedWebsiteSummariesForRange as getWebsiteSummariesForRange,
 } from '../services/activityFacts'
+import { getAppSummariesForTimelineDay } from '../services/appsFacts'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import {
   resolveClientQuery,
@@ -358,12 +359,12 @@ function buildWorkSessionPayloads(db: ReturnType<typeof getDb>, whereClause: str
 // ─── Handlers ─────────────────────────────────────────────────────────────────
 
 export function registerDbHandlers(): void {
-  // Today's app summaries — uses local calendar day, not UTC day.
-  // Corrected facts (invariant 7): a Timeline block the user deleted is
-  // subtracted here too, so Today's totals agree with the Timeline.
+  // Today's app summaries — the same trusted-block partition the Timeline
+  // payload totals (invariant 7), so Today's totals equal the Timeline's for
+  // the same day exactly.
   ipcMain.handle(IPC.DB.GET_TODAY, () => {
-    const [from, to] = dayBounds(localDateString())
-    return getCorrectedAppSummariesForRange(getDb(), from, to)
+    const today = localDateString()
+    return getAppSummariesForTimelineDay(getDb(), today, getLiveSessionForDate(today))
   })
 
   // Raw sessions for a given date — used by History and Today timeline
@@ -418,27 +419,28 @@ export function registerDbHandlers(): void {
   ipcMain.handle(IPC.DB.GET_APP_SUMMARIES, (_e, days: number = 7) => {
     // Normalize at the boundary so every period reaches one canonical query.
     const normalizedDays = Number.isFinite(days) ? Math.max(1, Math.floor(days)) : 7
-    const [todayFrom, todayTo] = dayBounds(localDateString())
+    const today = localDateString()
+    const [, todayTo] = dayBounds(today)
+    const live = getLiveSessionForDate(today)
+    // A single day reconciles exactly with the Timeline's trusted blocks;
+    // multi-day ranges total the union of corrected daily intervals.
     if (normalizedDays <= 1) {
-      return getCorrectedAppSummariesForRange(getDb(), todayFrom, todayTo)
+      return getAppSummariesForTimelineDay(getDb(), today, live)
     }
     // All-time: one query over all captured history. Avoids the day-by-day
     // cache loop, which would iterate ~36,500 times for this sentinel.
     if (normalizedDays >= ALL_TIME_DAYS) {
-      return getCorrectedAppSummariesForRange(getDb(), 0, todayTo)
+      return getCorrectedAppSummariesForRange(getDb(), 0, todayTo, live)
     }
-    const [from] = dayBounds(shiftLocalDate(localDateString(), -(normalizedDays - 1)))
-    return getCorrectedAppSummariesForRange(getDb(), from, todayTo)
+    const [from] = dayBounds(shiftLocalDate(today, -(normalizedDays - 1)))
+    return getCorrectedAppSummariesForRange(getDb(), from, todayTo, live)
   })
 
-  // C23 / D6: Apps view date switcher. Returns summaries for a specific
-  // calendar day through the same canonical query as Today/7d/30d/All-time.
-  // Derived sessions are a Timeline projection and use a different concept of
-  // session count; reading them here caused past days to resurrect system noise
-  // and thousands of micro-sessions.
+  // Apps view date switcher. A single day reads the same trusted-block
+  // partition as the Timeline payload, so the two views cannot disagree
+  // about that day's total.
   ipcMain.handle(IPC.DB.GET_APP_SUMMARIES_FOR_DATE, (_e, dateStr: string) => {
-    const [from, to] = dayBounds(dateStr)
-    return getCorrectedAppSummariesForRange(getDb(), from, to)
+    return getAppSummariesForTimelineDay(getDb(), dateStr, getLiveSessionForDate(dateStr))
   })
 
   ipcMain.handle(IPC.DB.GET_ALL_APPS_FOR_LABELING, () => {
