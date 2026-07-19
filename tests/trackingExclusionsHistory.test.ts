@@ -472,3 +472,131 @@ test('deleting a page removes every visit and clears generated recaps', () => {
     db.close()
   }
 })
+
+test('focus-sourced purge keys honor Chrome profile suffixes', () => {
+  const db = createProductionTestDatabase()
+  const title = 'Dashboard'
+  const excludedStart = new Date(2026, 5, 24, 9, 0, 0, 0).getTime()
+  const safeStart = excludedStart + 5 * 60_000
+  const insertSession = db.prepare(`
+    INSERT INTO app_sessions (
+      bundle_id, app_name, start_time, end_time, duration_sec, category,
+      is_focused, window_title, raw_app_name, canonical_app_id, app_instance_id,
+      capture_source, capture_version
+    ) VALUES (
+      'com.google.Chrome', 'Google Chrome', @start, @end, 600, 'browsing',
+      0, @title, 'Google Chrome', 'chrome', @profile, 'test', 2
+    )
+  `)
+  insertSession.run({
+    start: excludedStart,
+    end: excludedStart + 600_000,
+    title,
+    profile: 'com.google.Chrome:Profile 1',
+  })
+  insertSession.run({
+    start: safeStart,
+    end: safeStart + 600_000,
+    title,
+    profile: 'com.google.Chrome:Profile 2',
+  })
+  db.prepare(`
+    INSERT INTO focus_events (
+      ts_ms, mono_ns, event_type, app_bundle_id, app_name, pid,
+      window_title, url, page_title, source, confidence, platform, schema_ver
+    ) VALUES (?, ?, 'tab_changed', 'com.google.Chrome:Profile 1', 'Google Chrome', 11,
+      ?, 'https://private.example/dashboard', ?, 'apple_events_tab', 'observed', 'darwin', 2)
+  `).run(excludedStart, excludedStart, title, title)
+  setTestDb(db)
+
+  try {
+    deleteHistoryForSite({ domain: 'private.example' })
+
+    const sessions = db.prepare(`
+      SELECT start_time, window_title FROM app_sessions ORDER BY start_time
+    `).all() as Array<{ start_time: number; window_title: string | null }>
+    assert.deepEqual(sessions, [
+      { start_time: excludedStart, window_title: null },
+      { start_time: safeStart, window_title: title },
+    ])
+  } finally {
+    clearTestDb()
+    db.close()
+  }
+})
+
+test('unprofiled focus purge keys do not wildcard into profiled sessions', () => {
+  const db = createProductionTestDatabase()
+  const title = 'Dashboard'
+  const excludedStart = new Date(2026, 5, 25, 10, 0, 0, 0).getTime()
+  const profiledStart = excludedStart + 2_000
+  db.prepare(`
+    INSERT INTO app_sessions (
+      bundle_id, app_name, start_time, end_time, duration_sec, category,
+      is_focused, window_title, raw_app_name, canonical_app_id, app_instance_id,
+      capture_source, capture_version
+    ) VALUES (
+      'com.google.Chrome', 'Google Chrome', ?, ?, 600, 'browsing',
+      0, ?, 'Google Chrome', 'chrome', 'com.google.Chrome:Profile 2', 'test', 2
+    )
+  `).run(profiledStart, profiledStart + 600_000, title)
+  db.prepare(`
+    INSERT INTO focus_events (
+      ts_ms, mono_ns, event_type, app_bundle_id, app_name, pid,
+      window_title, url, page_title, source, confidence, platform, schema_ver
+    ) VALUES (?, ?, 'tab_changed', 'com.google.Chrome', 'Google Chrome', 12,
+      ?, 'https://private.example/dashboard', ?, 'apple_events_tab', 'observed', 'darwin', 2)
+  `).run(excludedStart, excludedStart, title, title)
+  setTestDb(db)
+
+  try {
+    deleteHistoryForSite({ domain: 'private.example' })
+
+    assert.equal((db.prepare(`
+      SELECT window_title FROM app_sessions
+    `).get() as { window_title: string | null }).window_title, title)
+  } finally {
+    clearTestDb()
+    db.close()
+  }
+})
+
+test('start-side poll lag does not redact a later same-title session past the page end', () => {
+  const db = createProductionTestDatabase()
+  const title = 'Dashboard'
+  const pageStart = new Date(2026, 5, 26, 14, 0, 0, 0).getTime()
+  const laterSessionStart = pageStart + 8_000
+  db.prepare(`
+    INSERT INTO app_sessions (
+      bundle_id, app_name, start_time, end_time, duration_sec, category,
+      is_focused, window_title, raw_app_name, canonical_app_id, app_instance_id,
+      capture_source, capture_version
+    ) VALUES (
+      'com.google.Chrome', 'Google Chrome', ?, ?, 600, 'browsing',
+      0, ?, 'Google Chrome', 'chrome', 'com.google.Chrome:Profile 1', 'test', 2
+    )
+  `).run(laterSessionStart, laterSessionStart + 600_000, title)
+  db.prepare(`
+    INSERT INTO website_visits (
+      domain, page_title, url, normalized_url, page_key,
+      visit_time, visit_time_us, duration_sec, browser_bundle_id,
+      canonical_browser_id, browser_profile_id, source
+    ) VALUES (
+      'private.example', ?, 'https://private.example/dashboard',
+      'https://private.example/dashboard', 'https://private.example/dashboard',
+      ?, ?, 0, 'com.google.Chrome:Profile 1', 'chrome', 'Profile 1', 'test'
+    )
+  `).run(title, pageStart, BigInt(pageStart) * 1_000n)
+  setTestDb(db)
+
+  try {
+    deleteHistoryForSite({ domain: 'private.example' })
+
+    assert.equal((db.prepare(`
+      SELECT window_title FROM app_sessions
+    `).get() as { window_title: string | null }).window_title, title)
+  } finally {
+    clearTestDb()
+    db.close()
+  }
+})
