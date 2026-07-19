@@ -10,6 +10,7 @@ import { promisify } from 'node:util'
 import os from 'node:os'
 import type Database from 'better-sqlite3'
 import { sanitizeForModel } from '@shared/aiSanitize'
+import { getTrackedWindowTitleCorpus } from '../db/queries'
 import { minimalChildEnv } from '../lib/childEnv'
 
 const execFileAsync = promisify(execFile)
@@ -101,15 +102,7 @@ async function discoverGitDirectories(roots: string[]): Promise<string[]> {
 function trackedEvidence(db: Database.Database | undefined, fromMs: number, toMs: number): string {
   if (!db) return ''
   try {
-    const rows = db.prepare(`
-      SELECT window_title AS title FROM focus_events
-      WHERE ts_ms >= ? AND ts_ms < ? AND window_title IS NOT NULL
-      UNION ALL
-      SELECT window_title AS title FROM app_sessions
-      WHERE start_time < ? AND COALESCE(end_time, start_time) >= ? AND window_title IS NOT NULL
-      LIMIT 10000
-    `).all(fromMs, toMs, toMs, fromMs) as Array<{ title: string }>
-    return rows.map((row) => row.title).join('\n').toLowerCase()
+    return getTrackedWindowTitleCorpus(db, fromMs, toMs)
   } catch {
     return ''
   }

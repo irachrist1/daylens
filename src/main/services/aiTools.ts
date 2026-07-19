@@ -9,7 +9,11 @@ import {
   searchBrowser as dbSearchBrowser,
   searchArtifacts as dbSearchArtifacts,
   getWebsiteVisitsForRange,
+  listDistinctVisitDomains,
+  listRecentSessionWindowTitles,
+  listSessionActivityDays,
 } from '../db/queries'
+import { blockActiveSeconds } from '@shared/blockDuration'
 // AI facts read the corrected activity truth (invariant 7): a Timeline block
 // the user deleted is subtracted from every total the AI quotes, so the AI
 // never contradicts the Timeline or the Apps view.
@@ -441,13 +445,7 @@ function aggregateSiteUsage(
   const needle = normalizeAppLookupValue(lookupRaw)
   if (!needle || needle.length < 3) return null
 
-  const domainRows = db.prepare(`
-    SELECT DISTINCT domain FROM website_visits
-    WHERE visit_time >= ? AND visit_time < ? AND domain IS NOT NULL AND domain != ''
-  `).all(fromMs, toMs) as { domain: string }[]
-
-  const matchedDomains = domainRows
-    .map((r) => r.domain)
+  const matchedDomains = listDistinctVisitDomains(db, fromMs, toMs)
     .filter((domain) => {
       const dn = normalizeAppLookupValue(domain)
       if (!dn) return false
@@ -510,23 +508,6 @@ function aggregateSiteUsage(
       }))
       .filter((r) => r.totalSeconds > 0 || r.sessionCount > 0),
     titles: titleRows.map((visit) => visit.pageTitle as string),
-  }
-}
-
-function sessionIdentityWhereClause(canonicalIds: string[], bundleIds: string[]): { clause: string; params: string[] } {
-  const clauses: string[] = []
-  const params: string[] = []
-  if (canonicalIds.length > 0) {
-    clauses.push(`canonical_app_id IN (${canonicalIds.map(() => '?').join(', ')})`)
-    params.push(...canonicalIds)
-  }
-  if (bundleIds.length > 0) {
-    clauses.push(`bundle_id IN (${bundleIds.map(() => '?').join(', ')})`)
-    params.push(...bundleIds)
-  }
-  return {
-    clause: clauses.length > 0 ? `(${clauses.join(' OR ')})` : '0',
-    params,
   }
 }
 
@@ -725,10 +706,10 @@ export function execGetDaySummary(params: GetDaySummaryParams, db: Database.Data
     if (!label) continue
     const startMs = block.startTime
     const endMs = block.endTime
-    // Block duration is end - start of the rendered block, never a sum
-    // of session durations. The renderer is the source of truth here so
-    // the AI and the UI agree to the minute.
-    const durationSeconds = Math.max(0, Math.round((endMs - startMs) / 1000))
+    // A block's cited duration is its ACTIVE time — the same figure the
+    // Timeline rail totals — never the wall-clock span, which can enclose
+    // hours of absorbed gap and made the AI's day total exceed the screen's.
+    const durationSeconds = blockActiveSeconds(block)
     const appsInBlock = block.topApps
       .filter((a) => a.category !== 'system')
       .slice(0, 4)
@@ -772,11 +753,11 @@ export function execGetDaySummary(params: GetDaySummaryParams, db: Database.Data
     seenLabels.add(label)
   }
 
-  // Total tracked seconds is the sum of block durations — guarantees
-  // the AI's daily total matches the timeline view. App-summary sums
-  // can disagree with block sums due to overlap/idle gaps.
-  const totalTrackedSeconds = blocks.reduce((acc, b) => acc + b.durationSeconds, 0)
-  const focusSeconds = summaries.filter((a) => a.isFocused).reduce((s, a) => s + a.totalSeconds, 0)
+  // The day's totals ARE the Timeline payload's totals — the same shared
+  // corrected facts the screen renders — so the agent can never quote a
+  // different day length than the Timeline for the same date.
+  const totalTrackedSeconds = Math.round(livePayload.totalSeconds)
+  const focusSeconds = Math.round(livePayload.focusSeconds)
 
   // Per-app activity: which block did the app contribute most time to?
   // Lets D1-compliant answers lead with "Kiro — coding in the Building &
@@ -877,17 +858,12 @@ export function execGetAppUsage(params: GetAppUsageParams, db: Database.Database
   // session merging, and range clipping.
   const matchedCanonicalIds = [...new Set(matched.map((a) => a.canonicalAppId).filter((id): id is string => !!id))]
   const matchedBundleIds = [...new Set(matched.map((a) => a.bundleId).filter(Boolean))]
-  const identityFilter = sessionIdentityWhereClause(matchedCanonicalIds, matchedBundleIds)
-  const candidateDays = matched.length === 0 ? [] : (db.prepare(`
-    SELECT DISTINCT strftime('%Y-%m-%d', start_time / 1000, 'unixepoch', 'localtime') AS day
-    FROM app_sessions
-    WHERE start_time >= ? AND start_time < ?
-      AND ${identityFilter.clause}
-    ORDER BY day DESC
-    LIMIT 90
-  `).all(fromMs, toMs, ...identityFilter.params) as { day: string }[])
+  const identitySelector = { canonicalAppIds: matchedCanonicalIds, bundleIds: matchedBundleIds }
+  const candidateDays = matched.length === 0
+    ? []
+    : listSessionActivityDays(db, fromMs, toMs, identitySelector)
   const dailyBreakdown = candidateDays
-    .map(({ day }) => {
+    .map((day) => {
       const [dayFrom, dayTo] = localDayBounds(day)
       const daySummaries = getAppSummariesForRange(db, dayFrom, dayTo)
       const dayMatched = daySummaries.filter((a) => a.canonicalAppId && matchedCanonicalIds.includes(a.canonicalAppId))
@@ -900,13 +876,9 @@ export function execGetAppUsage(params: GetAppUsageParams, db: Database.Database
     .filter((d) => d.totalSeconds > 0)
 
   // Recent distinct window titles
-  const titleRows = matched.length === 0 ? [] : (db.prepare(`
-    SELECT DISTINCT window_title FROM app_sessions
-    WHERE window_title IS NOT NULL
-      AND start_time >= ? AND start_time < ?
-      AND ${identityFilter.clause}
-    ORDER BY start_time DESC LIMIT 10
-  `).all(fromMs, toMs, ...identityFilter.params) as { window_title: string }[])
+  const recentTitles = matched.length === 0
+    ? []
+    : listRecentSessionWindowTitles(db, fromMs, toMs, identitySelector)
 
   return {
     appName: matched[0]?.appName ?? params.appName,
@@ -916,7 +888,7 @@ export function execGetAppUsage(params: GetAppUsageParams, db: Database.Database
     startDate: params.startDate ?? toDateStr(fromMs),
     endDate: params.endDate ?? toDateStr(toMs),
     dailyBreakdown,
-    recentWindowTitles: titleRows.map((r) => r.window_title),
+    recentWindowTitles: recentTitles,
   }
 }
 
@@ -939,7 +911,6 @@ function execGetWeekSummary(params: GetWeekSummaryParams, db: Database.Database)
   const weekToMs = weekFromMs + 7 * 86_400_000
   const weekEnd = toDateStr(weekToMs - 1)
   const allSummaries = getAppSummariesForRange(db, weekFromMs, weekToMs)
-  const totalFocusSeconds = allSummaries.filter((a) => a.isFocused).reduce((s, a) => s + a.totalSeconds, 0)
 
   // Build per-day block summaries from the renderer's live path. This is
   // the activity-shaped view that lets weekly answers say
@@ -959,25 +930,29 @@ function execGetWeekSummary(params: GetWeekSummaryParams, db: Database.Database)
           label: userVisibleLabelForBlock(block),
           startTime: fmtHHMM(startMs),
           endTime: fmtHHMM(endMs),
-          durationSeconds: Math.max(0, Math.round((endMs - startMs) / 1000)),
+          // Active time, matching the Timeline rail — not the wall span.
+          durationSeconds: blockActiveSeconds(block),
           appsInBlock: block.topApps.filter((a) => a.category !== 'system').slice(0, 3).map((a) => a.appName),
         }
       })
       .filter((b) => b.label && b.durationSeconds > 0)
-    const dayTotalSeconds = dayBlocks.reduce((acc, b) => acc + b.durationSeconds, 0)
+    // The day total is the payload's own total, so weekly narratives quote
+    // the same day lengths the Timeline renders.
+    const dayTotalSeconds = Math.round(livePayload.totalSeconds)
     totalTrackedSeconds += dayTotalSeconds
     dailyBlockSummaries.push({
       date: dayStr,
       topBlocks: dayBlocks.sort((a, b) => b.durationSeconds - a.durationSeconds).slice(0, 6),
     })
-    // Focus seconds per day still come from session-level focus categorisation.
-    const daySessions = livePayload.blocks.flatMap((b) => b.sessions)
-    const dayFocusSeconds = daySessions
-      .filter((s) => s.isFocused)
-      .reduce((acc, s) => acc + s.durationSeconds, 0)
-    dailyBreakdown.push({ date: dayStr, totalSeconds: dayTotalSeconds, focusSeconds: dayFocusSeconds })
+    // Each day's focus figure is the payload's own clamped focusSeconds.
+    dailyBreakdown.push({
+      date: dayStr,
+      totalSeconds: dayTotalSeconds,
+      focusSeconds: Math.round(livePayload.focusSeconds),
+    })
   }
 
+  const totalFocusSeconds = dailyBreakdown.reduce((acc, d) => acc + d.focusSeconds, 0)
   const focusPct = totalTrackedSeconds > 0 ? Math.round((totalFocusSeconds / totalTrackedSeconds) * 100) : 0
   const bestDay = dailyBreakdown.reduce<{ date: string; focusPct: number } | null>((best, d) => {
     const pct = d.totalSeconds > 0 ? Math.round((d.focusSeconds / d.totalSeconds) * 100) : 0
