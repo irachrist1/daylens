@@ -20,10 +20,21 @@ export function splitAppSummaries(
   const primary: AppUsageSummary[] = []
   const fleeting: AppUsageSummary[] = []
 
+  // The five largest applications by time are always visibly present, never
+  // collapsed into the fleeting fold — on a light day even a top app can sit
+  // under the fleeting thresholds, and a collapsed row is an omission from
+  // the rendered view.
+  const topFive = new Set(
+    [...summaries]
+      .sort((left, right) => right.totalSeconds - left.totalSeconds)
+      .slice(0, 5)
+      .map((summary) => appSummaryId(summary)),
+  )
+
   for (const summary of summaries) {
     const isFleeting = summary.totalSeconds < 120
       || ((summary.sessionCount ?? 1) <= 1 && summary.totalSeconds < 5 * 60)
-    if (isFleeting && category === null) fleeting.push(summary)
+    if (isFleeting && category === null && !topFive.has(appSummaryId(summary))) fleeting.push(summary)
     else primary.push(summary)
   }
 

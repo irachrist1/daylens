@@ -319,7 +319,8 @@ async function evaluate(args: Args): Promise<RealDayObservation> {
     const [
       { getTimelineDayProjection },
       { getTimelineDayPayload },
-      { getCorrectedAppSummariesForRange, getCorrectedSessionsForRange },
+      { getCorrectedSessionsForRange },
+      { getAppSummariesForTimelineDay },
       { searchAll },
       { getExternalSignal },
       { resolveDayEnrichment },
@@ -335,6 +336,7 @@ async function evaluate(args: Args): Promise<RealDayObservation> {
       import('../../src/main/core/query/projections'),
       import('../../src/main/services/workBlocks'),
       import('../../src/main/services/activityFacts'),
+      import('../../src/main/services/appsFacts'),
       import('../../src/main/db/queries'),
       import('../../src/main/services/externalSignals'),
       import('../../src/main/services/enrichmentResolve'),
@@ -346,7 +348,9 @@ async function evaluate(args: Args): Promise<RealDayObservation> {
     const [fromMs, toMs] = dayBounds(manifest.date)
     const projection = getTimelineDayProjection(db, manifest.date, null, { materialize: false })
     const direct = getTimelineDayPayload(db, manifest.date, null, { materialize: false })
-    const apps = getCorrectedAppSummariesForRange(db, fromMs, toMs)
+    // The day view's own read: Apps totals partitioned by the same trusted
+    // blocks the Timeline payload totals.
+    const apps = getAppSummariesForTimelineDay(db, manifest.date, null)
     const capturedSessions = getCorrectedSessionsForRange(db, fromMs, toMs)
     const sharedFacts = queryCorrectedActivityFactsForDay(db, manifest.date, { asOfMs: toMs })
     const parity = compareCanonicalAndLegacyDay(db, manifest.date, { asOfMs: toMs })
