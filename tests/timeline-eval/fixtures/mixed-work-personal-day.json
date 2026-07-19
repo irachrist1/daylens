@@ -1,0 +1,210 @@
+{
+  "schemaVersion": 1,
+  "id": "mixed-work-personal-day",
+  "name": "Mixed work, personal, and entertainment day",
+  "date": "2026-05-13",
+  "timezone": "local",
+  "description": "Morning invoice-service work, a midday personal errand block (banking and a medical appointment), more work, then evening streaming. Personal time must stay separate from work and never be graded.",
+  "input": {
+    "kind": "normalized-evidence",
+    "sessions": [
+      {
+        "start": "09:00",
+        "end": "10:30",
+        "bundleId": "com.microsoft.VSCode",
+        "appName": "Code",
+        "category": "development",
+        "title": "payments.ts — invoice-service"
+      },
+      {
+        "start": "10:30",
+        "end": "11:00",
+        "bundleId": "com.google.Chrome",
+        "appName": "Google Chrome",
+        "category": "development",
+        "title": "Retry failed payouts by tonny · Pull Request #77 · daylens/invoice-service"
+      },
+      {
+        "start": "12:00",
+        "end": "12:20",
+        "bundleId": "com.google.Chrome",
+        "appName": "Google Chrome",
+        "category": "browsing",
+        "title": "Transfer between accounts — Chase Online Banking"
+      },
+      {
+        "start": "12:20",
+        "end": "12:35",
+        "bundleId": "com.google.Chrome",
+        "appName": "Google Chrome",
+        "category": "browsing",
+        "title": "Order history — Amazon"
+      },
+      {
+        "start": "13:30",
+        "end": "15:00",
+        "bundleId": "com.microsoft.VSCode",
+        "appName": "Code",
+        "category": "development",
+        "title": "reconciliation.ts — invoice-service"
+      },
+      {
+        "start": "20:00",
+        "end": "21:30",
+        "bundleId": "com.apple.Safari",
+        "appName": "Safari",
+        "category": "browsing",
+        "title": "The Crown S6 E3 - Netflix"
+      }
+    ],
+    "browserEvidence": [
+      {
+        "at": "10:30",
+        "durationMinutes": 30,
+        "browserBundleId": "com.google.Chrome",
+        "domain": "github.com",
+        "url": "https://github.com/daylens/invoice-service/pull/77",
+        "title": "Retry failed payouts by tonny · Pull Request #77 · daylens/invoice-service"
+      },
+      {
+        "at": "12:00",
+        "durationMinutes": 20,
+        "browserBundleId": "com.google.Chrome",
+        "domain": "chase.com",
+        "url": "https://www.chase.com/transfers",
+        "title": "Transfer between accounts — Chase Online Banking"
+      },
+      {
+        "at": "12:20",
+        "durationMinutes": 15,
+        "browserBundleId": "com.google.Chrome",
+        "domain": "amazon.com",
+        "url": "https://www.amazon.com/orders",
+        "title": "Order history — Amazon"
+      },
+      {
+        "at": "20:00",
+        "durationMinutes": 90,
+        "browserBundleId": "com.apple.Safari",
+        "domain": "netflix.com",
+        "url": "https://www.netflix.com/watch/81447365",
+        "title": "The Crown S6 E3"
+      }
+    ]
+  },
+  "expected": {
+    "episodes": [
+      {
+        "id": "invoice-service-morning",
+        "start": "09:00",
+        "end": "11:00",
+        "label": "Invoice service payments work",
+        "labelIncludes": [
+          "invoice",
+          "payments"
+        ],
+        "kind": "work",
+        "intentRole": "execution",
+        "intentSubjectIncludes": [
+          "invoice",
+          "payments"
+        ]
+      },
+      {
+        "id": "personal-banking",
+        "start": "12:00",
+        "end": "12:20",
+        "label": "Chase online banking",
+        "labelIncludes": [
+          "Chase",
+          "transfer",
+          "banking"
+        ],
+        "kind": "personal"
+      },
+      {
+        "id": "personal-shopping",
+        "start": "12:20",
+        "end": "12:35",
+        "label": "Amazon order history",
+        "labelIncludes": [
+          "Amazon",
+          "order"
+        ],
+        "kind": "personal"
+      },
+      {
+        "id": "invoice-service-afternoon",
+        "start": "13:30",
+        "end": "15:00",
+        "label": "Invoice service reconciliation work",
+        "labelIncludes": [
+          "invoice",
+          "reconciliation"
+        ],
+        "kind": "work",
+        "intentRole": "execution",
+        "intentSubjectIncludes": [
+          "invoice",
+          "reconciliation"
+        ]
+      },
+      {
+        "id": "evening-streaming",
+        "start": "20:00",
+        "end": "21:30",
+        "label": "Watching Netflix",
+        "labelIncludes": [
+          "Watching"
+        ],
+        "kind": "leisure"
+      }
+    ],
+    "apps": [
+      {
+        "appName": "Visual Studio Code",
+        "durationMinutes": 180,
+        "durationToleranceMinutes": 6
+      },
+      {
+        "appName": "Google Chrome",
+        "durationMinutes": 65,
+        "durationToleranceMinutes": 6
+      },
+      {
+        "appName": "Safari",
+        "durationMinutes": 90,
+        "durationToleranceMinutes": 6
+      }
+    ],
+    "search": [
+      {
+        "query": "invoice",
+        "requiredFacts": [
+          "invoice-service"
+        ]
+      }
+    ],
+    "wrap": {
+      "quality": "full",
+      "isLeisureDay": false,
+      "workActivityIncludes": "Payments",
+      "topLeisureIncludes": "Netflix"
+    },
+    "answers": [
+      {
+        "question": "How much did I work today?",
+        "requiredFacts": [
+          "invoice-service"
+        ],
+        "prohibitedClaims": [
+          "Chase",
+          "Amazon"
+        ],
+        "requiredSources": [
+          "Timeline"
+        ]
+      }
+    ]
+  }
+}
