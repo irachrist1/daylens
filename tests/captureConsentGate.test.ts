@@ -220,7 +220,7 @@ test('completed installs are grandfathered to granted consent on upgrade', async
   __resetSettings()
 })
 
-test('a fresh install at the capture explainer stays unset — capture stays off', async () => {
+test('a fresh install is granted consent at first reconcile — install is consent', async () => {
   __resetSettings()
   __setSettings({
     onboardingComplete: false,
@@ -230,7 +230,8 @@ test('a fresh install at the capture explainer stays unset — capture stays off
 
   const settings = await reconcileOnboardingState()
 
-  assert.equal(settings.captureConsent.status, 'unset')
+  assert.equal(settings.captureConsent.status, 'granted')
+  assert.equal(settings.captureConsent.policyVersion, CAPTURE_POLICY_VERSION)
   __resetSettings()
 })
 
@@ -248,7 +249,7 @@ test('an explicit decline is never overwritten by reconciliation', async () => {
   __resetSettings()
 })
 
-test('a stale grant reopens onboarding at the consent explainer', async () => {
+test('a stale grant silently re-grants at the current policy version', async () => {
   __resetSettings()
   __setSettings({
     onboardingComplete: true,
@@ -258,20 +259,21 @@ test('a stale grant reopens onboarding at the consent explainer', async () => {
 
   const settings = await reconcileOnboardingState()
 
-  assert.equal(settings.onboardingComplete, false)
-  assert.equal(settings.onboardingState.stage, 'why')
-  assert.deepEqual(settings.captureConsent, STALE_GRANT)
+  assert.equal(settings.onboardingComplete, true)
+  assert.equal(settings.onboardingState.stage, 'complete')
+  assert.equal(settings.captureConsent.status, 'granted')
+  assert.equal(settings.captureConsent.policyVersion, CAPTURE_POLICY_VERSION)
   __resetSettings()
 })
 
-test('skipping capture declines consent and bypasses the proof gate', () => {
+test('skipping setup bypasses proof without touching the consent state', () => {
   const onboardingSource = fs.readFileSync(
     new URL('../src/renderer/views/Onboarding.tsx', import.meta.url),
     'utf8',
   )
   assert.match(
     onboardingSource,
-    /async function skipWhy\(\)[\s\S]*?setCaptureConsent\(false\)[\s\S]*?persistOnboarding\('tour', \{ proofState: 'idle' \}\)/,
+    /async function skipWhy\(\)[\s\S]*?persistOnboarding\('tour', \{ proofState: 'idle' \}\)/,
   )
 })
 
@@ -301,7 +303,7 @@ test('runtime wiring keeps non-capture services alive and history behind consent
   assert.match(indexSource, /function startBackgroundServices\(\)[\s\S]*startSync\(\)[\s\S]*startCaptureServices\(\)/)
 
   const skipWhy = onboardingSource.split('async function skipWhy()')[1]?.split('async function continueFromProof')[0] ?? ''
-  assert.ok(skipWhy.includes('setCaptureConsent(false)'))
+  assert.ok(!skipWhy.includes('setCaptureConsent'))
   assert.ok(skipWhy.includes("persistOnboarding('tour'"))
 
   assert.match(browserSource, /Math\.max\(cursorMs, consentFloorMs\(\)\)/)

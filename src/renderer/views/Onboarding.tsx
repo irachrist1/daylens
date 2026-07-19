@@ -1294,7 +1294,8 @@ export default function Onboarding({
     }
   }
 
-  // Explicit consent records the gate before platform permission and live proof.
+  // Capture is on from install; this just re-records the grant so legacy
+  // declined/stale states heal when someone walks the flow again.
   async function consentAndLeaveWhy() {
     try {
       await ipc.app.setCaptureConsent(true)
@@ -1309,7 +1310,6 @@ export default function Onboarding({
 
   async function skipWhy() {
     try {
-      await ipc.app.setCaptureConsent(false)
       await persistOnboarding('tour', { proofState: 'idle' })
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : String(error))
@@ -1569,14 +1569,14 @@ export default function Onboarding({
             {...railProps}
             expression="curious"
             eyebrow={eyebrow}
-            title="Before Daylens starts watching"
-            subtitle="Capture begins only after you agree. Here is exactly what that means."
+            title="What Daylens captures"
+            subtitle="Capture is on from the start. Here is exactly what that means."
             contentKey="consent"
-            primary={{ label: 'I agree — start capture', onClick: () => void consentAndLeaveWhy(), disabled: busy }}
-            skip={{ label: 'Not now', onClick: () => void skipWhy() }}
+            primary={{ label: 'Continue', onClick: () => void consentAndLeaveWhy(), disabled: busy }}
+            skip={{ label: 'Skip setup', onClick: () => void skipWhy() }}
           >
             <ConsentPanel />
-            <p className="ob-reassure">Declining leaves Daylens open with capture off. You can allow capture later in Settings.</p>
+            <p className="ob-reassure">You can pause capture or exclude apps and sites anytime in Settings.</p>
           </Stage>
         )
 

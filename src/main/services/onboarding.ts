@@ -4,11 +4,6 @@ import { grantedCaptureConsent, isCaptureConsentCurrent, type CaptureConsentStat
 import { getTrackingPermissionState } from './trackingPermissions'
 import { getSettingsAsync, setSettings } from './settings'
 
-// Stages at or before the point where the flow explains what Daylens captures.
-// Anyone who advanced past these under the pre-consent-state flow already
-// agreed to capture there — the recorded state just didn't exist yet.
-const PRE_CONSENT_STAGES: ReadonlySet<OnboardingStage> = new Set(['welcome', 'why'])
-
 function nextProofState(stage: OnboardingStage, current: ProofState): ProofState {
   if (stage === 'complete') return 'ready'
   if (stage === 'proof') return current === 'ready' ? 'ready' : 'collecting'
@@ -20,28 +15,17 @@ export async function reconcileOnboardingState(): Promise<AppSettings> {
   let changed = false
   const onboardingState = { ...settings.onboardingState }
 
-  // Grandfather installs that predate the recorded consent state: completing
-  // (or advancing past the capture explainer of) the old flow WAS the consent
-  // act, so record it rather than silently stopping their capture on update.
-  // Never overwrite an explicit decision — only 'unset' is reconciled.
+  // Installing is consent: capture is on from first launch, so 'unset' and
+  // stale-policy grants both reconcile to granted at the current policy
+  // version. Only an explicit decline (legacy installs; recoverable in
+  // Settings) is preserved.
   let captureConsent: CaptureConsentState = settings.captureConsent
-  const requiresCaptureReconsent = captureConsent.status === 'granted'
-    && !isCaptureConsentCurrent(captureConsent)
-  if (requiresCaptureReconsent) {
-    onboardingState.stage = 'why'
-    onboardingState.completedAt = null
-    onboardingState.proofState = 'idle'
-    changed = true
-  }
-  if (
-    captureConsent.status === 'unset'
-    && (settings.onboardingComplete || !PRE_CONSENT_STAGES.has(onboardingState.stage))
-  ) {
+  if (captureConsent.status !== 'declined' && !isCaptureConsentCurrent(captureConsent)) {
     captureConsent = grantedCaptureConsent(Date.now())
     changed = true
   }
 
-  if (settings.onboardingComplete && onboardingState.stage !== 'complete' && !requiresCaptureReconsent) {
+  if (settings.onboardingComplete && onboardingState.stage !== 'complete') {
     onboardingState.stage = 'complete'
     onboardingState.completedAt = onboardingState.completedAt ?? Date.now()
     onboardingState.proofState = 'ready'
@@ -49,7 +33,7 @@ export async function reconcileOnboardingState(): Promise<AppSettings> {
     changed = true
   }
 
-  if (process.platform === 'darwin' && onboardingState.stage !== 'complete' && !requiresCaptureReconsent) {
+  if (process.platform === 'darwin' && onboardingState.stage !== 'complete') {
     const permissionState = getTrackingPermissionState()
     if (onboardingState.trackingPermissionState !== permissionState) {
       onboardingState.trackingPermissionState = permissionState
@@ -74,7 +58,7 @@ export async function reconcileOnboardingState(): Promise<AppSettings> {
       onboardingState.proofState = 'idle'
       changed = true
     }
-  } else if (process.platform !== 'darwin' && onboardingState.stage !== 'complete' && !requiresCaptureReconsent) {
+  } else if (process.platform !== 'darwin' && onboardingState.stage !== 'complete') {
     const permissionState = getTrackingPermissionState()
     if (onboardingState.trackingPermissionState !== permissionState) {
       onboardingState.trackingPermissionState = permissionState

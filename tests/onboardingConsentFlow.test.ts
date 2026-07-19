@@ -12,12 +12,12 @@ const reconcileSource = fs.readFileSync(
   'utf8',
 )
 
-test('onboarding flow orders consent, permission, proof, then privacy', () => {
+test('onboarding flow orders capture explainer, permission, proof, then privacy', () => {
   assert.match(
     onboardingSource,
     /const STAGE_FLOW: OnboardingStage\[\] = \[[\s\S]*?'why', 'permission', 'proof', 'privacy'/,
   )
-  assert.match(onboardingSource, /I agree — start capture/)
+  assert.match(onboardingSource, /Capture is on from the start/)
   assert.match(onboardingSource, /What Daylens captures/)
   assert.match(onboardingSource, /What it never captures/)
   assert.match(onboardingSource, /PROOF_TIMEOUT_MS/)
@@ -50,11 +50,13 @@ test('proof continue goes to privacy and exclusions persist immediately', () => 
   )
 })
 
-test('declining consent still bypasses proof with capture off', () => {
+test('skipping setup never declines capture — it only shortcuts the flow', () => {
   assert.match(
     onboardingSource,
-    /async function skipWhy\(\)[\s\S]*?setCaptureConsent\(false\)[\s\S]*?persistOnboarding\('tour', \{ proofState: 'idle' \}\)/,
+    /async function skipWhy\(\)[\s\S]*?persistOnboarding\('tour', \{ proofState: 'idle' \}\)/,
   )
+  const skipWhy = onboardingSource.split('async function skipWhy()')[1]?.split('async function continueFromProof')[0] ?? ''
+  assert.ok(!skipWhy.includes('setCaptureConsent'))
 })
 
 test('non-mac reconcile syncs helper or session support instead of forcing granted', () => {
