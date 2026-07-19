@@ -59,4 +59,6 @@ Use the command for the current platform and required artifact. Local packaging 
 
 Packaged builds use the updater when the platform and release are configured for it. Development builds do not update themselves; pull the repository and restart instead.
 
+On macOS the update path depends on how the running build is signed: Developer-ID-signed builds use electron-updater (Squirrel.Mac verifies the downloaded bundle before installing), while ad-hoc builds use the public update feed with a checksum-verified bundle swap. Signing and notarization setup for releases is documented in [macos-signing.md](macos-signing.md); Windows signing in [windows-signing.md](windows-signing.md).
+
 Release claims should describe only artifacts that were built, signed where required, published, and verified on the target platform.

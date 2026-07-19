@@ -22,15 +22,6 @@ jobs:
     # GitHub-hosted Apple Silicon runner. Switch back to a Blacksmith label
     # (e.g. blacksmith-6vcpu-macos-latest) once the Blacksmith app/credits are restored.
     runs-on: macos-latest
-    env:
-      CSC_LINK: ${{ secrets.MAC_CERTIFICATE_FILE }}
-      CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
-      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
     steps:
       - name: Derive version from tag
@@ -49,6 +40,81 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
           echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+
+      # Fail fast — before dependencies, typecheck, and packaging — when the
+      # signing secrets are partially configured, and print exactly which
+      # secrets are missing so fixing the release is a checklist, not a debug
+      # session. Signed + notarized releases need:
+      #   MAC_CERTIFICATE_FILE      base64 of the Developer ID Application .p12
+      #   MAC_CERTIFICATE_PASSWORD  password for that .p12
+      # plus ONE of the two notarization credential sets:
+      #   APPLE_API_KEY + APPLE_API_KEY_ID + APPLE_API_ISSUER   (App Store Connect API key — preferred)
+      #   APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID (Apple ID fallback)
+      # With no signing secrets at all the build falls back to ad-hoc signing
+      # unless the repository variable DAYLENS_REQUIRE_MAC_SIGNING is '1'.
+      # See docs/operations/macos-signing.md for the one-time setup steps.
+      - name: Detect signing mode and validate credentials
+        id: signing
+        shell: bash
+        env:
+          HAS_MAC_CERTIFICATE_FILE: ${{ secrets.MAC_CERTIFICATE_FILE != '' }}
+          HAS_MAC_CERTIFICATE_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD != '' }}
+          HAS_APPLE_API_KEY: ${{ secrets.APPLE_API_KEY != '' }}
+          HAS_APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID != '' }}
+          HAS_APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER != '' }}
+          HAS_APPLE_ID: ${{ secrets.APPLE_ID != '' }}
+          HAS_APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD != '' }}
+          HAS_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID != '' }}
+          REQUIRE_MAC_SIGNING: ${{ vars.DAYLENS_REQUIRE_MAC_SIGNING }}
+        run: |
+          set -euo pipefail
+
+          cert_ok=true
+          [ "$HAS_MAC_CERTIFICATE_FILE" = "true" ] && [ "$HAS_MAC_CERTIFICATE_PASSWORD" = "true" ] || cert_ok=false
+
+          notary_api_ok=true
+          [ "$HAS_APPLE_API_KEY" = "true" ] && [ "$HAS_APPLE_API_KEY_ID" = "true" ] && [ "$HAS_APPLE_API_ISSUER" = "true" ] || notary_api_ok=false
+
+          notary_id_ok=true
+          [ "$HAS_APPLE_ID" = "true" ] && [ "$HAS_APPLE_APP_SPECIFIC_PASSWORD" = "true" ] && [ "$HAS_APPLE_TEAM_ID" = "true" ] || notary_id_ok=false
+
+          any_set=false
+          for flag in "$HAS_MAC_CERTIFICATE_FILE" "$HAS_MAC_CERTIFICATE_PASSWORD" \
+                      "$HAS_APPLE_API_KEY" "$HAS_APPLE_API_KEY_ID" "$HAS_APPLE_API_ISSUER" \
+                      "$HAS_APPLE_ID" "$HAS_APPLE_APP_SPECIFIC_PASSWORD" "$HAS_APPLE_TEAM_ID"; do
+            [ "$flag" = "true" ] && any_set=true
+          done
+
+          if [ "$cert_ok" = "true" ] && { [ "$notary_api_ok" = "true" ] || [ "$notary_id_ok" = "true" ]; }; then
+            echo "mode=developer-id" >> "$GITHUB_OUTPUT"
+            echo "Developer ID signing + notarization credentials detected; electron-builder will sign, notarize, and staple."
+            exit 0
+          fi
+
+          if [ "$any_set" = "false" ] && [ "${REQUIRE_MAC_SIGNING:-}" != "1" ]; then
+            echo "mode=adhoc" >> "$GITHUB_OUTPUT"
+            echo "::warning::No Apple signing secrets configured — building an AD-HOC signed macOS app. Gatekeeper will warn on first launch and the in-app updater will use the unsigned swap path. Add the secrets listed in docs/operations/macos-signing.md to ship signed, notarized, auto-updating builds."
+            exit 0
+          fi
+
+          # Either signing was required, or secrets are partially configured.
+          # List every missing piece by exact secret name.
+          echo "::error::macOS signing credentials are incomplete. Missing GitHub Actions secrets:"
+          [ "$HAS_MAC_CERTIFICATE_FILE" = "true" ]     || echo "::error::  - MAC_CERTIFICATE_FILE (base64-encoded Developer ID Application certificate .p12)"
+          [ "$HAS_MAC_CERTIFICATE_PASSWORD" = "true" ] || echo "::error::  - MAC_CERTIFICATE_PASSWORD (password for the .p12)"
+          if [ "$notary_api_ok" = "false" ] && [ "$notary_id_ok" = "false" ]; then
+            echo "::error::  - notarization credentials — add ONE full set:"
+            echo "::error::    App Store Connect API key (preferred):"
+            [ "$HAS_APPLE_API_KEY" = "true" ]    || echo "::error::      - APPLE_API_KEY (contents of the AuthKey_XXXXXXXXXX.p8 file, raw or base64)"
+            [ "$HAS_APPLE_API_KEY_ID" = "true" ] || echo "::error::      - APPLE_API_KEY_ID (the key's 10-character ID)"
+            [ "$HAS_APPLE_API_ISSUER" = "true" ] || echo "::error::      - APPLE_API_ISSUER (App Store Connect issuer UUID)"
+            echo "::error::    or Apple ID fallback:"
+            [ "$HAS_APPLE_ID" = "true" ]                    || echo "::error::      - APPLE_ID (Apple developer account email)"
+            [ "$HAS_APPLE_APP_SPECIFIC_PASSWORD" = "true" ] || echo "::error::      - APPLE_APP_SPECIFIC_PASSWORD (app-specific password from appleid.apple.com)"
+            [ "$HAS_APPLE_TEAM_ID" = "true" ]               || echo "::error::      - APPLE_TEAM_ID (10-character team ID)"
+          fi
+          echo "::error::One-time setup steps: docs/operations/macos-signing.md"
+          exit 1
 
       - name: Check out repository
         uses: actions/checkout@v5
@@ -78,18 +144,34 @@ jobs:
       - name: Rebuild native modules for Electron
         run: npx electron-rebuild -f -w better-sqlite3,@paymoapp/active-window,keytar
 
-      - name: Detect signing mode
-        id: signing
+      # notarytool wants the App Store Connect key as a file on disk, but a
+      # GitHub secret can only hold the key's contents. Accept the raw .p8 PEM
+      # or a base64-encoded copy and write it to a runner-local file.
+      - name: Materialize App Store Connect API key
+        id: notary
+        if: steps.signing.outputs.mode == 'developer-id'
         shell: bash
+        env:
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY }}
         run: |
           set -euo pipefail
-          if [ -n "${CSC_LINK:-}" ] && [ -n "${CSC_KEY_PASSWORD:-}" ]; then
-            echo "mode=developer-id" >> "$GITHUB_OUTPUT"
-            echo "Developer ID signing credentials detected; electron-builder will sign and notarize."
-          else
-            echo "mode=adhoc" >> "$GITHUB_OUTPUT"
-            echo "No Developer ID credentials; will build ad-hoc signed DMG. The afterSign hook will re-sign the bundle deeply so Gatekeeper does not report it as 'damaged'."
+          if [ -z "${APPLE_API_KEY_CONTENT:-}" ]; then
+            echo "api_key_path=" >> "$GITHUB_OUTPUT"
+            echo "No APPLE_API_KEY secret; notarization will use the APPLE_ID credential set."
+            exit 0
           fi
+          KEY_PATH="$RUNNER_TEMP/apple-notary-api-key.p8"
+          if printf '%s' "$APPLE_API_KEY_CONTENT" | grep -q 'BEGIN PRIVATE KEY'; then
+            printf '%s\n' "$APPLE_API_KEY_CONTENT" > "$KEY_PATH"
+          else
+            printf '%s' "$APPLE_API_KEY_CONTENT" | base64 --decode > "$KEY_PATH"
+            grep -q 'BEGIN PRIVATE KEY' "$KEY_PATH" || {
+              echo "::error::APPLE_API_KEY secret is neither a raw .p8 PEM nor base64 of one."
+              exit 1
+            }
+          fi
+          chmod 600 "$KEY_PATH"
+          echo "api_key_path=$KEY_PATH" >> "$GITHUB_OUTPUT"
 
       - name: Typecheck
         run: npm run typecheck
@@ -108,10 +190,20 @@ jobs:
         shell: bash
         env:
           SIGNING_MODE: ${{ steps.signing.outputs.mode }}
+          CSC_LINK: ${{ secrets.MAC_CERTIFICATE_FILE }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+          # notarytool needs a key FILE; the materialize step wrote the secret
+          # to disk and exported its path.
+          APPLE_API_KEY: ${{ steps.notary.outputs.api_key_path }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
           if [ "$SIGNING_MODE" = "adhoc" ]; then
-            # Job-level env declares CSC_LINK / APPLE_* as empty strings when
+            # The env block declares CSC_LINK / APPLE_* as empty strings when
             # the corresponding secrets are missing. electron-builder then
             # treats those empty strings as file paths and exits with
             # "<cwd> not a file". Unset every signing-related variable so
@@ -121,8 +213,43 @@ jobs:
             unset APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER
             unset APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
             export CSC_IDENTITY_AUTO_DISCOVERY=false
+          else
+            # Belt and braces: the electron-builder config re-validates the
+            # credential set and fails the build instead of silently shipping
+            # an unsigned or un-notarized release.
+            export DAYLENS_REQUIRE_MAC_SIGNING=1
+            # Drop any INCOMPLETE notarization credential set: a partial set
+            # (or empty-string env entries) would make electron-builder's
+            # notarytool step fail even though the other set is complete.
+            if [ -z "${APPLE_API_KEY:-}" ] || [ -z "${APPLE_API_KEY_ID:-}" ] || [ -z "${APPLE_API_ISSUER:-}" ]; then
+              unset APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER
+            fi
+            if [ -z "${APPLE_ID:-}" ] || [ -z "${APPLE_APP_SPECIFIC_PASSWORD:-}" ] || [ -z "${APPLE_TEAM_ID:-}" ]; then
+              unset APPLE_ID APPLE_APP_SPECIFIC_PASSWORD
+            fi
+            [ -n "${APPLE_TEAM_ID:-}" ] || unset APPLE_TEAM_ID
           fi
           npx electron-builder --mac zip dmg --publish never --config electron-builder.config.js
+
+      # A signed release that fails Gatekeeper is worse than no release: users
+      # download it and macOS refuses to open it. Verify the Developer ID
+      # signature, the stapled notarization ticket, and Gatekeeper's own
+      # assessment before anything is published.
+      - name: Verify signature and notarization
+        if: steps.signing.outputs.mode == 'developer-id'
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_BUNDLE="$(find dist-release -type d -name 'Daylens.app' -print -quit)"
+          test -n "$APP_BUNDLE"
+          /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
+          /usr/bin/codesign -dv --verbose=2 "$APP_BUNDLE" 2>&1 | grep -v '^$' || true
+          if /usr/bin/codesign -dv "$APP_BUNDLE" 2>&1 | grep -qi 'Signature=adhoc'; then
+            echo "::error::Bundle is ad-hoc signed but the developer-id pipeline ran — signing regressed."
+            exit 1
+          fi
+          xcrun stapler validate "$APP_BUNDLE"
+          spctl --assess --type execute --verbose=2 "$APP_BUNDLE"
 
       - name: Verify packaged native module layout
         run: node scripts/verify-packaged-natives.js dist-release
