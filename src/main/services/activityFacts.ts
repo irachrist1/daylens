@@ -18,16 +18,21 @@
 // block facts become the single store, only this file needs to change — the
 // callers already speak "corrected activity".
 import type Database from 'better-sqlite3'
-import type { AppCategory, AppSession, AppUsageSummary, WebsiteSummary } from '@shared/types'
+import type { AppCategory, AppSession, AppUsageSummary, LiveSession, WebsiteSummary } from '@shared/types'
 import { FOCUSED_CATEGORIES } from '@shared/types'
 import {
-  getAppSummariesForRange,
   getReconciledDomainIntervals,
-  getSessionsForRange,
   getWebsiteSummariesForRange,
   getWebsiteVisitsForRange,
   type CorrectionSpan,
 } from '../db/queries'
+import { resolveCanonicalApp } from '../lib/appIdentity'
+// activityFactsQuery imports the correction overlay back from this module;
+// both sides bind hoisted functions at call time only, so the cycle is inert.
+import {
+  queryCorrectedActivityFactsForRange,
+  type CorrectedActivityRangeFacts,
+} from '../core/query/activityFactsQuery'
 
 export type { CorrectionSpan }
 
@@ -167,18 +172,28 @@ function correctedPiecesForSession(
   return pieces
 }
 
-/** Raw sessions minus the spans of deleted Timeline blocks — the corrected
- *  session facts every totalling surface reads. */
+/** Corrected session facts for a window — the shared activity-fact query
+ *  with its evidence source, so callers that still merge the in-memory live
+ *  session can do it only in legacy mode (canonical projections already
+ *  contain the open live interval). */
+export function getCorrectedSessionFactsForRange(
+  db: Database.Database,
+  fromMs: number,
+  toMs: number,
+): Pick<CorrectedActivityRangeFacts, 'sessions' | 'evidenceSource'> {
+  const facts = queryCorrectedActivityFactsForRange(db, fromMs, toMs)
+  return { sessions: facts.sessions, evidenceSource: facts.evidenceSource }
+}
+
+/** Corrected sessions for a window — canonical focus_events preferred,
+ *  legacy app_sessions fallback, corrections applied once. The session facts
+ *  every totalling surface reads. */
 export function getCorrectedSessionsForRange(
   db: Database.Database,
   fromMs: number,
   toMs: number,
 ): AppSession[] {
-  // Match the Apps aggregate's 10-second capture floor. The generic session
-  // list uses a 15-second display floor; using it here silently lost a valid
-  // 10-second return while the Apps header still counted it.
-  const sessions = getSessionsForRange(db, fromMs, toMs, { minimumDurationSeconds: 10 })
-  return applyTimelineCorrectionsToSessions(db, sessions, fromMs, toMs)
+  return getCorrectedSessionFactsForRange(db, fromMs, toMs).sessions
 }
 
 /** Apply the Timeline review ledger to any session source, including the
@@ -195,24 +210,29 @@ export function applyTimelineCorrectionsToSessions(
   return sessions.flatMap((session) => correctedPiecesForSession(session, fromMs, toMs, spans, categorySpans))
 }
 
-/** App usage summaries with deleted Timeline blocks subtracted — what the
- *  Apps list, the Today totals, and the AI's app facts all read. */
-export function getCorrectedAppSummariesForRange(
-  db: Database.Database,
-  fromMs: number,
-  toMs: number,
-): AppUsageSummary[] {
-  const raw = getAppSummariesForRange(db, fromMs, toMs)
-  const corrected = getCorrectedSessionsForRange(db, fromMs, toMs)
+/** Aggregate corrected sessions into per-app usage summaries. Also feeds the
+ *  Timeline-day aggregation, which rolls block-partitioned sessions through
+ *  the same rollup. */
+export function aggregateAppSummaries(sessions: readonly AppSession[]): AppUsageSummary[] {
   const totals = new Map<string, {
+    bundleId: string
+    appName: string
+    canonicalAppId: string | null
     seconds: number
     categorySeconds: Map<AppCategory, number>
     sessionCount: number
     lastEnd: number | null
   }>()
-  for (const session of corrected) {
-    const key = session.canonicalAppId ?? session.bundleId
+  // The 2-minute-gap session-count rule is order-dependent; sort a copy so
+  // an out-of-order source (live merge, legacy fallback) can't undercount.
+  const ordered = [...sessions].sort((a, b) => a.startTime - b.startTime)
+  for (const session of ordered) {
+    const identity = resolveCanonicalApp(session.bundleId, session.appName)
+    const key = session.canonicalAppId ?? identity.canonicalAppId ?? session.bundleId
     const entry = totals.get(key) ?? {
+      bundleId: session.bundleId,
+      appName: identity.displayName || session.appName,
+      canonicalAppId: session.canonicalAppId ?? identity.canonicalAppId ?? null,
       seconds: 0,
       categorySeconds: new Map<AppCategory, number>(),
       sessionCount: 0,
@@ -224,13 +244,64 @@ export function getCorrectedAppSummariesForRange(
     entry.lastEnd = Math.max(entry.lastEnd ?? session.startTime, session.endTime ?? session.startTime + session.durationSeconds * 1_000)
     totals.set(key, entry)
   }
-  return raw.flatMap((summary) => {
-    const key = summary.canonicalAppId ?? summary.bundleId
-    const entry = totals.get(key)
-    if (!entry || entry.seconds <= 0) return []
-    const category = [...entry.categorySeconds.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? summary.category
-    return [{ ...summary, totalSeconds: entry.seconds, sessionCount: entry.sessionCount, category, isFocused: FOCUSED_CATEGORIES.includes(category) }]
+  return [...totals.entries()].flatMap(([key, entry]) => {
+    if (entry.seconds <= 0) return []
+    const category: AppCategory = [...entry.categorySeconds.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'uncategorized'
+    return [{
+      bundleId: entry.bundleId,
+      canonicalAppId: entry.canonicalAppId ?? key,
+      appName: entry.appName,
+      category,
+      totalSeconds: entry.seconds,
+      sessionCount: entry.sessionCount,
+      isFocused: FOCUSED_CATEGORIES.includes(category),
+    }]
   }).sort((a, b) => b.totalSeconds - a.totalSeconds)
+}
+
+/** App usage summaries with deleted Timeline blocks subtracted — what the
+ *  Apps list, the Today totals, and the AI's app facts all read. Pass the
+ *  in-memory live session so a legacy-fallback range still counts the
+ *  in-progress stretch; canonical facts already contain it. */
+export function getCorrectedAppSummariesForRange(
+  db: Database.Database,
+  fromMs: number,
+  toMs: number,
+  liveSession?: LiveSession | null,
+): AppUsageSummary[] {
+  const facts = getCorrectedSessionFactsForRange(db, fromMs, toMs)
+  const sessions = facts.evidenceSource === 'legacy' && liveSession
+    ? withClippedLiveSession(facts.sessions, liveSession, fromMs, toMs)
+    : facts.sessions
+  return aggregateAppSummaries(sessions)
+}
+
+function withClippedLiveSession(
+  sessions: readonly AppSession[],
+  live: LiveSession,
+  fromMs: number,
+  toMs: number,
+): AppSession[] {
+  const start = Math.max(live.startTime, fromMs)
+  const end = Math.min(Date.now(), toMs)
+  if (end <= start) return [...sessions]
+  return [...sessions, {
+    id: -1,
+    bundleId: live.bundleId,
+    appName: live.appName,
+    startTime: start,
+    endTime: end,
+    durationSeconds: Math.max(1, Math.round((end - start) / 1000)),
+    category: live.category,
+    isFocused: FOCUSED_CATEGORIES.includes(live.category),
+    windowTitle: live.windowTitle ?? null,
+    rawAppName: live.rawAppName ?? live.appName,
+    canonicalAppId: live.canonicalAppId ?? null,
+    appInstanceId: live.appInstanceId ?? live.bundleId,
+    captureSource: live.captureSource ?? 'foreground_poll',
+    endedReason: null,
+    captureVersion: 2,
+  }]
 }
 
 export interface CorrectedDomainInterval {
@@ -261,7 +332,13 @@ export function getCorrectedDomainIntervals(
   domainFilter?: (domain: string) => boolean,
 ): CorrectedDomainInterval[] {
   const ignored = getIgnoredBlockSpansForRange(db, fromMs, toMs)
-  return getReconciledDomainIntervals(db, fromMs, toMs, domainFilter).flatMap((interval) =>
+  // Page credit clips against the same corrected foreground ownership the app
+  // totals are built from, so a domain's time can never exceed its browser's.
+  const reconciled = getReconciledDomainIntervals(
+    db, fromMs, toMs, domainFilter,
+    (chunkFromMs, chunkToMs) => getCorrectedSessionsForRange(db, chunkFromMs, chunkToMs),
+  )
+  return reconciled.flatMap((interval) =>
     subtractSpansFromInterval(interval.start, interval.end, ignored).map((piece) => ({
       domain: interval.domain,
       visitId: interval.visitId,
