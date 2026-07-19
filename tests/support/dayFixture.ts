@@ -4,9 +4,11 @@ import type { FocusEventType } from '../../src/main/core/evidence/focusEvent.ts'
 import type {
   AppCategory,
   CalendarSignal,
+  TimelineBlockReviewState,
   WorkIntentRole,
   WorkKind,
 } from '../../src/shared/types.ts'
+import { isWorkIntentRole } from '../../src/shared/types.ts'
 
 export const DAY_FIXTURE_SCHEMA_VERSION = 1 as const
 
@@ -89,6 +91,34 @@ export interface ExpectedDayAnswer {
   prohibitedDisclosures?: string[]
 }
 
+export const DAY_FIXTURE_PRIVACY_SURFACES = [
+  'sessions',
+  'pending evidence',
+  'canonical evidence',
+  'Timeline',
+  'Apps',
+  'search',
+  'wrap',
+  'memory',
+  'AI context',
+  'MCP',
+  'sync',
+] as const
+
+export type DayFixturePrivacySurface = typeof DAY_FIXTURE_PRIVACY_SURFACES[number]
+
+export interface KnownIssueDeferral {
+  issue: string
+  defectSignatures: string[]
+}
+
+export function isKnownIssueDefect(
+  deferrals: readonly KnownIssueDeferral[],
+  defect: string,
+): boolean {
+  return deferrals.some((deferral) => deferral.defectSignatures.includes(defect))
+}
+
 export interface DayFixtureExpected {
   episodes?: ExpectedDayEpisode[]
   wrap?: ExpectedDayWrap
@@ -99,7 +129,12 @@ export interface DayFixtureExpected {
   }>
   meetings?: Array<{
     title: string
+    /** Restrict the match to one evidence source. 'timeline' proves a real
+     *  meeting block was derived; 'calendar' asserts the stored record stays
+     *  visible even when the device shows no attendance. Omit to accept either. */
+    source?: 'calendar' | 'timeline'
     start?: string
+    startToleranceMinutes?: number
     durationMinutes?: number
     durationToleranceMinutes?: number
   }>
@@ -109,9 +144,49 @@ export interface DayFixtureExpected {
   answers?: ExpectedDayAnswer[]
   privacy?: {
     prohibitedTerms?: string[]
-    prohibitedSurfaces?: string[]
+    prohibitedSurfaces?: DayFixturePrivacySurface[]
   }
+  knownIssues?: KnownIssueDeferral[]
 }
+
+export interface CorrectBlockMutation {
+  kind: 'correctBlock'
+  matchLabelIncludes: string[]
+  state?: Extract<TimelineBlockReviewState, 'corrected' | 'approved'>
+  correctedLabel?: string
+  correctedIntentRole?: WorkIntentRole
+  correctedIntentSubject?: string
+  correctedCategory?: AppCategory
+}
+
+export interface IgnoreBlockMutation {
+  kind: 'ignoreBlock'
+  matchLabelIncludes: string[]
+}
+
+export interface ExcludeAndPurgeAppMutation {
+  kind: 'excludeAndPurgeApp'
+  appName?: string
+  bundleId?: string
+}
+
+export interface ExcludeAndPurgeSiteMutation {
+  kind: 'excludeAndPurgeSite'
+  domain: string
+}
+
+export type DayFixtureMutation =
+  | CorrectBlockMutation
+  | IgnoreBlockMutation
+  | ExcludeAndPurgeAppMutation
+  | ExcludeAndPurgeSiteMutation
+
+const MUTATION_KINDS = new Set<DayFixtureMutation['kind']>([
+  'correctBlock',
+  'ignoreBlock',
+  'excludeAndPurgeApp',
+  'excludeAndPurgeSite',
+])
 
 interface DayFixtureBase {
   schemaVersion: typeof DAY_FIXTURE_SCHEMA_VERSION
@@ -127,7 +202,7 @@ interface DayFixtureBase {
     connectors?: Record<string, unknown>
     permissions?: Record<string, unknown>
   }
-  mutations?: Array<Record<string, unknown>>
+  mutations?: DayFixtureMutation[]
   expected?: DayFixtureExpected
   review?: {
     state: 'draft' | 'accepted'
@@ -255,6 +330,93 @@ export function normalizeDayFixture(value: unknown, filePath = '<memory>'): DayF
   }
   if (!isRecord(value.input) || typeof value.input.kind !== 'string') {
     throw fixtureError(filePath, 'missing input.kind')
+  }
+  if (value.mutations != null) {
+    if (!Array.isArray(value.mutations)) throw fixtureError(filePath, 'mutations must be an array')
+    for (const mutation of value.mutations) {
+      if (!isRecord(mutation) || !MUTATION_KINDS.has(mutation.kind as DayFixtureMutation['kind'])) {
+        throw fixtureError(filePath, `unsupported mutation ${JSON.stringify(mutation)}`)
+      }
+      if (
+        (mutation.kind === 'correctBlock' || mutation.kind === 'ignoreBlock') &&
+        (!Array.isArray(mutation.matchLabelIncludes) || mutation.matchLabelIncludes.length === 0)
+      ) {
+        throw fixtureError(filePath, `${mutation.kind} mutation requires matchLabelIncludes`)
+      }
+      if (mutation.kind === 'correctBlock') {
+        if (mutation.state != null && mutation.state !== 'corrected' && mutation.state !== 'approved') {
+          throw fixtureError(filePath, `correctBlock state must be corrected or approved`)
+        }
+        for (const field of [
+          'correctedLabel',
+          'correctedIntentSubject',
+          'correctedCategory',
+        ] as const) {
+          if (mutation[field] != null && typeof mutation[field] !== 'string') {
+            throw fixtureError(filePath, `correctBlock ${field} must be a string`)
+          }
+        }
+        if (
+          mutation.correctedIntentRole != null &&
+          !isWorkIntentRole(mutation.correctedIntentRole)
+        ) {
+          throw fixtureError(
+            filePath,
+            `correctBlock correctedIntentRole must be one of execution, research, communication, review, coordination, ambient, ambiguous`,
+          )
+        }
+      }
+      if (
+        mutation.kind === 'excludeAndPurgeApp' &&
+        typeof mutation.appName !== 'string' &&
+        typeof mutation.bundleId !== 'string'
+      ) {
+        throw fixtureError(filePath, 'excludeAndPurgeApp mutation requires appName or bundleId')
+      }
+      if (mutation.kind === 'excludeAndPurgeSite' && typeof mutation.domain !== 'string') {
+        throw fixtureError(filePath, 'excludeAndPurgeSite mutation requires domain')
+      }
+    }
+  }
+
+  if (value.expected != null) {
+    if (!isRecord(value.expected)) throw fixtureError(filePath, 'expected must be an object')
+    if (value.expected.privacy != null) {
+      if (!isRecord(value.expected.privacy)) {
+        throw fixtureError(filePath, 'expected.privacy must be an object')
+      }
+      const surfaces = value.expected.privacy.prohibitedSurfaces
+      if (surfaces != null) {
+        if (!Array.isArray(surfaces)) {
+          throw fixtureError(filePath, 'expected.privacy.prohibitedSurfaces must be an array')
+        }
+        const allowed = new Set<string>(DAY_FIXTURE_PRIVACY_SURFACES)
+        for (const surface of surfaces) {
+          if (typeof surface !== 'string' || !allowed.has(surface)) {
+            throw fixtureError(filePath, `unsupported prohibited surface ${JSON.stringify(surface)}`)
+          }
+        }
+      }
+    }
+    if (value.expected.knownIssues != null) {
+      if (!Array.isArray(value.expected.knownIssues)) {
+        throw fixtureError(filePath, 'expected.knownIssues must be an array')
+      }
+      for (const deferral of value.expected.knownIssues) {
+        if (
+          !isRecord(deferral) ||
+          typeof deferral.issue !== 'string' ||
+          deferral.issue.trim() === '' ||
+          !Array.isArray(deferral.defectSignatures) ||
+          deferral.defectSignatures.length === 0 ||
+          deferral.defectSignatures.some(
+            (signature) => typeof signature !== 'string' || signature.trim() === '',
+          )
+        ) {
+          throw fixtureError(filePath, 'knownIssues entries require issue and non-empty defectSignatures')
+        }
+      }
+    }
   }
 
   if (value.input.kind === 'normalized-evidence') {

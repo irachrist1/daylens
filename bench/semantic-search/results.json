@@ -1,0 +1,193 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-07-19T08:20:03.877Z",
+  "mode": "full",
+  "decisionEligible": true,
+  "offlineEnforced": true,
+  "corpus": {
+    "seed": "0x0daa11e5",
+    "records": 109500,
+    "recordsPerDay": 300,
+    "days": 365,
+    "dims": 384,
+    "probes": 24,
+    "queryRuns": 50,
+    "topK": 10,
+    "basis": "300 records/day matches the existing heavy-year query fixture website-visit volume; record content is synthetic."
+  },
+  "runtime": {
+    "electron": "34.5.8",
+    "node": "v20.19.1",
+    "platform": "darwin",
+    "arch": "arm64",
+    "cpu": "Apple M2 Pro",
+    "logicalCpus": 10,
+    "memoryMb": 16384,
+    "dependencies": {
+      "transformersJs": "3.8.1",
+      "betterSqlite3": "12.8.0",
+      "sqliteVec": "0.1.9"
+    }
+  },
+  "powerStart": {
+    "source": "battery",
+    "percent": 80
+  },
+  "powerEnd": {
+    "source": "battery",
+    "percent": 74
+  },
+  "batteryRun": true,
+  "results": [
+    {
+      "model": "all-MiniLM-L6-v2 (q8)",
+      "modelId": "Xenova/all-MiniLM-L6-v2",
+      "modelRevision": "751bff37182d3f1213fa05d7196b954e230abad9",
+      "pooling": "mean",
+      "queryInstruction": null,
+      "modelFiles": [
+        {
+          "path": "config.json",
+          "bytes": 650,
+          "sha256": "7135149f7cffa1a573466c6e4d8423ed73b62fd2332c575bf738a0d033f70df7"
+        },
+        {
+          "path": "tokenizer.json",
+          "bytes": 711661,
+          "sha256": "da0e79933b9ed51798a3ae27893d3c5fa4a201126cef75586296df9b4d2c62a0"
+        },
+        {
+          "path": "tokenizer_config.json",
+          "bytes": 366,
+          "sha256": "9261e7d79b44c8195c1cada2b453e55b00aeb81e907a6664974b4d7776172ab3"
+        },
+        {
+          "path": "onnx/model_quantized.onnx",
+          "bytes": 22972370,
+          "sha256": "afdb6f1a0e45b715d0bb9b11772f032c399babd23bfc31fed1c170afc848bdb1"
+        }
+      ],
+      "loadMs": 310,
+      "build": {
+        "wallSec": 221.15,
+        "recordsPerSec": 495,
+        "cpuSec": 656.4,
+        "cpuSecPer1k": 5.99
+      },
+      "memory": {
+        "baselineMb": 84,
+        "peakMb": 352,
+        "increaseMb": 268,
+        "peakMethod": "process.resourceUsage().maxRSS"
+      },
+      "databaseMb": 163.07,
+      "sqliteVersion": "3.51.3",
+      "sqliteVecVersion": "v0.1.9",
+      "query": {
+        "queryRuns": 50,
+        "queryEmbedMs": {
+          "p50": 2.12,
+          "p95": 3.79,
+          "max": 4.46
+        },
+        "sqliteVecSearchMs": {
+          "p50": 59.19,
+          "p95": 78.38,
+          "max": 277.86
+        },
+        "endToEndMs": {
+          "p50": 61.37,
+          "p95": 80.37,
+          "max": 279.92
+        },
+        "firstQueryAfterReopenMs": 279.92,
+        "sqliteRecallAt10": "17/24",
+        "validResultSets": 50
+      },
+      "cpuSec": 661.34,
+      "powerStart": {
+        "source": "battery",
+        "percent": 80
+      },
+      "powerEnd": {
+        "source": "battery",
+        "percent": 78
+      }
+    },
+    {
+      "model": "bge-small-en-v1.5 (q8, recommended query instruction)",
+      "modelId": "Xenova/bge-small-en-v1.5",
+      "modelRevision": "ea104dacec62c0de699686887e3f920caeb4f3e3",
+      "pooling": "cls",
+      "queryInstruction": "Represent this sentence for searching relevant passages: ",
+      "modelFiles": [
+        {
+          "path": "config.json",
+          "bytes": 683,
+          "sha256": "fa73f90bf92c8cace1fbcb709626306f2bdbc9ea3e5b5f94b440df9b6aa56350"
+        },
+        {
+          "path": "tokenizer.json",
+          "bytes": 711396,
+          "sha256": "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66"
+        },
+        {
+          "path": "tokenizer_config.json",
+          "bytes": 366,
+          "sha256": "9261e7d79b44c8195c1cada2b453e55b00aeb81e907a6664974b4d7776172ab3"
+        },
+        {
+          "path": "onnx/model_quantized.onnx",
+          "bytes": 34014426,
+          "sha256": "6c9c6101a956d62dfb5e7190c538226c0c5bb9cb27b651234b6df063ee7dbfe4"
+        }
+      ],
+      "loadMs": 230,
+      "build": {
+        "wallSec": 212.52,
+        "recordsPerSec": 515,
+        "cpuSec": 939.2,
+        "cpuSecPer1k": 8.58
+      },
+      "memory": {
+        "baselineMb": 84,
+        "peakMb": 394,
+        "increaseMb": 310,
+        "peakMethod": "process.resourceUsage().maxRSS"
+      },
+      "databaseMb": 163.07,
+      "sqliteVersion": "3.51.3",
+      "sqliteVecVersion": "v0.1.9",
+      "query": {
+        "queryRuns": 50,
+        "queryEmbedMs": {
+          "p50": 4.2,
+          "p95": 8.04,
+          "max": 9.08
+        },
+        "sqliteVecSearchMs": {
+          "p50": 58.12,
+          "p95": 66.56,
+          "max": 83.39
+        },
+        "endToEndMs": {
+          "p50": 62.66,
+          "p95": 75.64,
+          "max": 88.42
+        },
+        "firstQueryAfterReopenMs": 88.42,
+        "sqliteRecallAt10": "15/24",
+        "validResultSets": 50
+      },
+      "cpuSec": 944.65,
+      "powerStart": {
+        "source": "battery",
+        "percent": 78
+      },
+      "powerEnd": {
+        "source": "battery",
+        "percent": 74
+      }
+    }
+  ]
+}

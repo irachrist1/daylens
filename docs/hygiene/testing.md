@@ -33,12 +33,14 @@ npm run verify:remote-web
 npm run timeline:eval -- --strict
 ```
 
-- `verify:synthetic-day` feeds one synthetic workday through foreground and browser capture, canonical focus evidence, projection, Timeline, Apps, search, memory, AI tools, corrections, connector collection, and the current offline sync boundary. It fails if private or excluded facts reach storage or any downstream fact surface.
+- `verify:synthetic-day` feeds synthetic days through foreground and browser capture, canonical focus evidence, projection, Timeline, Apps, search, memory, AI tools, corrections, connector collection, and the current offline sync boundary. It fails if private or excluded facts reach storage or any downstream fact surface. The reference workday keeps a deep hand-written test; every other capture-events fixture runs through the data-driven representative-day runner, including its mutations and privacy rules.
 - `verify:ai-turn` runs the production `sendMessage` path with only the model provider replaced. It verifies context assembly, tool execution, source-backed citation checking, streaming, persistence, and final thread state.
 - `verify:remote-web` drives the frozen production remote HTTP and Convex paths against an in-memory network/database adapter, then reads them through production web presentation code. It covers sanitization, deduplication, omission deletion, failure/retry, revocation, range behavior, and Apps presentation. It does not claim to verify the future encrypted desktop sync client, which does not exist yet.
 - strict Timeline evaluation makes segmentation, label, intent, and wrap invariants a hard failure rather than a score-only diagnostic.
 
 Synthetic and representative-day inputs use the versioned `DayFixture` contract in `tests/support/dayFixture.ts`. Normalized Timeline evidence, source-boundary capture events, and private database copies are input variants of that contract; expected Timeline episodes, Apps facts, meetings, search, memory, AI answers, and privacy rules share its expected-result model. Fixtures live under `tests/timeline-eval/fixtures`. The loader accepts the original unversioned Timeline JSON shape and normalizes it before evaluation.
+
+The representative day set from the agent-runtime specification is executable: a meeting-heavy day, two clients on the same tools, mixed work/personal/entertainment, missing capture, contradictory calendar-versus-device evidence, corrections that conflict with later automated inference, and excluded-plus-deleted evidence. A fixture's `mutations` replay the person's edits through production paths — block corrections and deletions (`writeTimelineBlockReview`), and app or site history purges (`deleteHistoryForApp`/`deleteHistoryForSite`) — before the day is re-derived, so automated inference runs again after the edits. The Timeline gate scores episodes, labels, intent, wraps, and the expected facts (Apps, meetings, search, totals); prohibited privacy terms and failed mutations fail the run even without `--strict`. The `answers` entries (required facts, acceptable interpretations, prohibited claims, required sources) are the accepted expectations for the model-facing evaluation gates; the offline gates enforce their deterministic counterparts through the search and privacy rules.
 
 ## Private real-day replay
 
@@ -99,7 +101,7 @@ The packaged-runtime workflows create real foreground and fullscreen test window
 ## Database and migration changes
 
 - Add forward-only migrations.
-- Test a fresh database and an upgraded representative database.
+- Test a fresh database and an upgraded representative database. `tests/upgradedDatabaseMigration.test.ts` runs in the hermetic suite: it boots the frozen schema in `tests/fixtures/upgraded-database/schema-v25.sql`, seeds a representative two-client day plus legacy AI-thread data, runs the production startup sequence and full migration ladder, and verifies the day, Apps, search, legacy threads, and post-upgrade corrections survive.
 - Preserve corrections, settings, and existing activity.
 - Verify failed or interrupted migration behavior where relevant.
 - Never run tests against the person’s live database unless a harness explicitly makes a read-only copy.

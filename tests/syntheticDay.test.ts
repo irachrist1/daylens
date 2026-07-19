@@ -5,15 +5,9 @@ import { fileURLToPath } from 'node:url'
 import { isCaptureEventsDayFixture, loadDayFixture } from './support/dayFixture.ts'
 import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { setTestDb, clearTestDb } from './support/database-stub.mjs'
-import { __resetSettings, __setSettings, getSettings } from './support/settings-stub.mjs'
-import { __pollForTest, __setTrackingFsmTestHarness } from '../src/main/services/tracking.ts'
-import {
-  ActiveBrowserContextTracker,
-  __setActiveBrowserContextTrackerForTest,
-} from '../src/main/services/browserContext.ts'
-import { trackingControlsStateFromSettings } from '../src/shared/trackingControls.ts'
-import { shouldCaptureFocusEvent } from '../src/main/services/focusCapture.ts'
-import { insertFocusEvents } from '../src/main/db/focusEventRepository.ts'
+import { __resetSettings } from './support/settings-stub.mjs'
+import { driveCaptureDay, fixtureClockMs } from './support/captureDay.ts'
+import { findDatabaseTextMatches } from './support/dayFixturePrivacy.ts'
 import { projectDay } from '../src/main/core/projections/chunk2.ts'
 import { writeTimelineBlockReview } from '../src/main/services/workBlocks.ts'
 import { materializeTimelineDayProjection } from '../src/main/core/query/projections.ts'
@@ -22,7 +16,7 @@ import { addWorkMemoryFact, chatMemoryPromptBlock } from '../src/main/services/w
 import { buildDaylensTools } from '../src/main/agent/daylensTools.ts'
 import { collectExternalSignals, getExternalSignal } from '../src/main/services/externalSignals.ts'
 import { syncNowForQuit } from '../src/main/services/syncUploader.ts'
-import type { FocusEvent } from '../src/main/core/evidence/focusEvent.ts'
+import { executeTool } from '../src/main/services/aiTools.ts'
 import type { CalendarSignal } from '../src/shared/types.ts'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -35,78 +29,16 @@ if (!isCaptureEventsDayFixture(fixture)) {
 const calendar = fixture.context?.calendar
 if (!calendar) throw new Error('reference-workday must include calendar context')
 
-function atMs(clock: string): number {
-  const [year, month, day] = fixture.date.split('-').map(Number)
-  const [hour, minute] = clock.split(':').map(Number)
-  return new Date(year, month - 1, day, hour, minute, 0, 0).getTime()
-}
-
 test('synthetic day agrees from source boundaries through every local fact surface', async () => {
   const db = createProductionTestDatabase()
-  const clock = { now: atMs(fixture.input.foregroundSamples[0].at) }
-  let foreground = fixture.input.foregroundSamples[0]
-  let rejectedFocusEvents = 0
-
   setTestDb(db)
-  __setSettings(fixture.input.settings)
-  __setActiveBrowserContextTrackerForTest(
-    new ActiveBrowserContextTracker(
-      () => foreground.tab ?? null,
-      (snapshot) => /chrome/i.test(snapshot.appName),
-    ),
-  )
-  __setTrackingFsmTestHarness({
-    platform: 'darwin',
-    now: () => clock.now,
-    idleSeconds: () => 0,
-    activeWindow: () => ({
-      title: foreground.title,
-      application: foreground.application,
-      path: foreground.path,
-      pid: 42,
-      icon: '',
-    }),
-  })
 
   try {
-    for (let index = 0; index < fixture.input.foregroundSamples.length; index += 1) {
-      const next = fixture.input.foregroundSamples[index]
-      const nextMs = atMs(next.at)
-      while (clock.now + 30_000 < nextMs) {
-        clock.now += 30_000
-        await __pollForTest()
-      }
-      foreground = next
-      clock.now = nextMs
-      await __pollForTest()
-    }
-
-    const controls = trackingControlsStateFromSettings(getSettings())
-    const accepted: FocusEvent[] = []
-    for (const [index, raw] of fixture.input.focusEvents.entries()) {
-      const event: FocusEvent = {
-        ts_ms: atMs(raw.at),
-        mono_ns: index + 1,
-        event_type: raw.eventType,
-        app_bundle_id: raw.appBundleId,
-        app_name: raw.appName,
-        pid: raw.appName ? 100 + index : null,
-        window_title: raw.windowTitle,
-        url: null,
-        page_title: null,
-        source: 'nsworkspace_event',
-        confidence: 'observed',
-        platform: 'darwin',
-        schema_ver: 1,
-      }
-      if (shouldCaptureFocusEvent(event, controls)) accepted.push(event)
-      else rejectedFocusEvents += 1
-    }
-    insertFocusEvents(db, accepted)
+    const { rejectedFocusEvents } = await driveCaptureDay(db, fixture)
 
     const projection = projectDay(db, fixture.date, {
       finalize: true,
-      now: new Date(atMs('23:59')),
+      now: new Date(fixtureClockMs(fixture, '23:59')),
     })
     assert.equal(projection.skipped, false)
     assert.ok(
@@ -138,7 +70,7 @@ test('synthetic day agrees from source boundaries through every local fact surfa
     for (const fact of fixture.context?.memoryFacts ?? []) addWorkMemoryFact(db, fact)
     assert.match(chatMemoryPromptBlock(db, 'What should I know about Acme?'), /Atlas project/)
 
-    const fromMs = atMs('00:00')
+    const fromMs = fixtureClockMs(fixture, '00:00')
     const toMs = fromMs + 86_400_000
     const timeline = materializeTimelineDayProjection(db, fixture.date, null)
     const apps = getAppSummariesForRange(db, fromMs, toMs)
@@ -160,35 +92,13 @@ test('synthetic day agrees from source boundaries through every local fact surfa
       'private or excluded label leaked into Timeline',
     )
 
-    const forbiddenCounts = {
-      sessions: (
-        db
-          .prepare(
-            "SELECT COUNT(*) AS n FROM app_sessions WHERE app_name = 'SecretApp' OR window_title LIKE '%Private customer%'",
-          )
-          .get() as { n: number }
-      ).n,
-      visits: (
-        db
-          .prepare("SELECT COUNT(*) AS n FROM website_visits WHERE domain = 'excluded.example'")
-          .get() as { n: number }
-      ).n,
-      focus: (
-        db
-          .prepare(
-            "SELECT COUNT(*) AS n FROM focus_events WHERE app_name = 'SecretApp' OR window_title LIKE '%Incognito%'",
-          )
-          .get() as { n: number }
-      ).n,
-      derived: (
-        db
-          .prepare(
-            "SELECT COUNT(*) AS n FROM derived_sessions WHERE app_name = 'SecretApp' OR window_title LIKE '%Incognito%'",
-          )
-          .get() as { n: number }
-      ).n,
+    for (const term of fixture.expected?.privacy?.prohibitedTerms ?? []) {
+      assert.deepEqual(
+        findDatabaseTextMatches(db, term),
+        [],
+        `${term} leaked into a database surface`,
+      )
     }
-    assert.deepEqual(forbiddenCounts, { sessions: 0, visits: 0, focus: 0, derived: 0 })
 
     const search = searchAll(db, 'Acme', {
       startDate: fixture.date,
@@ -214,6 +124,14 @@ test('synthetic day agrees from source boundaries through every local fact surfa
     ).execute({ date: fixture.date }, {})
     assert.match(JSON.stringify(overview), /Acme/)
     assert.doesNotMatch(JSON.stringify(overview), /SecretApp|Private customer|excluded\.example/i)
+    const mcp = executeTool('getDaySummary', { date: fixture.date }, db)
+    assert.doesNotMatch(JSON.stringify(mcp), /SecretApp|Private customer|excluded\.example/i)
+    for (const term of fixture.expected?.privacy?.prohibitedTerms ?? []) {
+      assert.ok(
+        !chatMemoryPromptBlock(db, term).toLowerCase().includes(term.toLowerCase()),
+        `${term} leaked into memory`,
+      )
+    }
 
     const firstBlock = timeline.blocks[0]
     assert.ok(firstBlock, 'synthetic Timeline produced no blocks')
@@ -237,8 +155,6 @@ test('synthetic day agrees from source boundaries through every local fact surfa
       'the accepted offline sync boundary must not mutate or upload local facts',
     )
   } finally {
-    __setTrackingFsmTestHarness(null)
-    __setActiveBrowserContextTrackerForTest(null)
     __resetSettings()
     clearTestDb()
     db.close()

@@ -92,6 +92,7 @@ test('poll: a private window creates no app session and cuts the one before it',
     ))
     const clock = { now: BASE, lastInput: BASE }
     __setTrackingFsmTestHarness({
+      platform: 'darwin',
       now: () => clock.now,
       idleSeconds: () => Math.max(0, (clock.now - clock.lastInput) / 1_000),
       // Poll canonical emission is macOS/Windows-only; pin the harness so the
