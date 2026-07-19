@@ -2,8 +2,16 @@ name: CI
 
 on:
   pull_request:
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
   push:
     branches: [main]
+
+# Cancel superseded runs on PRs and feature branches; never cancel main pushes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   typecheck:
@@ -54,9 +62,25 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libsecret-1-dev libnotify-dev libx11-dev libxss-dev libxtst-dev xvfb xauth dbus-x11
       - run: npm ci --ignore-scripts
+      - name: Cache Electron binary download
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/electron
+          key: electron-cache-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - name: Install Electron binary
         run: node node_modules/electron/install.js
+      - name: Cache native module builds
+        id: native-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.electron-gyp
+            node_modules/better-sqlite3/build/Release
+            node_modules/keytar/build/Release
+            node_modules/@paymoapp/active-window/build/Release
+          key: native-build-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - name: Rebuild native modules for Electron
+        if: steps.native-cache.outputs.cache-hit != 'true'
         run: npx electron-rebuild -f -w better-sqlite3,@paymoapp/active-window,keytar
       # ELECTRON_RUN_AS_NODE means no display is needed, but wrap in xvfb-run so
       # the Electron binary never trips on a missing X server during startup.
@@ -81,11 +105,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --ignore-scripts
+      # Root contract:check also covers sibling-repo drift; the apps/web-side
+      # contract:check, manifest:check, typecheck, and build are owned by the
+      # Remote Parity workflow (remote-parity.yml) and are not repeated here.
       - run: npm run contract:check
-      - run: npm run web:contract:check
-      - run: npm --prefix apps/web run manifest:check
-      - run: npm run web:typecheck
-      - run: npm run web:build
       - run: npm run billing:check
       - run: npm run billing:sandbox
 
@@ -99,10 +122,27 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci --ignore-scripts
+      - name: Cache Electron binary download
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\electron\Cache
+          key: electron-cache-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - name: Install Electron binary
         run: node node_modules/electron/install.js
-      - name: Rebuild native modules for Electron
-        run: npx electron-rebuild -f -w better-sqlite3,@paymoapp/active-window,keytar
-      - run: npm run typecheck
+      - name: Cache native module builds
+        id: native-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.electron-gyp
+            node_modules/better-sqlite3/build/Release
+            node_modules/keytar/build/Release
+            node_modules/@paymoapp/active-window/build/Release
+          key: native-build-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      # Typecheck is platform-independent and owned by the typecheck job above.
       # Hermetic suite runs on ubuntu-latest/test; this job only proves Windows
-      # native modules compile under electron-rebuild.
+      # native modules compile under electron-rebuild (skipped when the exact
+      # lockfile already compiled successfully and is cached).
+      - name: Rebuild native modules for Electron
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        run: npx electron-rebuild -f -w better-sqlite3,@paymoapp/active-window,keytar

@@ -2,10 +2,12 @@ name: Remote Parity
 
 on:
   pull_request:
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
   push:
     branches:
       - main
-      - master
   workflow_dispatch:
     inputs:
       smoke_base_url:
@@ -14,6 +16,11 @@ on:
       smoke_session_cookie:
         description: "Optional session cookie for authenticated staging smoke tests"
         required: false
+
+# Cancel superseded runs on PRs and feature branches; never cancel main pushes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   validate:
