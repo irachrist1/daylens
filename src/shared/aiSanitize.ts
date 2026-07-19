@@ -6,49 +6,7 @@
 // the user knows something was filtered. Both are last-line defenses; capture-
 // side hygiene strips most leak vectors before they reach either layer.
 
-interface Pattern {
-  name: string
-  regex: RegExp
-}
-
-// Order matters. Specific provider shapes run first so they take credit for
-// the redaction in the analytics counter; the generic backstops mop up the
-// rest. Each regex is /g so we replace every occurrence in a string.
-const PATTERNS: Pattern[] = [
-  // 1. URL query strings (and fragments) on http(s) URLs. Also any bare
-  // ?code=… style query when it follows a path-looking prefix.
-  { name: 'url_query', regex: /(https?:\/\/[^\s?#]+)[?#][^\s)\]"'<>]*/gi },
-
-  // 2. JWT — three base64url segments separated by dots, starting with eyJ
-  // (a base64 of "{"...). Must run before generic base64 backstop.
-  { name: 'jwt', regex: /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g },
-
-  // 3. Provider-specific token shapes.
-  { name: 'openai_key', regex: /sk-[A-Za-z0-9_-]{20,}/g },
-  { name: 'slack_token', regex: /xox[abprs]-[A-Za-z0-9-]{10,}/g },
-  { name: 'google_oauth', regex: /ya29\.[A-Za-z0-9_.-]+/g },
-  { name: 'github_pat', regex: /gh[pousr]_[A-Za-z0-9]{30,}/g },
-  { name: 'aws_access_key', regex: /\bAKIA[0-9A-Z]{16}\b/g },
-
-  // 4. OAuth callback "code=…" / "state=…" / "access_token=…" parameters
-  // even when they appear bare (e.g. captured into a window title without
-  // the leading URL). Catches the reproduced leak shape.
-  { name: 'oauth_param', regex: /\b(?:code|state|access_token|id_token|refresh_token|token|client_secret|api_key)=[A-Za-z0-9_.\-+/=%]{8,}/gi },
-
-  // 5. Hex blobs ≥32 chars (sha-256 hashes, AWS secrets without the prefix,
-  // long capture cookies). Word-boundary anchored to avoid clipping into
-  // surrounding text.
-  { name: 'hex_blob', regex: /\b[0-9a-fA-F]{32,}\b/g },
-
-  // 6. Base64-ish ≥24 chars with mixed case+digits and no whitespace.
-  // Requires at least one digit and one of each case to avoid hitting plain
-  // English words. The character class includes the URL-safe variants.
-  { name: 'base64_blob', regex: /\b(?=[A-Za-z0-9+/=_-]*\d)(?=[A-Za-z0-9+/=_-]*[A-Z])(?=[A-Za-z0-9+/=_-]*[a-z])[A-Za-z0-9+/=_-]{24,}\b/g },
-
-  // 7. Generic high-entropy backstop: ≥32 chars of [A-Za-z0-9_-] with no
-  // whitespace. Runs last so the more-specific patterns claim the match.
-  { name: 'generic_token', regex: /\b[A-Za-z0-9_-]{32,}\b/g },
-]
+import { CREDENTIAL_PATTERNS } from './credentialPatterns'
 
 export interface SanitizeReport {
   redactionCount: number
@@ -60,7 +18,7 @@ function applyPatterns(input: string, replacement: string | ((name: string) => s
   let redactionCount = 0
   const patternsHit: string[] = []
 
-  for (const { name, regex } of PATTERNS) {
+  for (const { name, regex } of CREDENTIAL_PATTERNS) {
     // Reset in case any caller passed a stateful regex by accident; ours are
     // module-local so this is defensive.
     regex.lastIndex = 0
