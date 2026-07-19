@@ -5,12 +5,15 @@ import {
   getAppCharacter,
   getAllAppsForLabeling,
   getCategoryOverrideEffect,
+  getLatestSessionAppNames,
+  getLegacySessionTitleStats,
   getSessionsForRange,
   getSessionsForApp,
   setCategoryOverride,
   clearCategoryOverride,
   getCategoryOverrides,
 } from '../db/queries'
+import { getNativeCaptureTitleStats } from '../db/focusEventRepository'
 import {
   getWorkMemoryProfile,
   updateWorkMemoryFact,
@@ -209,20 +212,8 @@ function buildAppNameMap(db: ReturnType<typeof getDb>, bundleIds: string[]): Map
 
   const unresolvedBundleIds = uniqueBundleIds.filter((bundleId) => !map.has(bundleId))
   if (unresolvedBundleIds.length > 0) {
-    const legacyRows = db.prepare(`
-      SELECT sessions.bundle_id, sessions.app_name
-      FROM app_sessions sessions
-      JOIN (
-        SELECT bundle_id, MAX(start_time) AS latest_start
-        FROM app_sessions
-        WHERE bundle_id IN (${placeholders(unresolvedBundleIds)})
-        GROUP BY bundle_id
-      ) latest
-        ON latest.bundle_id = sessions.bundle_id
-       AND latest.latest_start = sessions.start_time
-    `).all(...unresolvedBundleIds) as Array<{ bundle_id: string; app_name: string }>
-    for (const r of legacyRows) {
-      if (!map.has(r.bundle_id)) map.set(r.bundle_id, r.app_name)
+    for (const [bundleId, appName] of getLatestSessionAppNames(db, unresolvedBundleIds)) {
+      if (!map.has(bundleId)) map.set(bundleId, appName)
     }
   }
 
@@ -910,41 +901,17 @@ export function registerDbHandlers(): void {
   ipcMain.handle(IPC.TRACKING.GET_DIAGNOSTICS, () => {
     const since = Date.now() - 15 * 60_000
     const db = getDb()
-    const titleRows = db.prepare(`
-      SELECT
-        COUNT(*) AS recent_samples,
-        SUM(CASE WHEN window_title IS NOT NULL AND trim(window_title) <> '' THEN 1 ELSE 0 END) AS with_title,
-        MAX(CASE WHEN window_title IS NOT NULL AND trim(window_title) <> '' THEN ts_ms ELSE NULL END) AS last_captured_at
-      FROM focus_events
-      WHERE source IN ('nsworkspace_event', 'uia_foreground')
-        AND event_type IN ('app_activated', 'window_changed', 'space_changed')
-        AND ts_ms >= ?
-    `).get(since) as {
-      recent_samples: number
-      with_title: number | null
-      last_captured_at: number | null
-    }
+    const nativeStats = getNativeCaptureTitleStats(db, since)
 
-    let recentSamples = titleRows.recent_samples
-    let recentSamplesWithTitle = titleRows.with_title ?? 0
-    let lastCapturedAt = titleRows.last_captured_at
+    let recentSamples = nativeStats.recentSamples
+    let recentSamplesWithTitle = nativeStats.withTitle
+    let lastCapturedAt = nativeStats.lastCapturedAtMs
 
     if ((process.platform === 'win32' || process.platform === 'linux') && recentSamplesWithTitle === 0) {
-      const sessionRows = db.prepare(`
-        SELECT
-          COUNT(*) AS recent_samples,
-          SUM(CASE WHEN window_title IS NOT NULL AND trim(window_title) <> '' THEN 1 ELSE 0 END) AS with_title,
-          MAX(CASE WHEN window_title IS NOT NULL AND trim(window_title) <> '' THEN start_time ELSE NULL END) AS last_captured_at
-        FROM app_sessions
-        WHERE start_time >= ?
-      `).get(since) as {
-        recent_samples: number
-        with_title: number | null
-        last_captured_at: number | null
-      }
-      recentSamples = Math.max(recentSamples, sessionRows.recent_samples)
-      recentSamplesWithTitle = Math.max(recentSamplesWithTitle, sessionRows.with_title ?? 0)
-      lastCapturedAt = lastCapturedAt ?? sessionRows.last_captured_at
+      const sessionStats = getLegacySessionTitleStats(db, since)
+      recentSamples = Math.max(recentSamples, sessionStats.recentSamples)
+      recentSamplesWithTitle = Math.max(recentSamplesWithTitle, sessionStats.withTitle)
+      lastCapturedAt = lastCapturedAt ?? sessionStats.lastCapturedAtMs
     }
 
     const browserStatus = getBrowserStatus()

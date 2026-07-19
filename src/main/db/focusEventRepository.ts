@@ -135,6 +135,76 @@ export function countFocusEventsInRange(
   return row.count
 }
 
+export interface FocusEventTimeAndType {
+  ts_ms: number
+  event_type: string
+}
+
+/** The most recent machine-state transitions strictly before a boundary —
+ *  lets a day reconstruct whether it began asleep or locked. Returned
+ *  newest-first, capped. */
+export function listMachineStateEventsBefore(
+  db: Database.Database,
+  beforeMs: number,
+  limit = 20,
+): FocusEventTimeAndType[] {
+  return db.prepare(`
+    SELECT ts_ms, event_type
+    FROM focus_events
+    WHERE ts_ms < ? AND event_type IN ('sleep', 'wake', 'lock', 'unlock')
+    ORDER BY ts_ms DESC
+    LIMIT ?
+  `).all(beforeMs, limit) as FocusEventTimeAndType[]
+}
+
+/** Event timestamps and types for a window, chronological. */
+export function listFocusEventTimesInRange(
+  db: Database.Database,
+  fromMs: number,
+  toMs: number,
+): FocusEventTimeAndType[] {
+  return db.prepare(`
+    SELECT ts_ms, event_type
+    FROM focus_events
+    WHERE ts_ms >= ? AND ts_ms < ?
+    ORDER BY ts_ms
+  `).all(fromMs, toMs) as FocusEventTimeAndType[]
+}
+
+export interface CaptureTitleSampleStats {
+  recentSamples: number
+  withTitle: number
+  lastCapturedAtMs: number | null
+}
+
+/** Capture-health counts: how many recent native-helper foreground samples
+ *  carried a window title. Counts only — no titles or identities leave the
+ *  repository. */
+export function getNativeCaptureTitleStats(
+  db: Database.Database,
+  sinceMs: number,
+): CaptureTitleSampleStats {
+  const row = db.prepare(`
+    SELECT
+      COUNT(*) AS recent_samples,
+      SUM(CASE WHEN window_title IS NOT NULL AND trim(window_title) <> '' THEN 1 ELSE 0 END) AS with_title,
+      MAX(CASE WHEN window_title IS NOT NULL AND trim(window_title) <> '' THEN ts_ms ELSE NULL END) AS last_captured_at
+    FROM focus_events
+    WHERE source IN ('nsworkspace_event', 'uia_foreground')
+      AND event_type IN ('app_activated', 'window_changed', 'space_changed')
+      AND ts_ms >= ?
+  `).get(sinceMs) as {
+    recent_samples: number
+    with_title: number | null
+    last_captured_at: number | null
+  }
+  return {
+    recentSamples: row.recent_samples,
+    withTitle: row.with_title ?? 0,
+    lastCapturedAtMs: row.last_captured_at,
+  }
+}
+
 export interface FocusEvidencePayload {
   eventType: FocusEvent['event_type']
   appBundleId: string | null
