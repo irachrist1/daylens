@@ -91,8 +91,17 @@ jobs:
           if (Test-Path $installDir) { Remove-Item -Recurse -Force $installDir }
           New-Item -ItemType Directory -Path $installDir | Out-Null
           Start-Process -FilePath $setup -ArgumentList '/S', "/D=$installDir" -Wait
-          $appExe = Get-ChildItem -Path $installDir -Filter Daylens.exe -Recurse | Select-Object -First 1
-          if (-not $appExe) { throw 'Daylens.exe not found after install' }
+          # NSIS silent installers respawn a second process, so -Wait can return
+          # before extraction finishes. Poll for the installed exe instead of
+          # trusting the installer's exit.
+          $appExe = $null
+          $deadline = (Get-Date).AddSeconds(90)
+          while (-not $appExe) {
+            $appExe = Get-ChildItem -Path $installDir -Filter Daylens.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($appExe -or (Get-Date) -ge $deadline) { break }
+            Start-Sleep -Seconds 3
+          }
+          if (-not $appExe) { throw 'Daylens.exe not found within 90s of installer exit' }
           $env:DAYLENS_SMOKE_TEST = '1'
           $env:DAYLENS_SMOKE_REPORT_PATH = Join-Path $env:RUNNER_TEMP 'daylens-windows-smoke.json'
           $env:DAYLENS_SMOKE_WINDOW_STATE_PATH = Join-Path $env:RUNNER_TEMP 'daylens-windows-window-state.json'
