@@ -9,11 +9,13 @@ import {
   type FocusEventType,
 } from '../core/evidence/focusEvent'
 
-// Canonical evidence emission for the poll-based capture path. The tracking
-// FSM (tracking.ts) keeps its legacy app_sessions write for parity
-// measurement; every observation it makes is ALSO recorded here as canonical
-// focus_events rows, so the canonical store — not the legacy tables — is the
-// record new consumers project from.
+// Canonical evidence emission for the poll-based capture path on every
+// desktop platform (capture migration slice 4 brings Linux onto the same
+// contract as macOS and Windows). The tracking FSM (tracking.ts) keeps its
+// legacy app_sessions write for parity measurement; every observation it
+// makes is ALSO recorded here as canonical focus_events rows, so the
+// canonical store — not the legacy tables — is the record new consumers
+// project from.
 //
 // Every caller sits downstream of the FSM's capture gates (pause, exclusions,
 // private windows, consent), so an emission is always an observation that was
@@ -79,7 +81,6 @@ export function recordPollForegroundEvent(
   observation: PollForegroundObservation,
   platform: NodeJS.Platform = process.platform,
 ): void {
-  if (platform === 'linux') return
   persist([{
     ...baseEvent(eventType, observation.tsMs, platform),
     app_bundle_id: observation.bundleId,
@@ -96,7 +97,6 @@ export function recordPollMachineStateEvent(
   tsMs: number,
   platform: NodeJS.Platform = process.platform,
 ): void {
-  if (platform === 'linux') return
   persist([baseEvent(eventType, tsMs, platform)])
 }
 

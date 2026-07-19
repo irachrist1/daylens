@@ -279,14 +279,54 @@ test('a midnight legacy split emits one canonical deactivation', async () => {
   }
 })
 
-test('Linux polling remains outside the macOS and Windows canonical adapter', async () => {
+test('Linux polling joins the canonical adapter with its platform identity', async () => {
   __resetSettings()
   const rig = makeRig('linux')
   try {
     await rig.poll(BASE, { input: true })
     await rig.poll(BASE + 30_000, { input: true })
     flushCurrentSession()
-    assert.equal(pollEvents(rig.db).length, 0)
+
+    const events = pollEvents(rig.db)
+    assert.deepEqual(
+      events.map((event) => event.event_type),
+      ['app_activated', 'app_deactivated'],
+    )
+    const platforms = rig.db.prepare(`
+      SELECT DISTINCT platform FROM focus_events WHERE source = 'foreground_poll'
+    `).all() as Array<{ platform: string }>
+    assert.deepEqual(platforms, [{ platform: 'linux' }])
+  } finally {
+    rig.teardown()
+  }
+})
+
+test('Linux canonical events rebuild the same sessions as the legacy path', async () => {
+  __resetSettings()
+  const rig = makeRig('linux')
+  try {
+    await rig.poll(BASE, { input: true })
+    await rig.poll(BASE + 60_000, { input: true })
+    rig.setWindow(WIN_B)
+    await rig.poll(BASE + 120_000, { input: true })
+    await rig.poll(BASE + 180_000, { input: true })
+    flushCurrentSession()
+
+    const rebuilt = rebuildPollForegroundSessions(rig.db, BASE - 1, BASE + 86_400_000)
+      .filter((s) => (s.endMs - s.startMs) / 1_000 >= MIN_SESSION_SEC)
+    const legacy = rig.db.prepare(`
+      SELECT app_name AS appName, start_time AS startMs, end_time AS endMs
+      FROM app_sessions ORDER BY start_time ASC
+    `).all() as Array<{ appName: string; startMs: number; endMs: number }>
+
+    assert.equal(legacy.length, 2)
+    assert.deepEqual(
+      rebuilt.map((s) => ({ appName: s.appName, startMs: s.startMs, endMs: s.endMs })),
+      legacy,
+    )
+    for (let i = 1; i < rebuilt.length; i++) {
+      assert.ok(rebuilt[i].startMs >= rebuilt[i - 1].endMs, 'rebuilt sessions must not overlap')
+    }
   } finally {
     rig.teardown()
   }
