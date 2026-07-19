@@ -176,9 +176,10 @@ function correctedOrCurrentLabel(block: WorkContextBlock): string {
 // subjects — the shared guard is the one vocabulary (workNameGuards.ts),
 // used identically by the frozen snapshots that feed period wraps.
 
-/** The human name for a WORK block: a corrected subject/label wins over
+/** The human name for a WORK block: a corrected intent subject wins over
  *  inference, then the inferred subject if it reads clean, else a humanized
- *  label, else "" meaning "fold into a few smaller things". */
+ *  (corrected-or-current) label, else "" meaning "fold into a few smaller
+ *  things". */
 function workActivityName(block: WorkContextBlock): string {
   const subject = (
     block.review?.correctedIntentSubject?.trim()
