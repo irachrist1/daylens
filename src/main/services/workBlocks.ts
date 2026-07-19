@@ -1532,7 +1532,7 @@ function blockIdFor(blockStart: number, blockEnd: number, sessionIds: number[], 
   return `${prefix}_${sha1(signature).slice(0, 16)}`
 }
 
-function reviewEvidenceKeyForBlock(block: WorkContextBlock): string {
+export function reviewEvidenceKeyForBlock(block: WorkContextBlock): string {
   const sessionIds = block.sessions
     .map((session) => session.id)
     .filter((id) => id >= 0)
@@ -1562,7 +1562,7 @@ function defaultReviewStateForBlock(block: WorkContextBlock): TimelineBlockRevie
   return 'auto-approved'
 }
 
-function originalReviewSnapshotForBlock(block: WorkContextBlock): Record<string, unknown> {
+export function originalReviewSnapshotForBlock(block: WorkContextBlock): Record<string, unknown> {
   const intent = inferWorkIntent(block)
   return {
     blockId: block.id,
@@ -1758,6 +1758,80 @@ function ensureDefaultReviewRowForBlock(db: Database.Database, dateStr: string, 
     evidenceKey,
     state,
     JSON.stringify(originalReviewSnapshotForBlock(block)),
+    now,
+    now,
+  )
+}
+
+export function writeIgnoredBlockReviewBackstop(
+  db: Database.Database,
+  input: {
+    date: string
+    blockId: string
+    evidenceKey: string
+    originalBlockJson: string
+  },
+): void {
+  const { date, blockId, evidenceKey, originalBlockJson } = input
+  const now = Date.now()
+  const rows = db.prepare(`
+    SELECT
+      id,
+      block_id,
+      evidence_key,
+      original_block_json,
+      review_state,
+      updated_at
+    FROM timeline_block_reviews
+    WHERE block_id = ?
+       OR (date = ? AND evidence_key = ?)
+    ORDER BY updated_at DESC
+  `).all(blockId, date, evidenceKey) as PersistedReviewRow[]
+
+  const blockRow = rows
+    .filter((row) => row.block_id === blockId)
+    .sort(compareReviewRows)[0] ?? null
+  const existing = blockRow ?? rows
+    .filter((row) => row.evidence_key === evidenceKey)
+    .sort(compareReviewRows)[0] ?? null
+
+  const originalJson = existing?.original_block_json && existing.original_block_json !== '{}'
+    ? existing.original_block_json
+    : originalBlockJson
+
+  if (existing) {
+    db.prepare(`
+      UPDATE timeline_block_reviews
+      SET block_id = ?,
+          date = ?,
+          evidence_key = ?,
+          review_state = 'ignored',
+          original_block_json = ?,
+          updated_at = ?
+      WHERE id = ?
+    `).run(blockId, date, evidenceKey, originalJson, now, existing.id)
+    return
+  }
+
+  db.prepare(`
+    INSERT INTO timeline_block_reviews (
+      id,
+      block_id,
+      date,
+      evidence_key,
+      review_state,
+      original_block_json,
+      correction_json,
+      created_at,
+      updated_at
+    )
+    VALUES (?, ?, ?, ?, 'ignored', ?, '{}', ?, ?)
+  `).run(
+    `review_${sha1(`${blockId}:${evidenceKey}`).slice(0, 18)}`,
+    blockId,
+    date,
+    evidenceKey,
+    originalJson,
     now,
     now,
   )

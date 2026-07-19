@@ -163,7 +163,7 @@ export default function Apps() {
     const isPage = Boolean(target.url || target.normalizedUrl || target.pageKey)
     const targetKind = isPage ? 'page' : 'domain'
     const confirmed = window.confirm(
-      `Permanently delete this ${targetKind} from all Daylens history?\n\n${label}\n\nThis cannot be undone. Any recap built from it will be cleared.`,
+      `Permanently delete this ${targetKind} from all Daylens history?\n\n${label}\n\nThis cannot be undone. Any recap built from it will be cleared. A copy may persist in pre-update backups until you delete all local data.`,
     )
     if (!confirmed) return
 

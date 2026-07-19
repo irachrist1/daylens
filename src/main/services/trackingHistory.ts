@@ -6,6 +6,7 @@
 // gate in tracking.ts / browserContext.ts.
 
 import fs from 'node:fs'
+import type Database from 'better-sqlite3'
 import { getDb } from './database'
 import { localDateString } from '../lib/localDate'
 import { materializeTimelineDayProjection } from '../core/query/projections'
@@ -742,6 +743,69 @@ export function deleteHistoryForSite(input: { domain: string }): PurgeResult {
   }
   rematerializeAndNotify(affectedDates)
   return { deletedRows, affectedDates }
+}
+
+export interface PurgeTrackedEvidenceRowsInput {
+  kind: 'app' | 'site'
+  bundleId?: string
+  appName?: string
+  domain?: string
+  fromMs: number
+  toMs: number
+}
+
+// Extracted from the PURGE_TRACKED_EVIDENCE IPC handler so the deletion
+// journal can replay the same row deletes against a restored database without
+// going through IPC or the native confirm dialog. Idempotent: deletes of
+// already-absent rows are no-ops.
+export function purgeTrackedEvidenceRows(db: Database.Database, input: PurgeTrackedEvidenceRowsInput): void {
+  const { fromMs, toMs } = input
+  const run = db.transaction(() => {
+    if (input.kind === 'site' && input.domain) {
+      const domain = input.domain
+      const like = `%${domain}%`
+      db.prepare(`DELETE FROM website_visits WHERE domain = ? AND visit_time >= ? AND visit_time < ?`)
+        .run(domain, fromMs, toMs)
+      db.prepare(`DELETE FROM focus_events WHERE ts_ms >= ? AND ts_ms < ? AND (url LIKE ? OR page_title LIKE ?)`)
+        .run(fromMs, toMs, like, like)
+      db.prepare(`DELETE FROM derived_sessions WHERE start_ts_ms >= ? AND start_ts_ms < ? AND domain = ?`)
+        .run(fromMs, toMs, domain)
+      // Artifact identities for the host are display aggregates; remove them
+      // outright (mentions cascade). Other days' remaining data regenerates
+      // its own artifacts on the next rebuild.
+      db.prepare(`DELETE FROM artifacts WHERE host = ?`).run(domain)
+    } else {
+      const bundleId = input.bundleId ?? ''
+      const appName = input.appName ?? bundleId
+      db.prepare(`DELETE FROM app_sessions WHERE start_time >= ? AND start_time < ? AND (bundle_id = ? OR app_name = ?)`)
+        .run(fromMs, toMs, bundleId, appName)
+      db.prepare(`DELETE FROM focus_events WHERE ts_ms >= ? AND ts_ms < ? AND (app_bundle_id = ? OR app_name = ?)`)
+        .run(fromMs, toMs, bundleId, appName)
+      db.prepare(`DELETE FROM derived_sessions WHERE start_ts_ms >= ? AND start_ts_ms < ? AND (app_bundle_id = ? OR app_name = ?)`)
+        .run(fromMs, toMs, bundleId, appName)
+    }
+  })
+  run()
+}
+
+export interface PurgeTimelineBlockSpanInput {
+  fromMs: number
+  toMs: number
+}
+
+// Extracted from the PURGE_TIMELINE_BLOCK IPC handler for the same reason:
+// the deletion journal replays the block-span row deletes verbatim after a
+// backup restore. Idempotent by construction.
+export function purgeTimelineBlockSpanRows(db: Database.Database, input: PurgeTimelineBlockSpanInput): void {
+  const { fromMs, toMs } = input
+  const run = db.transaction(() => {
+    db.prepare(`DELETE FROM app_sessions WHERE start_time >= ? AND start_time < ?`).run(fromMs, toMs)
+    db.prepare(`DELETE FROM website_visits WHERE visit_time >= ? AND visit_time < ?`).run(fromMs, toMs)
+    db.prepare(`DELETE FROM focus_events WHERE ts_ms >= ? AND ts_ms < ?`).run(fromMs, toMs)
+    db.prepare(`DELETE FROM derived_sessions WHERE start_ts_ms >= ? AND start_ts_ms < ?`).run(fromMs, toMs)
+    db.prepare(`DELETE FROM artifact_mentions WHERE start_time >= ? AND start_time < ?`).run(fromMs, toMs)
+  })
+  run()
 }
 
 function normalizeIds(values: number[] | null | undefined): number[] {

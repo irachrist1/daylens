@@ -13,6 +13,18 @@ export function getDb() {
   throw new Error('database-stub:getDb should not be called without a configured test database')
 }
 
+// Mirror of the real runWithDb: the deletion-journal replay routes the
+// restored database through getDb() for the duration of fn.
+export function runWithDb(db, fn) {
+  const previous = testDb
+  testDb = db
+  try {
+    return fn()
+  } finally {
+    testDb = previous
+  }
+}
+
 export function initDb() {}
 
 export function closeDb() {}
