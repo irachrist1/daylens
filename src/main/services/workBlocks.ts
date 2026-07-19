@@ -77,7 +77,8 @@ import {
 } from './workMemory'
 import { isBrowserApplication } from './browserRegistry'
 import { getBackgroundProcessEvidence } from './backgroundProcessEvidence'
-import { getCorrectedSessionsForRange, getCorrectedWebsiteSummariesForRange } from './activityFacts'
+import { getCorrectedWebsiteSummariesForRange } from './activityFacts'
+import { queryCorrectedActivityFactsForRange } from '../core/query/activityFactsQuery'
 
 /**
  * Sanitize a label that might be a raw file path or bundle path.
@@ -5572,7 +5573,21 @@ export function getTimelineDayPayload(
   const [fromMs, toMs] = isLiveProvisionalDay
     ? localDayBounds(dateStr)
     : ownedDayBounds(db, dateStr, { liveSessionStartMs: liveSession?.startTime ?? null })
-  const sessions = withFocusApps(mergeLiveSession(getCorrectedSessionsForRange(db, fromMs, toMs), liveSession))
+  // One corrected activity-fact query feeds live and historical Timeline day
+  // reads (capture migration slice 8). Canonical focus_events win when they
+  // exist; legacy app_sessions remain the fallback. In canonical mode the
+  // projection already contains the in-progress session (its trailing open
+  // interval is clipped to now and carries the live sentinel id), so the
+  // in-memory tracker session is merged only in legacy mode — merging both
+  // would double-count the live stretch.
+  const facts = queryCorrectedActivityFactsForRange(db, fromMs, toMs, {
+    markTrailingOpenSessionLive: dateStr === localDateString(),
+  })
+  const sessions = withFocusApps(
+    facts.evidenceSource === 'legacy'
+      ? mergeLiveSession(facts.sessions, liveSession)
+      : facts.sessions,
+  )
   const websites = getCorrectedWebsiteSummariesForRange(db, fromMs, toMs)
   const builtBlocks = isLiveProvisionalDay
     ? buildProvisionalLiveBlocks(db, sessions)
@@ -5588,9 +5603,13 @@ export function getTimelineDayPayload(
   // total (Timeline, Apps, AI, recap) reads this same partition instead of
   // independently summing raw sessions.
   const totalSeconds = blocks.reduce((sum, block) => sum + blockActiveSeconds(block), 0)
-  const focusSeconds = sessions
-    .filter((session) => session.isFocused)
-    .reduce((sum, session) => sum + session.durationSeconds, 0)
+  // Focused duration can never exceed tracked duration for the same scope.
+  const focusSeconds = Math.min(
+    totalSeconds,
+    sessions
+      .filter((session) => session.isFocused)
+      .reduce((sum, session) => sum + session.durationSeconds, 0),
+  )
 
   return {
     date: dateStr,
@@ -5645,7 +5664,9 @@ function getLightweightDayPayload(
   dateStr: string,
 ): DayTimelinePayload | null {
   const [fromMs, toMs] = ownedDayBounds(db, dateStr)
-  const sessions = getCorrectedSessionsForRange(db, fromMs, toMs)
+  // Recap reads the same corrected facts as the full Timeline payload so a
+  // canonical day cannot total differently in the recap strip.
+  const sessions = queryCorrectedActivityFactsForRange(db, fromMs, toMs).sessions
   const websitesForDay = getCorrectedWebsiteSummariesForRange(db, fromMs, toMs)
 
   const rows = db.prepare(`

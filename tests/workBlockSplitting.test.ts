@@ -6,7 +6,7 @@ import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { upsertWorkContextInsight } from '../src/main/db/queries.ts'
 import { buildTimelineBlocksFromSessions, getBlockDetailPayload, getTimelineDayPayload, mergeTimelineEpisodes, trimTimelineBlockSpan, writeTimelineBlockReview } from '../src/main/services/workBlocks.ts'
 import { getTimelineDayProjection, materializeTimelineDayProjection } from '../src/main/core/query/projections.ts'
-import { PROJECTION_VERSION } from '../src/main/core/projections/chunk2.ts'
+
 
 const TEST_DATE = '2026-04-22'
 
@@ -120,66 +120,17 @@ function insertActivityEvent(db: Database.Database, eventType: string, ts: numbe
   `).run(ts, eventType, JSON.stringify(metadata))
 }
 
-function insertDerivedSessionDay(db: Database.Database): void {
+function insertCanonicalFocusDay(db: Database.Database): void {
   const startTime = localMs(9, 0)
   const endTime = startTime + 40 * 60_000
-  const session = db.prepare(`
-    INSERT INTO derived_sessions (
-      date,
-      start_ts_ms,
-      end_ts_ms,
-      active_seconds,
-      app_bundle_id,
-      app_name,
-      window_title,
-      url,
-      page_title,
-      confidence,
-      category,
-      is_browser,
-      domain,
-      projection_version
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, 'observed', ?, 0, NULL, ?)
-  `).run(
-    TEST_DATE,
-    startTime,
-    endTime,
-    40 * 60,
-    'com.todesktop.cursor',
-    'Cursor',
-    'router.ts - daylens - Cursor',
-    'development',
-    PROJECTION_VERSION,
-  )
-  const block = db.prepare(`
-    INSERT INTO derived_blocks (
-      date,
-      start_ts_ms,
-      end_ts_ms,
-      active_seconds,
-      label,
-      label_source,
-      dominant_category,
-      confidence,
-      projection_version,
-      finalized_at
-    ) VALUES (?, ?, ?, ?, 'Development', 'app', 'development', 'observed', ?, ?)
-  `).run(TEST_DATE, startTime, endTime, 40 * 60, PROJECTION_VERSION, endTime)
-  db.prepare(`
-    INSERT INTO derived_block_sessions (block_id, session_id)
-    VALUES (?, ?)
-  `).run(block.lastInsertRowid, session.lastInsertRowid)
-  db.prepare(`
-    INSERT INTO derived_projection_runs (
-      date,
-      projection_version,
-      events_in,
-      sessions_out,
-      blocks_out,
-      finalized_at,
-      started_at
-    ) VALUES (?, ?, 1, 1, 1, ?, ?)
-  `).run(TEST_DATE, PROJECTION_VERSION, endTime, startTime)
+  const insert = db.prepare(`
+    INSERT INTO focus_events (
+      ts_ms, mono_ns, event_type, app_bundle_id, app_name, pid,
+      window_title, url, page_title, source, confidence, platform, schema_ver
+    ) VALUES (?, ?, ?, ?, ?, 4242, ?, NULL, NULL, 'foreground_poll', 'observed', 'darwin', 2)
+  `)
+  insert.run(startTime, startTime * 1_000_000, 'app_activated', 'com.todesktop.cursor', 'Cursor', 'router.ts - daylens - Cursor')
+  insert.run(endTime, endTime * 1_000_000, 'app_deactivated', 'com.todesktop.cursor', 'Cursor', 'router.ts - daylens - Cursor')
 }
 
 function labelsFor(db: Database.Database): string[] {
@@ -859,9 +810,9 @@ test('analyzing the live day replaces the provisional block with named blocks', 
   db.close()
 })
 
-test('timeline projection reads derived days without materializing timeline blocks', () => {
+test('timeline projection reads canonical focus-event days without materializing timeline blocks', () => {
   const db = createDb()
-  insertDerivedSessionDay(db)
+  insertCanonicalFocusDay(db)
 
   const payload = getTimelineDayProjection(db, TEST_DATE, null, { materialize: false })
 
@@ -875,9 +826,9 @@ test('timeline projection reads derived days without materializing timeline bloc
   db.close()
 })
 
-test('explicit timeline materialization persists derived day blocks for block writes', () => {
+test('explicit timeline materialization persists canonical-day blocks for block writes', () => {
   const db = createDb()
-  insertDerivedSessionDay(db)
+  insertCanonicalFocusDay(db)
 
   const payload = materializeTimelineDayProjection(db, TEST_DATE, null)
 
