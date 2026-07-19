@@ -99,7 +99,7 @@ test('excluding a site removes its legacy browser title before projections rebui
     tsMs: start,
     monoNs: start,
     eventType: 'app_activated',
-    windowTitle,
+    windowTitle: null,
     url: null,
     pageTitle: null,
     source: 'nsworkspace_event',
@@ -198,13 +198,14 @@ test('excluding a site redacts a decorated legacy title from raw history, search
   const pageTitle = 'Shared dashboard'
   const windowTitle = `${pageTitle} — Google Chrome`
   const date = '2026-06-21'
-  const start = new Date(2026, 5, 21, 9, 0, 0, 0).getTime()
+  const visitTime = new Date(2026, 5, 21, 9, 0, 0, 0).getTime()
+  const sessionStart = visitTime + 2
   db.prepare(`
     INSERT INTO app_sessions (
       bundle_id, app_name, start_time, end_time, duration_sec, category,
       is_focused, window_title, raw_app_name, capture_source, capture_version
     ) VALUES ('com.google.Chrome', 'Google Chrome', ?, ?, 600, 'browsing', 0, ?, 'Google Chrome', 'test', 1)
-  `).run(start, start + 600_000, windowTitle)
+  `).run(sessionStart, sessionStart + 600_000, windowTitle)
   db.prepare(`
     INSERT INTO website_visits (
       domain, page_title, url, normalized_url, page_key,
@@ -213,9 +214,9 @@ test('excluding a site redacts a decorated legacy title from raw history, search
     ) VALUES (
       'private.example', ?, 'https://private.example/dashboard',
       'https://private.example/dashboard', 'private.example/dashboard',
-      ?, ?, 600, 'com.google.Chrome:Profile 1', 'chrome', 'Profile 1', 'test'
+      ?, ?, 0, 'com.google.Chrome:Profile 1', 'chrome', 'Profile 1', 'test'
     )
-  `).run(pageTitle, start, BigInt(start) * 1_000n)
+  `).run(pageTitle, visitTime, BigInt(visitTime) * 1_000n)
   setTestDb(db)
 
   try {
@@ -252,11 +253,11 @@ test('excluding a site redacts a decorated legacy title from raw history, search
   }
 })
 
-test('excluding a site preserves the same browser title outside the purged page interval', () => {
+test('excluding a site preserves an overlapping same-title session from another browser profile', () => {
   const db = createProductionTestDatabase()
   const title = 'Dashboard'
   const excludedStart = new Date(2026, 5, 22, 9, 0, 0, 0).getTime()
-  const safeStart = excludedStart + 60 * 60_000
+  const safeStart = excludedStart + 5 * 60_000
   const insertSession = db.prepare(`
     INSERT INTO app_sessions (
       bundle_id, app_name, start_time, end_time, duration_sec, category,
@@ -321,36 +322,77 @@ test('excluding a site preserves the same browser title outside the purged page 
   }
 })
 
-test('excluding a Safari site redacts URL-less focus titles through canonical identity', () => {
+test('excluding a site redacts same-page URL-less focus events until the next browser boundary', () => {
   const db = createProductionTestDatabase()
   const title = 'Travel plan'
   const start = new Date(2026, 5, 23, 11, 0, 0, 0).getTime()
-  db.prepare(`
-    INSERT INTO website_visits (
-      domain, page_title, url, normalized_url, page_key,
-      visit_time, visit_time_us, duration_sec, browser_bundle_id,
-      canonical_browser_id, browser_profile_id, source
-    ) VALUES (
-      'private.example', ?, 'https://private.example/travel',
-      'https://private.example/travel', 'private.example/travel',
-      ?, ?, 600, '/Applications/Safari.app/Contents/MacOS/Safari', 'safari', 'default', 'test'
-    )
-  `).run(title, start, BigInt(start) * 1_000n)
-  db.prepare(`
+  const insertFocusEvent = db.prepare(`
     INSERT INTO focus_events (
       ts_ms, mono_ns, event_type, app_bundle_id, app_name, pid,
       window_title, url, page_title, source, confidence, platform, schema_ver
-    ) VALUES (?, ?, 'app_activated', 'com.apple.Safari', 'Safari', 7,
-      ?, NULL, NULL, 'nsworkspace_event', 'observed', 'darwin', 2)
-  `).run(start + 1_000, start + 1_000, title)
+    ) VALUES (
+      @tsMs, @tsMs, @eventType, @bundleId, 'Safari', 7,
+      @windowTitle, @url, @pageTitle, @source, 'observed', 'darwin', 2
+    )
+  `)
+  insertFocusEvent.run({
+    tsMs: start,
+    eventType: 'tab_changed',
+    bundleId: 'safari',
+    windowTitle: title,
+    url: 'https://private.example/travel',
+    pageTitle: title,
+    source: 'apple_events_tab',
+  })
+  insertFocusEvent.run({
+    tsMs: start + 1_000,
+    eventType: 'window_changed',
+    bundleId: 'com.apple.Safari',
+    windowTitle: title,
+    url: null,
+    pageTitle: null,
+    source: 'nsworkspace_event',
+  })
+  insertFocusEvent.run({
+    tsMs: start + 2_000,
+    eventType: 'window_changed',
+    bundleId: 'com.apple.Safari',
+    windowTitle: title,
+    url: null,
+    pageTitle: null,
+    source: 'nsworkspace_event',
+  })
+  insertFocusEvent.run({
+    tsMs: start + 3_000,
+    eventType: 'tab_changed',
+    bundleId: 'safari',
+    windowTitle: 'Safe dashboard',
+    url: 'https://safe.example/dashboard',
+    pageTitle: 'Safe dashboard',
+    source: 'apple_events_tab',
+  })
+  insertFocusEvent.run({
+    tsMs: start + 4_000,
+    eventType: 'window_changed',
+    bundleId: 'com.apple.Safari',
+    windowTitle: title,
+    url: null,
+    pageTitle: null,
+    source: 'nsworkspace_event',
+  })
   setTestDb(db)
 
   try {
     deleteHistoryForSite({ domain: 'private.example' })
 
     assert.deepEqual(db.prepare(`
-      SELECT window_title, page_title, url FROM focus_events
-    `).get(), { window_title: null, page_title: null, url: null })
+      SELECT ts_ms, window_title, url FROM focus_events ORDER BY ts_ms
+    `).all(), [
+      { ts_ms: start + 1_000, window_title: null, url: null },
+      { ts_ms: start + 2_000, window_title: null, url: null },
+      { ts_ms: start + 3_000, window_title: 'Safe dashboard', url: 'https://safe.example/dashboard' },
+      { ts_ms: start + 4_000, window_title: title, url: null },
+    ])
   } finally {
     clearTestDb()
     db.close()

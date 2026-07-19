@@ -169,13 +169,31 @@ export function deleteHistoryForSite(input: { domain: string }): PurgeResult {
         canonical_id TEXT NOT NULL
       );
       CREATE TEMP TABLE IF NOT EXISTS purge_site_pages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        canonical_browser_id TEXT NOT NULL,
+        raw_browser_id TEXT NOT NULL,
+        profile_id TEXT,
+        observed_at INTEGER NOT NULL
+      );
+      CREATE TEMP TABLE IF NOT EXISTS purge_focus_pages (
+        source_event_id INTEGER NOT NULL,
         title TEXT NOT NULL,
         canonical_browser_id TEXT NOT NULL,
         started_at INTEGER NOT NULL,
         ended_at INTEGER NOT NULL
       );
+      CREATE TEMP TABLE IF NOT EXISTS purge_app_session_matches (
+        session_id INTEGER PRIMARY KEY
+      );
+      CREATE TEMP TABLE IF NOT EXISTS purge_derived_session_matches (
+        session_id INTEGER PRIMARY KEY
+      );
       DELETE FROM purge_browser_aliases;
       DELETE FROM purge_site_pages;
+      DELETE FROM purge_focus_pages;
+      DELETE FROM purge_app_session_matches;
+      DELETE FROM purge_derived_session_matches;
     `)
     const insertAlias = db.prepare(`
       INSERT OR REPLACE INTO purge_browser_aliases (alias, canonical_id) VALUES (?, ?)
@@ -215,57 +233,63 @@ export function deleteHistoryForSite(input: { domain: string }): PurgeResult {
       (SELECT canonical_id FROM purge_browser_aliases WHERE alias = lower(${expression})),
       lower(${expression})
     )`
-    const collectPages = (
-      table: string,
-      condition: string,
-      conditionParams: unknown[],
-      browserExpression: string,
-      startExpression: string,
-      endExpression: string,
-    ): void => {
-      for (const column of ['page_title', 'window_title']) {
-        try {
-          db.prepare(`
-            INSERT INTO purge_site_pages (title, canonical_browser_id, started_at, ended_at)
-            SELECT lower(trim(${column})), ${canonicalBrowser(browserExpression)},
-              ${startExpression}, ${endExpression}
-            FROM ${table}
-            WHERE (${condition})
-              AND ${column} IS NOT NULL AND trim(${column}) <> ''
-              AND ${browserExpression} IS NOT NULL AND trim(${browserExpression}) <> ''
-              AND ${endExpression} > ${startExpression}
-          `).run(...conditionParams)
-        } catch {
-          // Optional legacy tables do not all carry both title columns.
-        }
-      }
-    }
 
     const domainCondition = 'lower(domain) = ? OR lower(domain) LIKE ?'
-    collectPages(
-      'website_visits',
-      domainCondition,
-      params,
-      `coalesce(nullif(canonical_browser_id, ''), ${canonicalBrowser('browser_bundle_id')})`,
-      'visit_time',
-      'visit_time + max(duration_sec * 1000, 1)',
-    )
-    collectPages(
-      'derived_sessions',
-      domainCondition,
-      params,
-      'app_bundle_id',
-      'start_ts_ms',
-      'end_ts_ms',
-    )
-    collectPages(
-      'focus_events',
-      '(lower(url) LIKE ? OR lower(url) LIKE ? OR lower(url) LIKE ? OR lower(url) LIKE ?)',
-      urlPatterns,
-      'app_bundle_id',
-      'ts_ms',
-      'ts_ms + 1',
-    )
+    db.prepare(`
+      INSERT INTO purge_site_pages (
+        title, canonical_browser_id, raw_browser_id, profile_id, observed_at
+      )
+      SELECT lower(trim(page_title)),
+        ${canonicalBrowser("coalesce(nullif(canonical_browser_id, ''), browser_bundle_id)")},
+        lower(browser_bundle_id), lower(nullif(browser_profile_id, '')), visit_time
+      FROM website_visits
+      WHERE (${domainCondition})
+        AND page_title IS NOT NULL AND trim(page_title) <> ''
+        AND browser_bundle_id IS NOT NULL AND trim(browser_bundle_id) <> ''
+    `).run(...params)
+
+    for (const column of ['page_title', 'window_title']) {
+      db.prepare(`
+        INSERT INTO purge_site_pages (
+          title, canonical_browser_id, raw_browser_id, profile_id, observed_at
+        )
+        SELECT lower(trim(${column})), ${canonicalBrowser('app_bundle_id')},
+          lower(app_bundle_id), NULL, ts_ms
+        FROM focus_events
+        WHERE (lower(url) LIKE ? OR lower(url) LIKE ? OR lower(url) LIKE ? OR lower(url) LIKE ?)
+          AND ${column} IS NOT NULL AND trim(${column}) <> ''
+          AND app_bundle_id IS NOT NULL AND trim(app_bundle_id) <> ''
+      `).run(...urlPatterns)
+      db.prepare(`
+        INSERT INTO purge_focus_pages (
+          source_event_id, title, canonical_browser_id, started_at, ended_at
+        )
+        SELECT source.id, lower(trim(source.${column})), ${canonicalBrowser('source.app_bundle_id')},
+          source.ts_ms,
+          coalesce((
+            SELECT boundary.ts_ms
+            FROM focus_events boundary
+            WHERE (boundary.ts_ms > source.ts_ms
+                OR (boundary.ts_ms = source.ts_ms AND boundary.id > source.id))
+              AND (
+                boundary.url IS NOT NULL
+                OR boundary.event_type IN (
+                  'tab_changed', 'tab_sampled', 'app_activated', 'app_deactivated',
+                  'sleep', 'lock'
+                )
+                OR coalesce(${canonicalBrowser('boundary.app_bundle_id')}, '')
+                  <> ${canonicalBrowser('source.app_bundle_id')}
+              )
+            ORDER BY boundary.ts_ms, boundary.id
+            LIMIT 1
+          ), 9223372036854775807)
+        FROM focus_events source
+        WHERE (lower(source.url) LIKE ? OR lower(source.url) LIKE ?
+            OR lower(source.url) LIKE ? OR lower(source.url) LIKE ?)
+          AND source.${column} IS NOT NULL AND trim(source.${column}) <> ''
+          AND source.app_bundle_id IS NOT NULL AND trim(source.app_bundle_id) <> ''
+      `).run(...urlPatterns)
+    }
 
     const rows = db.prepare(`SELECT visit_time FROM website_visits ${where}`).all(...params) as { visit_time: number }[]
     for (const date of distinctLocalDates(rows.map((row) => row.visit_time))) affected.add(date)
@@ -312,30 +336,85 @@ export function deleteHistoryForSite(input: { domain: string }): PurgeResult {
       // Derived projection tables are optional on older installs.
     }
 
-    const titleMatches = (column: string): string => `(
-      purge_site_pages.title = lower(trim(${column}))
+    const titleMatches = (pageTable: string, column: string): string => `(
+      ${pageTable}.title = lower(trim(${column}))
       OR (
-        substr(lower(trim(${column})), 1, length(purge_site_pages.title)) = purge_site_pages.title
-        AND substr(lower(trim(${column})), length(purge_site_pages.title) + 1, 3) IN (' - ', ' — ', ' – ')
+        substr(lower(trim(${column})), 1, length(${pageTable}.title)) = ${pageTable}.title
+        AND substr(lower(trim(${column})), length(${pageTable}.title) + 1, 3) IN (' - ', ' — ', ' – ')
       )
     )`
+    const sessionMatchToleranceMs = 5_000
+    const appSessionEnd = `coalesce(
+      app_sessions.end_time,
+      app_sessions.start_time + max(app_sessions.duration_sec * 1000, 1)
+    )`
+    const appSessionProfile = `lower(coalesce(
+      CASE
+        WHEN instr(coalesce(app_sessions.app_instance_id, ''), ':') > 0
+          THEN substr(app_sessions.app_instance_id, instr(app_sessions.app_instance_id, ':') + 1)
+      END,
+      CASE
+        WHEN instr(app_sessions.bundle_id, ':') > 0
+          AND app_sessions.bundle_id NOT GLOB '[A-Za-z]:[\\/]*'
+          THEN substr(app_sessions.bundle_id, instr(app_sessions.bundle_id, ':') + 1)
+      END,
+      ''
+    ))`
+    db.prepare(`
+      INSERT OR IGNORE INTO purge_app_session_matches (session_id)
+      SELECT session_id
+      FROM (
+        SELECT purge_site_pages.id AS page_id, app_sessions.id AS session_id,
+          row_number() OVER (
+            PARTITION BY purge_site_pages.id
+            ORDER BY
+              CASE
+                WHEN purge_site_pages.raw_browser_id IN (
+                  lower(app_sessions.bundle_id),
+                  lower(coalesce(app_sessions.app_instance_id, ''))
+                ) THEN 0
+                WHEN purge_site_pages.profile_id IS NOT NULL
+                  AND purge_site_pages.profile_id = ${appSessionProfile} THEN 1
+                ELSE 2
+              END,
+              CASE WHEN purge_site_pages.observed_at >= app_sessions.start_time
+                AND purge_site_pages.observed_at < ${appSessionEnd} THEN 0 ELSE 1 END,
+              CASE
+                WHEN purge_site_pages.observed_at < app_sessions.start_time
+                  THEN app_sessions.start_time - purge_site_pages.observed_at
+                WHEN purge_site_pages.observed_at >= ${appSessionEnd}
+                  THEN purge_site_pages.observed_at - ${appSessionEnd}
+                ELSE 0
+              END,
+              abs(purge_site_pages.observed_at - app_sessions.start_time),
+              app_sessions.id
+          ) AS candidate_rank
+        FROM purge_site_pages
+        JOIN app_sessions
+          ON app_sessions.window_title IS NOT NULL
+          AND ${titleMatches('purge_site_pages', 'app_sessions.window_title')}
+          AND purge_site_pages.canonical_browser_id = coalesce(
+            lower(nullif(app_sessions.canonical_app_id, '')),
+            ${canonicalBrowser('app_sessions.bundle_id')}
+          )
+          AND (
+            purge_site_pages.profile_id IS NULL
+            OR ${appSessionProfile} = ''
+            OR purge_site_pages.profile_id = ${appSessionProfile}
+            OR purge_site_pages.raw_browser_id IN (
+              lower(app_sessions.bundle_id),
+              lower(coalesce(app_sessions.app_instance_id, ''))
+            )
+          )
+          AND purge_site_pages.observed_at >= app_sessions.start_time - ?
+          AND purge_site_pages.observed_at <= ${appSessionEnd} + ?
+      )
+      WHERE candidate_rank = 1
+    `).run(sessionMatchToleranceMs, sessionMatchToleranceMs)
     const appTitleRows = db.prepare(`
       UPDATE app_sessions
       SET window_title = NULL
-      WHERE window_title IS NOT NULL
-        AND EXISTS (
-          SELECT 1 FROM purge_site_pages
-          WHERE ${titleMatches('app_sessions.window_title')}
-            AND canonical_browser_id = coalesce(
-              lower(nullif(app_sessions.canonical_app_id, '')),
-              ${canonicalBrowser('app_sessions.bundle_id')}
-            )
-            AND app_sessions.start_time < purge_site_pages.ended_at
-            AND coalesce(
-              app_sessions.end_time,
-              app_sessions.start_time + max(app_sessions.duration_sec * 1000, 1)
-            ) > purge_site_pages.started_at
-        )
+      WHERE id IN (SELECT session_id FROM purge_app_session_matches)
       RETURNING start_time
     `).all() as { start_time: number }[]
     for (const date of distinctLocalDates(appTitleRows.map((row) => row.start_time))) affected.add(date)
@@ -344,14 +423,19 @@ export function deleteHistoryForSite(input: { domain: string }): PurgeResult {
     const focusTitleRows = db.prepare(`
       UPDATE focus_events
       SET window_title = NULL, page_title = NULL
-      WHERE EXISTS (
-          SELECT 1 FROM purge_site_pages
+      WHERE focus_events.url IS NULL
+        AND EXISTS (
+          SELECT 1 FROM purge_focus_pages
           WHERE canonical_browser_id = ${canonicalBrowser('focus_events.app_bundle_id')}
-            AND focus_events.ts_ms >= purge_site_pages.started_at
-            AND focus_events.ts_ms < purge_site_pages.ended_at
             AND (
-              ${titleMatches('focus_events.window_title')}
-              OR ${titleMatches('focus_events.page_title')}
+              focus_events.ts_ms > purge_focus_pages.started_at
+              OR (focus_events.ts_ms = purge_focus_pages.started_at
+                AND focus_events.id > purge_focus_pages.source_event_id)
+            )
+            AND focus_events.ts_ms < purge_focus_pages.ended_at
+            AND (
+              ${titleMatches('purge_focus_pages', 'focus_events.window_title')}
+              OR ${titleMatches('purge_focus_pages', 'focus_events.page_title')}
             )
         )
       RETURNING ts_ms
@@ -360,20 +444,65 @@ export function deleteHistoryForSite(input: { domain: string }): PurgeResult {
     deletedRows += focusTitleRows.length
 
     try {
+      const derivedSessionEnd = 'derived_sessions.end_ts_ms'
+      const derivedSessionProfile = `lower(coalesce(
+        CASE
+          WHEN instr(coalesce(derived_sessions.app_bundle_id, ''), ':') > 0
+            AND derived_sessions.app_bundle_id NOT GLOB '[A-Za-z]:[\\/]*'
+            THEN substr(derived_sessions.app_bundle_id, instr(derived_sessions.app_bundle_id, ':') + 1)
+        END,
+        ''
+      ))`
+      db.prepare(`
+        INSERT OR IGNORE INTO purge_derived_session_matches (session_id)
+        SELECT session_id
+        FROM (
+          SELECT purge_site_pages.id AS page_id, derived_sessions.id AS session_id,
+            row_number() OVER (
+              PARTITION BY purge_site_pages.id
+              ORDER BY
+                CASE
+                  WHEN purge_site_pages.raw_browser_id = lower(derived_sessions.app_bundle_id) THEN 0
+                  WHEN purge_site_pages.profile_id IS NOT NULL
+                    AND purge_site_pages.profile_id = ${derivedSessionProfile} THEN 1
+                  ELSE 2
+                END,
+                CASE WHEN purge_site_pages.observed_at >= derived_sessions.start_ts_ms
+                  AND purge_site_pages.observed_at < ${derivedSessionEnd} THEN 0 ELSE 1 END,
+                CASE
+                  WHEN purge_site_pages.observed_at < derived_sessions.start_ts_ms
+                    THEN derived_sessions.start_ts_ms - purge_site_pages.observed_at
+                  WHEN purge_site_pages.observed_at >= ${derivedSessionEnd}
+                    THEN purge_site_pages.observed_at - ${derivedSessionEnd}
+                  ELSE 0
+                END,
+                abs(purge_site_pages.observed_at - derived_sessions.start_ts_ms),
+                derived_sessions.id
+            ) AS candidate_rank
+          FROM purge_site_pages
+          JOIN derived_sessions
+            ON derived_sessions.is_browser = 1
+            AND (
+              ${titleMatches('purge_site_pages', 'derived_sessions.window_title')}
+              OR ${titleMatches('purge_site_pages', 'derived_sessions.page_title')}
+            )
+            AND purge_site_pages.canonical_browser_id
+              = ${canonicalBrowser('derived_sessions.app_bundle_id')}
+            AND (
+              purge_site_pages.profile_id IS NULL
+              OR ${derivedSessionProfile} = ''
+              OR purge_site_pages.profile_id = ${derivedSessionProfile}
+              OR purge_site_pages.raw_browser_id = lower(derived_sessions.app_bundle_id)
+            )
+            AND purge_site_pages.observed_at >= derived_sessions.start_ts_ms - ?
+            AND purge_site_pages.observed_at <= ${derivedSessionEnd} + ?
+        )
+        WHERE candidate_rank = 1
+      `).run(sessionMatchToleranceMs, sessionMatchToleranceMs)
       const derivedTitleRows = db.prepare(`
         UPDATE derived_sessions
         SET window_title = NULL, page_title = NULL
-        WHERE is_browser = 1
-          AND EXISTS (
-            SELECT 1 FROM purge_site_pages
-            WHERE canonical_browser_id = ${canonicalBrowser('derived_sessions.app_bundle_id')}
-              AND derived_sessions.start_ts_ms < purge_site_pages.ended_at
-              AND derived_sessions.end_ts_ms > purge_site_pages.started_at
-              AND (
-                ${titleMatches('derived_sessions.window_title')}
-                OR ${titleMatches('derived_sessions.page_title')}
-              )
-          )
+        WHERE id IN (SELECT session_id FROM purge_derived_session_matches)
         RETURNING date
       `).all() as { date: string }[]
       for (const row of derivedTitleRows) affected.add(row.date)
@@ -460,6 +589,9 @@ export function deleteHistoryForSite(input: { domain: string }): PurgeResult {
 
     db.exec(`
       DELETE FROM purge_site_pages;
+      DELETE FROM purge_focus_pages;
+      DELETE FROM purge_app_session_matches;
+      DELETE FROM purge_derived_session_matches;
       DELETE FROM purge_browser_aliases;
     `)
   })
