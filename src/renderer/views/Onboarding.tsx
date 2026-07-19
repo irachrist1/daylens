@@ -1208,10 +1208,7 @@ export default function Onboarding({
     }
   }
 
-  // Leaving the capture explainer toward permission/proof is the consent act:
-  // record it before advancing so capture (and the proof step's live data) is
-  // allowed to start. The redesigned consent screen (separate issue) will own
-  // this decision; the recorded state and gate are already in force.
+  // Finishing the capture explainer records consent before live proof begins.
   async function consentAndLeaveWhy() {
     try {
       await ipc.app.setCaptureConsent(true)
@@ -1232,8 +1229,13 @@ export default function Onboarding({
     void consentAndLeaveWhy()
   }
 
-  function skipWhy() {
-    void consentAndLeaveWhy()
+  async function skipWhy() {
+    try {
+      await ipc.app.setCaptureConsent(false)
+      await persistOnboarding('tour', { proofState: 'idle' })
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : String(error))
+    }
   }
 
   async function continueFromProof() {
@@ -1477,7 +1479,7 @@ export default function Onboarding({
             centered
             contentKey={`why-${beat.scene}`}
             primary={{ label: last ? "Makes sense, let's go" : 'Continue', onClick: () => advanceWhy() }}
-            skip={{ label: 'Skip', onClick: () => skipWhy() }}
+            skip={{ label: 'Skip', onClick: () => void skipWhy() }}
           >
             <WhyScene scene={beat.scene} name={greetName} />
             <div className="ob-why-dots" aria-hidden="true">

@@ -1,8 +1,7 @@
 // Windows app usage history backfill.
 //
-// Reads the Windows Timeline ActivityCache.db (ActivitiesCache.db) to seed
-// the last 24 hours of app sessions on first launch — the same way the browser
-// service reads Chrome history retroactively.
+// Reads the Windows Timeline ActivityCache.db (ActivitiesCache.db) to import
+// app sessions recorded after the current capture consent.
 //
 // ActivityCache.db is at:
 //   %LOCALAPPDATA%\ConnectedDevicesPlatform\<account-folder>\ActivitiesCache.db
@@ -19,6 +18,8 @@ import Database from 'better-sqlite3'
 import { getDb } from './database'
 import { insertAppSession } from '../db/queries'
 import { classifyResult } from './tracking'
+import { currentCaptureConsentDecidedAt } from '@shared/captureConsent'
+import { getSettings } from './settings'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -144,8 +145,9 @@ export function backfillWindowsHistory(): void {
   }
 
   const windowFloorSec = Math.floor((Date.now() - BACKFILL_WINDOW_MS) / 1_000)
+  const consentFloorSec = Math.floor((currentCaptureConsentDecidedAt(getSettings().captureConsent) ?? Date.now()) / 1_000)
   const cursorSec = readBackfillCursorSec()
-  const fromSec  = Math.max(windowFloorSec, cursorSec)
+  const fromSec  = Math.max(windowFloorSec, consentFloorSec, cursorSec)
   const mainDb   = getDb()
   let   totalImported = 0
   let   maxStartSec = cursorSec

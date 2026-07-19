@@ -44,6 +44,11 @@ export function isCaptureConsentCurrent(
   return consent.status === 'granted' && consent.policyVersion === currentPolicyVersion
 }
 
+export function currentCaptureConsentDecidedAt(raw: unknown): number | null {
+  const consent = normalizeCaptureConsent(raw)
+  return isCaptureConsentCurrent(consent) ? consent.decidedAt : null
+}
+
 // Settings cross the electron-store / IPC boundary, so treat the stored shape
 // as untrusted: anything malformed collapses to unset (capture off).
 export function normalizeCaptureConsent(raw: unknown): CaptureConsentState {

@@ -193,21 +193,26 @@ export async function collectExternalSignals(
 }
 
 let scheduled: ReturnType<typeof setInterval> | null = null
+let initialScheduled: ReturnType<typeof setTimeout> | null = null
 
 /** Background cadence: first pass a couple of minutes after launch (today and
  *  yesterday), then a refresh every 6 hours. Cheap: connectors early-exit when
  *  the stored signal is fresh. */
 export function startExternalSignalCollection(): void {
-  if (scheduled) return
+  if (scheduled || initialScheduled) return
   const run = () => {
     const today = localDateString()
     const yesterday = shiftLocalDateString(localDateString(), -1)
     void collectExternalSignals(yesterday).then(() => collectExternalSignals(today))
   }
-  setTimeout(run, 2 * 60 * 1000)
+  initialScheduled = setTimeout(() => {
+    initialScheduled = null
+    run()
+  }, 2 * 60 * 1000)
   scheduled = setInterval(run, 6 * 60 * 60 * 1000)
 }
 
 export function stopExternalSignalCollection(): void {
+  if (initialScheduled) { clearTimeout(initialScheduled); initialScheduled = null }
   if (scheduled) { clearInterval(scheduled); scheduled = null }
 }

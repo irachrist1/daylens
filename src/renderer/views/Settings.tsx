@@ -28,6 +28,7 @@ import { formatUsdAmount } from '@shared/formatUsd'
 import { CHANGELOG, LATEST_CHANGELOG, formatChangelogDate, changelogIssueLabel, type ChangelogEntry } from '@shared/changelog'
 import { ALL_ACTIVITY_CATEGORY_OPTIONS } from '@shared/activityCategories'
 import { claudeDesktopConfigDisplayPath } from '@shared/platformPaths'
+import { currentCaptureConsentDecidedAt } from '@shared/captureConsent'
 
 const CATEGORY_OPTIONS: Array<{ value: AppCategory; label: string }> = ALL_ACTIVITY_CATEGORY_OPTIONS
 
@@ -989,15 +990,18 @@ function CaptureHealthContent({
 function TrackingControlsContent({
   settings,
   persist,
+  grantCaptureConsent,
 }: {
   settings: AppSettings
   persist: (partial: Partial<AppSettings>) => Promise<boolean>
+  grantCaptureConsent: () => Promise<void>
 }) {
   const [busy, setBusy] = useState(false)
   const [privacyError, setPrivacyError] = useState<string | null>(null)
   const enabled = settings.trackingControlsEnabled ?? false
   const excludedApps = settings.trackingExcludedApps ?? []
   const excludedSites = settings.trackingExcludedSites ?? []
+  const consentCurrent = currentCaptureConsentDecidedAt(settings.captureConsent) !== null
 
   const normalizeSite = (raw: string) => raw.trim().toLowerCase()
     .replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^www\./, '')
@@ -1038,8 +1042,32 @@ function TrackingControlsContent({
 
   return (
     <>
+      {!consentCurrent && (
+        <SettingsRow
+          first
+          title="Activity capture is off"
+          description="Allow Daylens to record foreground apps, window titles, active browser pages, and machine state on this computer. Private windows, screenshots, audio, keystrokes, message bodies, and file contents are never captured."
+          control={(
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setBusy(true)
+                setPrivacyError(null)
+                void grantCaptureConsent()
+                  .catch((error) => setPrivacyError(error instanceof Error ? error.message : String(error)))
+                  .finally(() => setBusy(false))
+              }}
+              style={{ ...inlineButtonStyle, opacity: busy ? 0.6 : 1, cursor: busy ? 'default' : 'pointer' }}
+            >
+              Allow capture
+            </button>
+          )}
+        />
+      )}
+      {privacyError && <div style={{ color: '#f87171', fontSize: 12.5, lineHeight: 1.5, padding: '8px 0' }}>{privacyError}</div>}
       <SettingsRow
-        first
+        first={consentCurrent}
         title="Pause tracking"
         description="Temporarily stop recording all activity. Stays paused until you turn it back on, even after a restart."
         control={<Toggle checked={settings.trackingPaused ?? false} onChange={(value) => void persist({ trackingPaused: value })} />}
@@ -1051,7 +1079,6 @@ function TrackingControlsContent({
       />
       {enabled && (
         <>
-          {privacyError && <div style={{ color: '#f87171', fontSize: 12.5, lineHeight: 1.5, padding: '8px 0' }}>{privacyError}</div>}
           <SettingsRow
             title="Skip private / incognito windows"
             description="When on, Daylens records nothing from a browser's incognito or private window — no URL, page title, or session."
@@ -2299,6 +2326,11 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       }
       return false
     }
+  }
+
+  async function grantCaptureConsent(): Promise<void> {
+    const captureConsent = await ipc.app.setCaptureConsent(true)
+    setSettings((current) => current ? { ...current, captureConsent } : current)
   }
 
   // Appearance changes (activity colors, leisure dimming) take effect the
@@ -3677,7 +3709,11 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
           <div style={{ display: 'grid', gap: 24 }}>
             <div>
               <GroupLabel>Preferences</GroupLabel>
-              <TrackingControlsContent settings={settings} persist={persist} />
+              <TrackingControlsContent
+                settings={settings}
+                persist={persist}
+                grantCaptureConsent={grantCaptureConsent}
+              />
             </div>
             <div>
               <GroupLabel>Your data</GroupLabel>
