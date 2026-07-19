@@ -2072,6 +2072,14 @@ export interface ProjectSummary {
   color: string | null
 }
 
+/** Active project row for attribution pickers (client + project). */
+export interface AttributionProject {
+  id: string
+  client_id: string
+  name: string
+  client_name: string
+}
+
 export interface WorkSessionApp {
   app_name: string
   duration_ms: number
@@ -2320,6 +2328,7 @@ export const IPC = {
     FIND_CLIENT: 'attribution:find-client',
     LIST_CLIENTS: 'attribution:list-clients',
     LIST_CLIENTS_DETAILED: 'attribution:list-clients-detailed',
+    LIST_PROJECTS: 'attribution:list-projects',
     CREATE_CLIENT: 'attribution:create-client',
     ENSURE_CLIENTS: 'attribution:ensure-clients',
     UPDATE_CLIENT: 'attribution:update-client',

@@ -327,6 +327,80 @@ test('assigning a client updates work sessions atomically and undo restores the 
   db.close()
 })
 
+test('assigning a project updates work sessions and undo restores the prior owner', () => {
+  const db = createProductionTestDatabase()
+  seedTwoTopicDay(db)
+  const block = getTimelineDayPayload(db, TEST_DATE).blocks[0]
+  const now = Date.now()
+  db.prepare(`
+    INSERT INTO clients (id, name, created_at, updated_at) VALUES ('client_acme', 'Acme', ?, ?)
+  `).run(now, now)
+  db.prepare(`
+    INSERT INTO projects (id, client_id, name, status, created_at, updated_at)
+    VALUES ('proj_launch', 'client_acme', 'Launch', 'active', ?, ?)
+  `).run(now, now)
+  db.prepare(`
+    INSERT INTO work_sessions (
+      id, device_id, started_at, ended_at, duration_ms, active_ms, idle_ms,
+      client_id, project_id, attribution_status, app_bundle_ids_json, created_at, updated_at
+    ) VALUES ('ws_1', 'device', ?, ?, ?, ?, 0, NULL, NULL, 'unattributed', '[]', ?, ?)
+  `).run(block.startTime, block.endTime, block.endTime - block.startTime, block.endTime - block.startTime, now, now)
+
+  const command: CorrectionCommand = {
+    kind: 'assign-client',
+    date: TEST_DATE,
+    blockId: block.id,
+    clientId: 'client_acme',
+    projectId: 'proj_launch',
+  }
+  const preview = previewCorrection(db, command, null)
+  assert.match(preview.description, /Acme · Launch/)
+  assert.ok(preview.surfaces.some((note) => note.includes('Launch')))
+
+  const { correctionId, description } = applyCorrection(db, command, null)
+  assert.match(description, /Acme · Launch/)
+  const assigned = db.prepare(`
+    SELECT client_id, project_id, attribution_status FROM work_sessions WHERE id = 'ws_1'
+  `).get() as { client_id: string | null; project_id: string | null; attribution_status: string }
+  assert.equal(assigned.client_id, 'client_acme')
+  assert.equal(assigned.project_id, 'proj_launch')
+  assert.equal(assigned.attribution_status, 'attributed')
+
+  undoCorrection(db, correctionId)
+  const restored = db.prepare(`
+    SELECT client_id, project_id, attribution_status FROM work_sessions WHERE id = 'ws_1'
+  `).get() as { client_id: string | null; project_id: string | null; attribution_status: string }
+  assert.equal(restored.client_id, null)
+  assert.equal(restored.project_id, null)
+  assert.equal(restored.attribution_status, 'unattributed')
+  db.close()
+})
+
+test('assigning a client with no overlapping work sessions throws and leaves the undo ledger untouched', () => {
+  const db = createProductionTestDatabase()
+  seedTwoTopicDay(db)
+  const block = getTimelineDayPayload(db, TEST_DATE).blocks[0]
+  const now = Date.now()
+  db.prepare(`
+    INSERT INTO clients (id, name, created_at, updated_at) VALUES ('client_acme', 'Acme', ?, ?)
+  `).run(now, now)
+  const before = correctionLedgerCounts(db)
+
+  const command: CorrectionCommand = {
+    kind: 'assign-client', date: TEST_DATE, blockId: block.id, clientId: 'client_acme',
+  }
+  assert.throws(
+    () => previewCorrection(db, command, null),
+    /Nothing to attribute in this block yet/,
+  )
+  assert.throws(
+    () => applyCorrection(db, command, null),
+    /Nothing to attribute in this block yet/,
+  )
+  assert.deepEqual(correctionLedgerCounts(db), before, 'undo ledger untouched')
+  db.close()
+})
+
 test('a conflicting merge fails atomically and leaves the ledger untouched', () => {
   const db = createProductionTestDatabase()
   // 25 minutes of real absence between the blocks — the absence guard vetoes.

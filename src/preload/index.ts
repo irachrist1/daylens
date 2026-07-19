@@ -34,6 +34,7 @@ import type {
   IntercomIdentity,
   CategoryOverrideEffect,
   ClientRecord,
+  AttributionProject,
   BreakRecommendation,
   CalendarRangeDay,
   DayTimelinePayload,
@@ -390,6 +391,7 @@ const api = {
   },
   attribution: {
     listClientsDetailed: (): Promise<ClientRecord[]> => ipcRenderer.invoke(IPC.ATTRIBUTION.LIST_CLIENTS_DETAILED),
+    listProjects: (): Promise<AttributionProject[]> => ipcRenderer.invoke(IPC.ATTRIBUTION.LIST_PROJECTS),
     createClient: (payload: { name: string; color?: string | null }): Promise<ClientRecord> =>
       ipcRenderer.invoke(IPC.ATTRIBUTION.CREATE_CLIENT, payload),
     ensureClients: (names: string[]): Promise<ClientRecord[]> =>

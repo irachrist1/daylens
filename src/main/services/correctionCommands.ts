@@ -112,6 +112,12 @@ function clientNameFor(db: Database.Database, clientId: string | null): string |
   return row?.name ?? null
 }
 
+function projectNameFor(db: Database.Database, projectId: string | null | undefined): string | null {
+  if (!projectId) return null
+  const row = db.prepare(`SELECT name FROM projects WHERE id = ?`).get(projectId) as { name: string } | undefined
+  return row?.name ?? null
+}
+
 function describeCommand(
   db: Database.Database,
   command: CorrectionCommand,
@@ -148,9 +154,11 @@ function describeCommand(
     }
     case 'assign-client': {
       const name = clientNameFor(db, command.clientId)
-      return name
-        ? `Assign "${label(blocks[0])}" to ${name}`
-        : `Remove the client assignment from "${label(blocks[0])}"`
+      if (!name) return `Remove the client assignment from "${label(blocks[0])}"`
+      const project = projectNameFor(db, command.projectId)
+      return project
+        ? `Assign "${label(blocks[0])}" to ${name} · ${project}`
+        : `Assign "${label(blocks[0])}" to ${name}`
     }
   }
 }
@@ -215,6 +223,11 @@ function applyCommandToLedger(
       const sessions = db.prepare(`
         SELECT id FROM work_sessions WHERE started_at < ? AND ended_at > ?
       `).all(block.endTime, block.startTime) as Array<{ id: string }>
+      if (sessions.length === 0 && (command.clientId != null || command.projectId != null)) {
+        throw new Error(
+          'Nothing to attribute in this block yet — attribution needs a work session overlapping the block.',
+        )
+      }
       for (const { id } of sessions) {
         db.prepare(`
           UPDATE work_sessions
@@ -402,9 +415,14 @@ function surfaceNotes(
     }
     case 'assign-client': {
       const name = clientNameFor(db, command.clientId)
-      notes.push(name
-        ? `Time in "${blocks[0].label.current}" counts toward ${name} in client rollups and reports.`
-        : `Time in "${blocks[0].label.current}" no longer counts toward any client.`)
+      const project = projectNameFor(db, command.projectId)
+      if (!name) {
+        notes.push(`Time in "${blocks[0].label.current}" no longer counts toward any client.`)
+      } else if (project) {
+        notes.push(`Time in "${blocks[0].label.current}" counts toward ${name} · ${project} in client rollups and reports.`)
+      } else {
+        notes.push(`Time in "${blocks[0].label.current}" counts toward ${name} in client rollups and reports.`)
+      }
       break
     }
   }

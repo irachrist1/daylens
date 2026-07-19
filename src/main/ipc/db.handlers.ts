@@ -38,6 +38,7 @@ import {
   findClientByName,
   listClients,
   listClientsDetailed,
+  listProjects,
   createClient,
   updateClient,
   archiveClient,
@@ -1032,6 +1033,10 @@ export function registerDbHandlers(): void {
 
   ipcMain.handle(IPC.ATTRIBUTION.LIST_CLIENTS_DETAILED, (): ClientRecord[] => {
     return listClientsDetailed(getDb())
+  })
+
+  ipcMain.handle(IPC.ATTRIBUTION.LIST_PROJECTS, () => {
+    return listProjects(getDb())
   })
 
   ipcMain.handle(IPC.ATTRIBUTION.CREATE_CLIENT, async (_e, payload: { name: string; color?: string | null }): Promise<ClientRecord> => {

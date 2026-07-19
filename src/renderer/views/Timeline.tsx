@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSPr
 import { useSearchParams } from 'react-router-dom'
 import { EyeOff, Trash2, X } from 'lucide-react'
 import { ANALYTICS_EVENT, blockCountBucket, trackedTimeBucket } from '@shared/analytics'
-import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, CalendarRangeBlock, CalendarRangeDay, ClientRecord, CorrectionCommand, DayTimelinePayload, TimelineGapSegment, WorkContextBlock } from '@shared/types'
+import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, AttributionProject, CalendarRangeBlock, CalendarRangeDay, ClientRecord, CorrectionCommand, DayTimelinePayload, TimelineGapSegment, WorkContextBlock } from '@shared/types'
 import { activityColorForCategory, leisureBlocksDimmed } from '@shared/activityColors'
 import { calendarCardHeights } from '../lib/timelineBlockLayout'
 import { blockActiveSeconds } from '@shared/blockDuration'
@@ -712,15 +712,23 @@ function BlockEditModal({
   const [hidingKey, setHidingKey] = useState<string | null>(null)
   const [assigningClient, setAssigningClient] = useState(false)
   const [clients, setClients] = useState<ClientRecord[]>([])
+  const [projects, setProjects] = useState<AttributionProject[]>([])
   const [error, setError] = useState<string | null>(null)
   const busy = saving || deleting || purgingKey !== null || hidingKey !== null || assigningClient
 
-  // Clients for the attribution select — loaded once; an empty list simply
-  // hides the control (nothing to assign to yet).
+  // Clients and projects for the attribution select — loaded once; an empty
+  // client list simply hides the control (nothing to assign to yet).
   useEffect(() => {
     let cancelled = false
-    ipc.attribution.listClientsDetailed()
-      .then((list) => { if (!cancelled) setClients(list.filter((client) => client.status === 'active')) })
+    Promise.all([
+      ipc.attribution.listClientsDetailed(),
+      ipc.attribution.listProjects().catch(() => [] as AttributionProject[]),
+    ])
+      .then(([clientList, projectList]) => {
+        if (cancelled) return
+        setClients(clientList.filter((client) => client.status === 'active'))
+        setProjects(projectList)
+      })
       .catch(() => { /* the select just stays hidden */ })
     return () => { cancelled = true }
   }, [])
@@ -818,15 +826,21 @@ function BlockEditModal({
     }
   }
 
-  // Assign the block's time to a client (or clear the assignment). Runs
+  // Assign the block's time to a client and optional project (or clear). Runs
   // through the same preview flow; the modal closes once applied because the
   // day's attribution facts re-form underneath it.
-  const assignClient = async (clientId: string | null) => {
+  const assignClient = async (clientId: string | null, projectId: string | null = null) => {
     if (busy) return
     setAssigningClient(true)
     setError(null)
     try {
-      const applied = await onCorrection({ kind: 'assign-client', date: payload.date, blockId: block.id, clientId })
+      const applied = await onCorrection({
+        kind: 'assign-client',
+        date: payload.date,
+        blockId: block.id,
+        clientId,
+        projectId: clientId == null ? null : projectId,
+      })
       if (applied) {
         track(ANALYTICS_EVENT.BLOCK_EDITED, { block_id: block.id, what_changed: 'client' })
         onClose()
@@ -1080,26 +1094,46 @@ function BlockEditModal({
             )}
           </div>
 
-          {/* Client attribution: assign this block's time to a client. Shown
-              only when clients exist; runs through the preview flow like every
-              other correction. */}
+          {/* Attribution: assign this block's time to a client, or a project
+              under that client. Shown only when clients exist; runs through
+              the preview flow like every other correction. */}
           {clients.length > 0 && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <select
-                aria-label="Assign to client"
+                aria-label="Assign to client or project"
                 value=""
                 disabled={busy}
                 onChange={(event) => {
                   const value = event.target.value
                   if (!value) return
-                  void assignClient(value === '__none__' ? null : value)
+                  if (value === '__none__') {
+                    void assignClient(null, null)
+                    return
+                  }
+                  if (value.startsWith('project:')) {
+                    const projectId = value.slice('project:'.length)
+                    const project = projects.find((row) => row.id === projectId)
+                    if (!project) return
+                    void assignClient(project.client_id, project.id)
+                    return
+                  }
+                  void assignClient(value, null)
                 }}
                 style={{ ...inputBase, height: 32, padding: '0 8px', cursor: busy ? 'default' : 'pointer' }}
               >
-                <option value="">{assigningClient ? 'Assigning…' : 'Assign to client…'}</option>
+                <option value="">{assigningClient ? 'Assigning…' : 'Assign to client or project…'}</option>
                 {clients.map((client) => (
                   <option key={client.id} value={client.id}>{client.name}</option>
                 ))}
+                {projects.length > 0 && (
+                  <optgroup label="Projects">
+                    {projects.map((project) => (
+                      <option key={project.id} value={`project:${project.id}`}>
+                        {project.client_name} · {project.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
                 <option value="__none__">No client (clear assignment)</option>
               </select>
             </div>
