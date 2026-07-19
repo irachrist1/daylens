@@ -43,6 +43,11 @@ test('proof continue goes to privacy and exclusions persist immediately', () => 
   assert.match(onboardingSource, /async function persistExclusions\(/)
   assert.match(onboardingSource, /trackingExcludedSites/)
   assert.match(onboardingSource, /Suggested from activity Daylens can already see/)
+  assert.match(onboardingSource, /const privatePool = visibleActivity/)
+  assert.doesNotMatch(
+    onboardingSource,
+    /privatePool = Array\.from\(new Set\(\[[\s\S]*?POPULAR_APPS_AND_SITES/,
+  )
 })
 
 test('declining consent still bypasses proof with capture off', () => {

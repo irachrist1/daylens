@@ -146,20 +146,6 @@ function comboJoke(ids: string[]): string | null {
   return null
 }
 
-// A small popular-apps + sites catalogue for the keep-private autosuggest, so a
-// user can quickly hide an app or website even if it is not in their captured
-// list yet. Mirrors the app-identity catalogue; everyday names, not jargon.
-const POPULAR_APPS_AND_SITES = [
-  'Slack', 'Discord', 'WhatsApp', 'Telegram', 'Signal', 'Messages', 'Zoom', 'Microsoft Teams',
-  'Gmail', 'Outlook', 'Spark', 'Notion', 'Obsidian', 'Evernote', 'Google Docs', 'Google Sheets',
-  'Microsoft Word', 'Microsoft Excel', 'Microsoft PowerPoint', 'Apple Notes', 'Figma', 'Sketch',
-  'Adobe Photoshop', 'Adobe Illustrator', 'Canva', 'Linear', 'Jira', 'Asana', 'Trello', 'ClickUp',
-  'Safari', 'Google Chrome', 'Arc', 'Firefox', 'Spotify', 'Apple Music', 'YouTube', 'Netflix',
-  'Instagram', 'X (Twitter)', 'Facebook', 'LinkedIn', 'Reddit', 'TikTok', 'ChatGPT', 'Claude',
-  'VS Code', 'Xcode', 'Terminal', 'GitHub', 'Calendar', 'Reminders', 'Things', 'Todoist',
-  'Tinder', 'Hinge', 'Bumble', 'Twitch', 'Steam', 'Photos', 'Mail', 'FaceTime',
-]
-
 // Day-one "try asking" questions, written for someone who has NOT tracked a full
 // day yet. They teach what Daylens is for instead of querying data that is not
 // there. Used on the Ready screen.
@@ -1407,12 +1393,8 @@ export default function Onboarding({
   const customFocusApps = Array.from(focusApps).filter((a) => !appChoices.includes(a))
   // Persisted, human-readable role label ("Designer, Consultant").
   const userRoleLabel = ROLES.filter((r) => roleIds.has(r.id)).map((r) => r.label).join(', ')
-  // Keep-private autosuggest: seed from activity already visible in the proof step.
-  const privatePool = Array.from(new Set([
-    ...visibleActivity,
-    ...appChoices,
-    ...(visibleActivity.length === 0 ? POPULAR_APPS_AND_SITES : []),
-  ]))
+  // Keep-private autosuggest: only activity already visible in the proof step.
+  const privatePool = visibleActivity
   const privateQuery = privateDraft.trim().toLowerCase()
   const privateMatches = (privateQuery
     ? privatePool.filter((a) => a.toLowerCase().includes(privateQuery))
@@ -1494,21 +1476,41 @@ export default function Onboarding({
     })
   }
 
-  const permissionStatusLabel =
-    permissionState === 'granted'
-      ? 'Enabled'
-      : permissionState === 'awaiting_relaunch'
-        ? 'Ready to restart'
-        : settingsHandoff
-          ? 'Waiting on you in System Settings'
-          : 'Not yet enabled'
+  const helperRunning = permissionDetails?.captureHelperRunning === true
+  const linuxReady = linuxTracking?.supportLevel === 'ready' || permissionState === 'granted'
+  const permissionStatusLabel = isMac
+    ? (
+      permissionState === 'granted'
+        ? 'Enabled'
+        : permissionState === 'awaiting_relaunch'
+          ? 'Ready to restart'
+          : settingsHandoff
+            ? 'Waiting on you in System Settings'
+            : 'Not yet enabled'
+    )
+    : isWindows
+      ? (
+        helperRunning || permissionState === 'granted'
+          ? 'Capture helper running'
+          : 'Capture helper not detected'
+      )
+      : (
+        linuxReady
+          ? 'Session support ready'
+          : (linuxTracking?.supportLevel === 'limited' ? 'Limited session support' : 'Session support unknown')
+      )
 
-  const permissionStatusTone: 'ok' | 'waiting' | 'pending' =
-    permissionState === 'granted' || permissionState === 'awaiting_relaunch'
-      ? 'ok'
-      : settingsHandoff
-        ? 'waiting'
-        : 'pending'
+  const permissionStatusTone: 'ok' | 'waiting' | 'pending' = isMac
+    ? (
+      permissionState === 'granted' || permissionState === 'awaiting_relaunch'
+        ? 'ok'
+        : settingsHandoff
+          ? 'waiting'
+          : 'pending'
+    )
+    : isWindows
+      ? (helperRunning || permissionState === 'granted' ? 'ok' : 'pending')
+      : (linuxReady ? 'ok' : 'pending')
 
   const notificationStatusLabel =
     notificationPermission === 'granted'
