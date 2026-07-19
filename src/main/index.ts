@@ -130,7 +130,7 @@ import { registerCommandPaletteShortcut, unregisterCommandPaletteShortcut } from
 import { registerDistractionAlerterHandlers, resetDistractionStateOnResume, setDistractionAlertWindow, startDistractionAlerter } from './services/distractionAlerter'
 import { startExternalSignalCollection, stopExternalSignalCollection } from './services/externalSignals'
 import { getLinuxDesktopDiagnostics, syncLinuxLaunchOnLogin } from './services/linuxDesktop'
-import { performUninstallCleanup } from './services/uninstallCleanup'
+import { performUninstallCleanup, resolveUninstallChoice } from './services/uninstallCleanup'
 import { detectCLITools } from './jobs/aiService'
 import { stopProcessMonitor } from './services/processMonitor'
 import { reconcileOnboardingState } from './services/onboarding'
@@ -1083,10 +1083,7 @@ ipcMain.handle(IPC.APP.RESET_AND_UNINSTALL, async (event): Promise<{ started: bo
     defaultId: 1,
     cancelId: 2,
   })
-  if (response === 2) return { started: false }
-  const deleteLocalData = response === 0
-
-  if (deleteLocalData) {
+  const choice = await resolveUninstallChoice(response, async () => {
     const confirm = await ask({
       type: 'warning',
       title: 'Delete local data',
@@ -1096,8 +1093,10 @@ ipcMain.handle(IPC.APP.RESET_AND_UNINSTALL, async (event): Promise<{ started: bo
       defaultId: 1,
       cancelId: 1,
     })
-    if (confirm.response !== 0) return { started: false }
-  }
+    return confirm.response
+  })
+  if (!choice.proceed) return { started: false }
+  const { deleteLocalData } = choice
 
   isQuitting = true
   cancelPendingAutoInstall()

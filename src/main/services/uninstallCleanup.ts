@@ -18,6 +18,41 @@ function shQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
+// Maps the reset-and-uninstall dialog responses to a decision. The first
+// dialog's buttons are ['Delete local data', 'Keep local data', 'Cancel']
+// (0/1/2); deleting requires a second confirmation, requested lazily via
+// `confirmDelete` so keep and cancel never show it. `confirmDelete` resolves
+// to the confirm dialog's response, where 0 is the Delete button.
+export async function resolveUninstallChoice(
+  choiceResponse: number,
+  confirmDelete: () => Promise<number>,
+): Promise<{ proceed: boolean; deleteLocalData: boolean }> {
+  if (choiceResponse === 1) return { proceed: true, deleteLocalData: false }
+  if (choiceResponse !== 0) return { proceed: false, deleteLocalData: false }
+  const confirmation = await confirmDelete()
+  if (confirmation !== 0) return { proceed: false, deleteLocalData: false }
+  return { proceed: true, deleteLocalData: true }
+}
+
+// The keep-vs-delete branching of the cleanup, separated from its electron
+// side effects: the login item is removed either way; stored API keys and the
+// on-disk data directories go only when the person chose deletion.
+export function planUninstallCleanup(input: {
+  deleteLocalData: boolean
+  platform: NodeJS.Platform
+  isPackaged: boolean
+  appDataPath: string
+  userDataPath: string
+}): { clearStoredApiKeys: boolean; disableLoginItem: boolean; dataTargets: string[] } {
+  return {
+    clearStoredApiKeys: input.deleteLocalData,
+    disableLoginItem: (input.platform === 'darwin' || input.platform === 'win32') && input.isPackaged,
+    dataTargets: input.deleteLocalData
+      ? collectLocalDataTargets(input.appDataPath, input.userDataPath, input.platform)
+      : [],
+  }
+}
+
 export function collectLocalDataTargets(
   appDataPath: string,
   userDataPath: string,
@@ -106,19 +141,24 @@ function scheduleWindowsDataCleanup(targets: string[]): void {
 
 export async function performUninstallCleanup(options: { deleteLocalData: boolean }): Promise<void> {
   const platform = process.platform
+  const plan = planUninstallCleanup({
+    deleteLocalData: options.deleteLocalData,
+    platform,
+    isPackaged: app.isPackaged,
+    appDataPath: app.getPath('appData'),
+    userDataPath: app.getPath('userData'),
+  })
 
-  if (options.deleteLocalData) {
+  if (plan.clearStoredApiKeys) {
     await clearAllStoredApiKeys()
   }
 
-  if ((platform === 'darwin' || platform === 'win32') && app.isPackaged) {
+  if (plan.disableLoginItem) {
     app.setLoginItemSettings({ openAtLogin: false })
   }
   await syncLinuxLaunchOnLogin(false)
 
-  const targets = options.deleteLocalData
-    ? collectLocalDataTargets(app.getPath('appData'), app.getPath('userData'), platform)
-    : []
+  const targets = plan.dataTargets
 
   if (platform === 'win32') {
     const uninstaller = windowsUninstallerPath(process.execPath)
