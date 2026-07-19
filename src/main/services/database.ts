@@ -43,6 +43,20 @@ export function getDb(): Database.Database {
   return _db
 }
 
+// Temporarily point getDb() at a specific handle for the duration of fn.
+// Used by the deletion-journal replay, which runs against a freshly restored
+// database BEFORE initDb() — the deletion services it re-runs all resolve
+// their connection through getDb().
+export function runWithDb<T>(db: Database.Database, fn: () => T): T {
+  const previous = _db
+  _db = db
+  try {
+    return fn()
+  } finally {
+    _db = previous
+  }
+}
+
 export function initDb(): void {
   const dbPath = path.join(app.getPath('userData'), 'daylens.sqlite')
   let stage = 'open'
