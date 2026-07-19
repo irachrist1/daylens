@@ -113,7 +113,9 @@ test('titleless Dia on Netflix remains active beyond the five-minute idle thresh
     const live = getCurrentSession()
     assert.ok(live, 'Netflix must remain live after six minutes without input')
     assert.equal(live.appName, 'Dia')
-    assert.equal(live.windowTitle, process.platform === 'linux' ? 'Dia' : null)
+    // The harness pins the FSM to darwin, so the titleless-window behavior is
+    // deterministic on every runner — no per-platform expectation.
+    assert.equal(live.windowTitle, null)
     assert.equal(rig.flushes.length, 0)
 
     win = WIN
