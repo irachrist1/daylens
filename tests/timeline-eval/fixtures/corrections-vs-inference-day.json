@@ -1,0 +1,170 @@
+{
+  "schemaVersion": 1,
+  "id": "corrections-vs-inference-day",
+  "name": "Corrections conflict with later automated inference",
+  "date": "2026-06-10",
+  "timezone": "local",
+  "description": "The person corrects a browsing block to name the real work (Acme pricing research) and deletes an unwanted video block. The timeline is then rebuilt, so automated inference runs again after both edits — the correction must win over the fresh inference, and the deleted block must stay gone from every product surface.",
+  "input": {
+    "kind": "normalized-evidence",
+    "sessions": [
+      {
+        "start": "09:00",
+        "end": "10:30",
+        "bundleId": "com.google.Chrome",
+        "appName": "Google Chrome",
+        "category": "research",
+        "title": "Competitor pricing pages"
+      },
+      {
+        "start": "11:00",
+        "end": "12:00",
+        "bundleId": "com.apple.Safari",
+        "appName": "Safari",
+        "category": "browsing",
+        "title": "Lo-fi beats to focus to - YouTube"
+      },
+      {
+        "start": "13:00",
+        "end": "14:30",
+        "bundleId": "com.microsoft.VSCode",
+        "appName": "Code",
+        "category": "development",
+        "title": "pricing.md — acme-strategy"
+      }
+    ],
+    "browserEvidence": [
+      {
+        "at": "09:00",
+        "durationMinutes": 45,
+        "browserBundleId": "com.google.Chrome",
+        "domain": "rivalsoft.example",
+        "url": "https://rivalsoft.example/pricing",
+        "title": "RivalSoft Pricing"
+      },
+      {
+        "at": "09:45",
+        "durationMinutes": 45,
+        "browserBundleId": "com.google.Chrome",
+        "domain": "competitor.example",
+        "url": "https://competitor.example/plans",
+        "title": "Compare plans — Competitor"
+      },
+      {
+        "at": "11:00",
+        "durationMinutes": 60,
+        "browserBundleId": "com.apple.Safari",
+        "domain": "youtube.com",
+        "url": "https://www.youtube.com/watch?v=lofi123",
+        "title": "Lo-fi beats to focus to"
+      }
+    ]
+  },
+  "mutations": [
+    {
+      "kind": "correctBlock",
+      "matchLabelIncludes": [
+        "pricing",
+        "RivalSoft",
+        "Competitor",
+        "browsing",
+        "research"
+      ],
+      "correctedLabel": "Acme pricing strategy research",
+      "correctedIntentRole": "research",
+      "correctedIntentSubject": "Acme pricing"
+    },
+    {
+      "kind": "ignoreBlock",
+      "matchLabelIncludes": [
+        "Lo-fi",
+        "YouTube",
+        "Watching"
+      ]
+    }
+  ],
+  "expected": {
+    "episodes": [
+      {
+        "id": "acme-pricing-research",
+        "start": "09:00",
+        "end": "10:30",
+        "label": "Acme pricing strategy research",
+        "labelIncludes": [
+          "Acme pricing strategy research"
+        ],
+        "kind": "work",
+        "intentRole": "research",
+        "intentSubjectIncludes": [
+          "Acme pricing"
+        ]
+      },
+      {
+        "id": "acme-strategy-writing",
+        "start": "13:00",
+        "end": "14:30",
+        "label": "acme-strategy",
+        "labelIncludes": [
+          "acme",
+          "pricing"
+        ],
+        "kind": "work"
+      }
+    ],
+    "apps": [
+      {
+        "appName": "Google Chrome",
+        "durationMinutes": 90,
+        "durationToleranceMinutes": 6
+      },
+      {
+        "appName": "Visual Studio Code",
+        "durationMinutes": 90,
+        "durationToleranceMinutes": 6
+      }
+    ],
+    "search": [
+      {
+        "query": "pricing",
+        "requiredFacts": [
+          "acme-strategy"
+        ]
+      }
+    ],
+    "answers": [
+      {
+        "question": "What was I researching this morning?",
+        "requiredFacts": [
+          "Acme pricing strategy research"
+        ],
+        "prohibitedClaims": [
+          "just browsing",
+          "RivalSoft work"
+        ],
+        "requiredSources": [
+          "Timeline"
+        ]
+      }
+    ],
+    "privacy": {
+      "prohibitedTerms": [
+        "Lo-fi beats"
+      ],
+      "prohibitedSurfaces": [
+        "Timeline",
+        "Apps",
+        "search",
+        "wrap"
+      ]
+    },
+    "knownIssues": [
+      {
+        "issue": "DEV-215",
+        "defectSignatures": [
+          "work activity \"Compare plans\" traces to no trusted work block",
+          "standout \"Compare plans\" traces to no trusted work block"
+        ]
+      }
+    ]
+  }
+}

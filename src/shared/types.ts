@@ -76,14 +76,21 @@ export type BlockConfidence = 'high' | 'medium' | 'low'
 // distinction that makes leisure first-class: a video is never a "work session".
 export type WorkKind = 'work' | 'leisure' | 'personal' | 'idle'
 
-export type WorkIntentRole =
-  | 'execution'
-  | 'research'
-  | 'communication'
-  | 'review'
-  | 'coordination'
-  | 'ambient'
-  | 'ambiguous'
+export const WORK_INTENT_ROLES = [
+  'execution',
+  'research',
+  'communication',
+  'review',
+  'coordination',
+  'ambient',
+  'ambiguous',
+] as const
+
+export type WorkIntentRole = typeof WORK_INTENT_ROLES[number]
+
+export function isWorkIntentRole(value: unknown): value is WorkIntentRole {
+  return typeof value === 'string' && (WORK_INTENT_ROLES as readonly string[]).includes(value)
+}
 
 export type WorkIntentPageKind =
   | 'feed'
