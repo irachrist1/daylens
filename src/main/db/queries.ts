@@ -2645,6 +2645,8 @@ function reconcileWebsiteVisits(
     }
     return merged
   }
+  // Loop-invariant: the orphaned-visit clip below reuses this per visit.
+  const mergedAllForeground = foregroundSessions ? mergeIntervals(allForeground) : []
 
   // Inside one browser exactly one tab is active at a time, so its visits
   // must partition the browser's time, never share it - a Meet tab's history
@@ -2677,7 +2679,7 @@ function reconcileWebsiteVisits(
         continue
       }
       const clipped: { start: number; end: number }[] = []
-      for (const interval of mergeIntervals(allForeground)) {
+      for (const interval of mergedAllForeground) {
         const overlapStart = Math.max(start, interval.start)
         const overlapEnd = Math.min(end, interval.end)
         if (overlapEnd > overlapStart) clipped.push({ start: overlapStart, end: overlapEnd })

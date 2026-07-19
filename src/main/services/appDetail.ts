@@ -13,7 +13,7 @@ import {
   getBrowserActivityBreakdown,
 } from '../db/queries'
 import {
-  getCorrectedAppSummariesForRange,
+  aggregateAppSummaries,
   getCorrectedSessionFactsForRange,
   getIgnoredBlockSpansForRange,
 } from './activityFacts'
@@ -239,12 +239,10 @@ export function getAppDetailPayload(
   const blockAppearances = Array.from(mergedByLabel.values()).sort((a, b) => b.startTime - a.startTime).slice(0, 12)
   const blockMemoryRollups = memoryRollupsForBlocks(db, blockAppearances)
 
-  // The corrected summaries include the live stretch themselves (canonical
-  // facts carry it; legacy fallback merges the tracker session), so no
-  // renderer-style live addition on top — that would double-count.
-  const summariesForRange = getCorrectedAppSummariesForRange(
-    db, fromMs, todayTo, effectiveLiveSession ?? null,
-  )
+  // Aggregate the sessions already fetched above — allSessions is exactly
+  // what getCorrectedAppSummariesForRange would re-derive, and re-running the
+  // shared query would repeat a full-history scan on the all-time range.
+  const summariesForRange = aggregateAppSummaries(allSessions)
   const canonicalSummary = summariesForRange.find((row) => row.canonicalAppId === canonicalAppId)
     ?? summariesForRange.find((row) => row.bundleId === canonicalAppId)
     ?? null

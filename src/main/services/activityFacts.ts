@@ -223,7 +223,10 @@ export function aggregateAppSummaries(sessions: readonly AppSession[]): AppUsage
     sessionCount: number
     lastEnd: number | null
   }>()
-  for (const session of sessions) {
+  // The 2-minute-gap session-count rule is order-dependent; sort a copy so
+  // an out-of-order source (live merge, legacy fallback) can't undercount.
+  const ordered = [...sessions].sort((a, b) => a.startTime - b.startTime)
+  for (const session of ordered) {
     const identity = resolveCanonicalApp(session.bundleId, session.appName)
     const key = session.canonicalAppId ?? identity.canonicalAppId ?? session.bundleId
     const entry = totals.get(key) ?? {
