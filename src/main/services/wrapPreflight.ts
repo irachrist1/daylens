@@ -31,11 +31,12 @@ export function getWrapPreflight(
   date: string,
   // Injectable clock + boot time so the live-day / boot-gap logic is testable
   // without mocking the global clock. Default to the real values.
-  opts: { bootMs?: number } = {},
+  opts: { bootMs?: number; nowMs?: number } = {},
 ): WrapPreflightResult {
   const warnings: WrapPreflightWarning[] = []
-  const isLiveDay = date === localDateString()
-  const bootMs = opts.bootMs ?? (Date.now() - os.uptime() * 1000)
+  const nowMs = opts.nowMs ?? Date.now()
+  const isLiveDay = date === localDateString(new Date(nowMs))
+  const bootMs = opts.bootMs ?? (nowMs - os.uptime() * 1000)
 
   // Work time from the same trusted blocks every wrap number comes from.
   let workSeconds = 0
@@ -96,7 +97,7 @@ export function getWrapPreflight(
     WHERE start_time >= ? AND start_time < ?
   `).get(fromMs, toMs) as { last: number | null } | undefined
   if (lastRow?.last) {
-    lastActivityAgoMinutes = Math.max(0, Math.round((Date.now() - lastRow.last) / 60_000))
+    lastActivityAgoMinutes = Math.max(0, Math.round((nowMs - lastRow.last) / 60_000))
     if (isLiveDay && lastActivityAgoMinutes > STALE_CAPTURE_MINUTES) {
       warnings.push({
         kind: 'staleCapture',
