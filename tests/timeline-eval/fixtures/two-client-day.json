@@ -1,0 +1,244 @@
+{
+  "schemaVersion": 1,
+  "id": "two-client-day",
+  "name": "Two clients on the same tools",
+  "date": "2026-05-06",
+  "timezone": "local",
+  "description": "Acme and Beacon work in the same editor, browser, Slack, and Figma. Episodes, search, and intent must keep the clients apart even though every application is shared.",
+  "input": {
+    "kind": "normalized-evidence",
+    "sessions": [
+      {
+        "start": "09:00",
+        "end": "10:10",
+        "bundleId": "com.microsoft.VSCode",
+        "appName": "Code",
+        "category": "development",
+        "title": "checkout.ts — acme-portal"
+      },
+      {
+        "start": "10:10",
+        "end": "10:40",
+        "bundleId": "com.google.Chrome",
+        "appName": "Google Chrome",
+        "category": "development",
+        "title": "Fix checkout rounding by tonny · Pull Request #218 · acme/portal"
+      },
+      {
+        "start": "10:40",
+        "end": "11:00",
+        "bundleId": "com.tinyspeck.slackmacgap",
+        "appName": "Slack",
+        "category": "communication",
+        "title": "acme-portal — Acme workspace - Slack"
+      },
+      {
+        "start": "11:10",
+        "end": "12:10",
+        "bundleId": "com.microsoft.VSCode",
+        "appName": "Code",
+        "category": "development",
+        "title": "hero.tsx — beacon-site"
+      },
+      {
+        "start": "12:10",
+        "end": "12:30",
+        "bundleId": "com.google.Chrome",
+        "appName": "Google Chrome",
+        "category": "development",
+        "title": "Landing hero rewrite by tonny · Pull Request #91 · beacon/site"
+      },
+      {
+        "start": "13:30",
+        "end": "14:00",
+        "bundleId": "com.tinyspeck.slackmacgap",
+        "appName": "Slack",
+        "category": "communication",
+        "title": "beacon-launch — Beacon workspace - Slack"
+      },
+      {
+        "start": "14:00",
+        "end": "15:00",
+        "bundleId": "com.figma.Desktop",
+        "appName": "Figma",
+        "category": "design",
+        "title": "Beacon homepage — Figma"
+      }
+    ],
+    "browserEvidence": [
+      {
+        "at": "10:10",
+        "durationMinutes": 30,
+        "browserBundleId": "com.google.Chrome",
+        "domain": "github.com",
+        "url": "https://github.com/acme/portal/pull/218",
+        "title": "Fix checkout rounding by tonny · Pull Request #218 · acme/portal"
+      },
+      {
+        "at": "12:10",
+        "durationMinutes": 20,
+        "browserBundleId": "com.google.Chrome",
+        "domain": "github.com",
+        "url": "https://github.com/beacon/site/pull/91",
+        "title": "Landing hero rewrite by tonny · Pull Request #91 · beacon/site"
+      }
+    ]
+  },
+  "expected": {
+    "episodes": [
+      {
+        "id": "acme-portal-code",
+        "start": "09:00",
+        "end": "10:40",
+        "label": "Acme portal checkout work",
+        "labelIncludes": [
+          "acme",
+          "checkout"
+        ],
+        "kind": "work",
+        "intentRole": "execution",
+        "intentSubjectIncludes": [
+          "acme",
+          "checkout"
+        ]
+      },
+      {
+        "id": "acme-portal-comms",
+        "start": "10:40",
+        "end": "11:00",
+        "label": "acme-portal — Slack",
+        "labelIncludes": [
+          "acme"
+        ],
+        "kind": "work",
+        "intentRole": "communication",
+        "intentSubjectIncludes": [
+          "acme"
+        ]
+      },
+      {
+        "id": "beacon-site-code",
+        "start": "11:10",
+        "end": "12:30",
+        "label": "Beacon site hero work",
+        "labelIncludes": [
+          "beacon",
+          "hero",
+          "landing"
+        ],
+        "kind": "work",
+        "intentRole": "execution",
+        "intentSubjectIncludes": [
+          "beacon",
+          "hero",
+          "landing"
+        ]
+      },
+      {
+        "id": "beacon-launch-comms",
+        "start": "13:30",
+        "end": "14:00",
+        "label": "beacon-launch",
+        "labelIncludes": [
+          "beacon"
+        ],
+        "kind": "work",
+        "intentRole": "communication",
+        "intentSubjectIncludes": [
+          "beacon"
+        ]
+      },
+      {
+        "id": "beacon-homepage-design",
+        "start": "14:00",
+        "end": "15:00",
+        "label": "Beacon homepage",
+        "labelIncludes": [
+          "Beacon homepage",
+          "Figma"
+        ],
+        "kind": "work",
+        "intentRole": "execution",
+        "intentSubjectIncludes": [
+          "Beacon homepage"
+        ]
+      }
+    ],
+    "apps": [
+      {
+        "appName": "Visual Studio Code",
+        "durationMinutes": 130,
+        "durationToleranceMinutes": 6
+      },
+      {
+        "appName": "Google Chrome",
+        "durationMinutes": 50,
+        "durationToleranceMinutes": 6
+      },
+      {
+        "appName": "Slack",
+        "durationMinutes": 50,
+        "durationToleranceMinutes": 6
+      },
+      {
+        "appName": "Figma",
+        "durationMinutes": 60,
+        "durationToleranceMinutes": 6
+      }
+    ],
+    "search": [
+      {
+        "query": "acme",
+        "requiredFacts": [
+          "acme-portal"
+        ],
+        "prohibitedFacts": [
+          "beacon"
+        ]
+      },
+      {
+        "query": "beacon",
+        "requiredFacts": [
+          "beacon-site"
+        ],
+        "prohibitedFacts": [
+          "acme"
+        ]
+      }
+    ],
+    "wrap": {
+      "quality": "full",
+      "isLeisureDay": false
+    },
+    "answers": [
+      {
+        "question": "What did I do for Acme today?",
+        "requiredFacts": [
+          "checkout",
+          "acme-portal"
+        ],
+        "prohibitedClaims": [
+          "beacon-site",
+          "Beacon homepage"
+        ],
+        "requiredSources": [
+          "Timeline"
+        ]
+      },
+      {
+        "question": "What did I do for Beacon today?",
+        "requiredFacts": [
+          "beacon-site",
+          "Beacon homepage"
+        ],
+        "prohibitedClaims": [
+          "acme-portal",
+          "checkout rounding"
+        ],
+        "requiredSources": [
+          "Timeline"
+        ]
+      }
+    ]
+  }
+}

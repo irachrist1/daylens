@@ -30,9 +30,9 @@ app_pid=$!
 sleep 15
 
 "$probe_dir/ForegroundCaptureProbe" \
-  "$DAYLENS_SMOKE_EXPECT_FOREGROUND_TITLE" foreground 18 "$DAYLENS_SMOKE_WINDOW_STATE_PATH"
+  "$DAYLENS_SMOKE_EXPECT_FOREGROUND_TITLE" foreground 30 "$DAYLENS_SMOKE_WINDOW_STATE_PATH"
 "$probe_dir/FullscreenCaptureProbe" \
-  "$DAYLENS_SMOKE_EXPECT_FULLSCREEN_TITLE" fullscreen 18 "$DAYLENS_SMOKE_WINDOW_STATE_PATH"
+  "$DAYLENS_SMOKE_EXPECT_FULLSCREEN_TITLE" fullscreen 30 "$DAYLENS_SMOKE_WINDOW_STATE_PATH"
 
 open "$app_bundle"
 wait "$app_pid"

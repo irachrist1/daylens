@@ -1,6 +1,6 @@
 import type { AppSettings, OnboardingStage, ProofState } from '@shared/types'
 import { nextMacStageAfterGrantedPermission } from '@shared/onboarding'
-import { grantedCaptureConsent, type CaptureConsentState } from '@shared/captureConsent'
+import { grantedCaptureConsent, isCaptureConsentCurrent, type CaptureConsentState } from '@shared/captureConsent'
 import { getTrackingPermissionState } from './trackingPermissions'
 import { getSettingsAsync, setSettings } from './settings'
 
@@ -25,6 +25,14 @@ export async function reconcileOnboardingState(): Promise<AppSettings> {
   // act, so record it rather than silently stopping their capture on update.
   // Never overwrite an explicit decision — only 'unset' is reconciled.
   let captureConsent: CaptureConsentState = settings.captureConsent
+  const requiresCaptureReconsent = captureConsent.status === 'granted'
+    && !isCaptureConsentCurrent(captureConsent)
+  if (requiresCaptureReconsent) {
+    onboardingState.stage = 'why'
+    onboardingState.completedAt = null
+    onboardingState.proofState = 'idle'
+    changed = true
+  }
   if (
     captureConsent.status === 'unset'
     && (settings.onboardingComplete || !PRE_CONSENT_STAGES.has(onboardingState.stage))
@@ -33,7 +41,7 @@ export async function reconcileOnboardingState(): Promise<AppSettings> {
     changed = true
   }
 
-  if (settings.onboardingComplete && onboardingState.stage !== 'complete') {
+  if (settings.onboardingComplete && onboardingState.stage !== 'complete' && !requiresCaptureReconsent) {
     onboardingState.stage = 'complete'
     onboardingState.completedAt = onboardingState.completedAt ?? Date.now()
     onboardingState.proofState = 'ready'
@@ -41,7 +49,7 @@ export async function reconcileOnboardingState(): Promise<AppSettings> {
     changed = true
   }
 
-  if (process.platform === 'darwin' && onboardingState.stage !== 'complete') {
+  if (process.platform === 'darwin' && onboardingState.stage !== 'complete' && !requiresCaptureReconsent) {
     const permissionState = getTrackingPermissionState()
     if (onboardingState.trackingPermissionState !== permissionState) {
       onboardingState.trackingPermissionState = permissionState
@@ -66,9 +74,16 @@ export async function reconcileOnboardingState(): Promise<AppSettings> {
       onboardingState.proofState = 'idle'
       changed = true
     }
-  } else if (process.platform !== 'darwin' && onboardingState.trackingPermissionState !== 'granted') {
-    onboardingState.trackingPermissionState = 'granted'
-    changed = true
+  } else if (process.platform !== 'darwin' && onboardingState.stage !== 'complete' && !requiresCaptureReconsent) {
+    const permissionState = getTrackingPermissionState()
+    if (onboardingState.trackingPermissionState !== permissionState) {
+      onboardingState.trackingPermissionState = permissionState
+      changed = true
+    }
+    if (permissionState === 'granted' && onboardingState.stage === 'permission') {
+      onboardingState.stage = 'proof'
+      changed = true
+    }
   }
 
   onboardingState.proofState = nextProofState(onboardingState.stage, onboardingState.proofState)

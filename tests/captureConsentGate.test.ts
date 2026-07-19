@@ -5,6 +5,7 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 import type Database from 'better-sqlite3'
 import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { clearTestDb, setTestDb } from './support/database-stub.mjs'
@@ -13,6 +14,7 @@ import {
   CAPTURE_POLICY_VERSION,
   DEFAULT_CAPTURE_CONSENT,
   grantedCaptureConsent,
+  currentCaptureConsentDecidedAt,
   isCaptureConsentCurrent,
   normalizeCaptureConsent,
 } from '../src/shared/captureConsent.ts'
@@ -52,6 +54,8 @@ test('consent is current only when granted for the policy version in force', () 
   assert.equal(isCaptureConsentCurrent(DECLINED), false)
   // A material policy change (version bump) closes the gate until re-consent.
   assert.equal(isCaptureConsentCurrent(STALE_GRANT), false)
+  assert.equal(currentCaptureConsentDecidedAt(GRANTED), 1)
+  assert.equal(currentCaptureConsentDecidedAt(STALE_GRANT), null)
 })
 
 test('every capture decision refuses without consent, before any other rule', () => {
@@ -242,4 +246,64 @@ test('an explicit decline is never overwritten by reconciliation', async () => {
 
   assert.equal(settings.captureConsent.status, 'declined')
   __resetSettings()
+})
+
+test('a stale grant reopens onboarding at the consent explainer', async () => {
+  __resetSettings()
+  __setSettings({
+    onboardingComplete: true,
+    onboardingState: { stage: 'complete', trackingPermissionState: 'granted' },
+    captureConsent: STALE_GRANT,
+  })
+
+  const settings = await reconcileOnboardingState()
+
+  assert.equal(settings.onboardingComplete, false)
+  assert.equal(settings.onboardingState.stage, 'why')
+  assert.deepEqual(settings.captureConsent, STALE_GRANT)
+  __resetSettings()
+})
+
+test('skipping capture declines consent and bypasses the proof gate', () => {
+  const onboardingSource = fs.readFileSync(
+    new URL('../src/renderer/views/Onboarding.tsx', import.meta.url),
+    'utf8',
+  )
+  assert.match(
+    onboardingSource,
+    /async function skipWhy\(\)[\s\S]*?setCaptureConsent\(false\)[\s\S]*?persistOnboarding\('tour', \{ proofState: 'idle' \}\)/,
+  )
+})
+
+test('external activity signals start and stop with consent-gated capture services', () => {
+  const mainSource = fs.readFileSync(new URL('../src/main/index.ts', import.meta.url), 'utf8')
+  const captureStart = mainSource.slice(
+    mainSource.indexOf('function startCaptureServices'),
+    mainSource.indexOf('function stopCaptureServices'),
+  )
+  const captureStop = mainSource.slice(
+    mainSource.indexOf('function stopCaptureServices'),
+    mainSource.indexOf('function startBackgroundServices'),
+  )
+  assert.match(captureStart, /startExternalSignalCollection\(\)/)
+  assert.match(captureStop, /stopExternalSignalCollection\(\)/)
+})
+
+test('runtime wiring keeps non-capture services alive and history behind consent', () => {
+  const indexSource = fs.readFileSync('src/main/index.ts', 'utf8')
+  const onboardingSource = fs.readFileSync('src/renderer/views/Onboarding.tsx', 'utf8')
+  const browserSource = fs.readFileSync('src/main/services/browser.ts', 'utf8')
+  const windowsHistorySource = fs.readFileSync('src/main/services/windowsHistory.ts', 'utf8')
+
+  assert.match(indexSource, /function startCaptureServices\(\)[\s\S]*ensureProcessMonitor\(\)/)
+  assert.match(indexSource, /captureAdapterStartupTimer = setTimeout\([\s\S]*shouldStartTrackingForSettings\(getSettings\(\)\)[\s\S]*startBrowserTracking\(\)/)
+  assert.match(indexSource, /function stopCaptureServices\(\)[\s\S]*clearTimeout\(captureAdapterStartupTimer\)/)
+  assert.match(indexSource, /function startBackgroundServices\(\)[\s\S]*startSync\(\)[\s\S]*startCaptureServices\(\)/)
+
+  const skipWhy = onboardingSource.split('async function skipWhy()')[1]?.split('async function continueFromProof')[0] ?? ''
+  assert.ok(skipWhy.includes('setCaptureConsent(false)'))
+  assert.ok(skipWhy.includes("persistOnboarding('tour'"))
+
+  assert.match(browserSource, /Math\.max\(cursorMs, consentFloorMs\(\)\)/)
+  assert.match(windowsHistorySource, /Math\.max\(windowFloorSec, consentFloorSec, cursorSec\)/)
 })
