@@ -250,15 +250,6 @@ export function queryCorrectedActivityFactsForRange(
     .filter((row) => !isSystemNoiseApp({ bundleId: row.app_bundle_id, appName: row.app_name }))
   const canonicalSessions = visibleRows
     .map((row, index) => derivedRowToAppSession(row, CANONICAL_SESSION_ID_BASE - index, focusApps))
-  if (options.markTrailingOpenSessionLive && canonicalSessions.length > 0) {
-    const last = canonicalSessions[canonicalSessions.length - 1]
-    // The trailing session is “open” when the fold closed it at the window
-    // edge rather than at an observed boundary event. Every event-closed
-    // session ends strictly before the projection end.
-    if (last.endTime === projectionEndMs) {
-      canonicalSessions[canonicalSessions.length - 1] = { ...last, id: LIVE_SESSION_SENTINEL_ID }
-    }
-  }
 
   const legacyInputs = listLegacyAppSessionInputs(db, fromMs, toMs)
   const legacySessions = legacyAppSessionsAsAppSessions(legacyInputs)
@@ -282,6 +273,19 @@ export function queryCorrectedActivityFactsForRange(
   }
 
   const sessions = applyTimelineCorrectionsToSessions(db, rawSessions, fromMs, toMs)
+  // The live sentinel is stamped after the correction overlay: a correction
+  // that splits the trailing open session would otherwise leave the sentinel
+  // on every cloned piece and surface several “live” blocks. Only the final
+  // piece — the one still reaching the projection edge — is the in-progress
+  // session. The 1s tolerance absorbs the overlay's second-rounding of piece
+  // ends; a correction that deletes the live tail pulls the last end well
+  // before the edge, so a deleted stretch never resurrects as live.
+  if (options.markTrailingOpenSessionLive && evidenceSource !== 'legacy' && sessions.length > 0) {
+    const last = sessions[sessions.length - 1]
+    if (last.endTime !== null && last.endTime >= projectionEndMs - 1_000) {
+      sessions[sessions.length - 1] = { ...last, id: LIVE_SESSION_SENTINEL_ID }
+    }
+  }
   const { totalSeconds, focusSeconds } = totalsFromSessions(sessions)
   const gaps = projectGapsFromFocusEvents(events, projectionEndMs)
 

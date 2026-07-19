@@ -140,6 +140,41 @@ test('an ignored-span correction survives reprojection through the payload path'
   db.close()
 })
 
+test('a correction splitting the trailing open session leaves exactly one live session', () => {
+  const db = createProductionTestDatabase()
+  const today = localDateString()
+  const [dayStart, dayEnd] = localDayBounds(today)
+  const now = Date.now()
+  const elapsed = Math.max(120_000, now - dayStart - 1000)
+  const base = now - elapsed
+  insertFocusEvent(db, base, 'app_activated', 'com.apple.Safari', 'Safari', 'Docs')
+  // No deactivation: Safari is still the open, in-progress session.
+
+  // Delete a stretch in the middle of the open session — the overlay splits
+  // it into a piece before the span and a piece after, and only the piece
+  // still reaching “now” may carry the live sentinel.
+  const spanStart = base + Math.floor(elapsed / 3)
+  const spanEnd = base + Math.floor(elapsed / 2)
+  const writtenAt = Date.now()
+  db.prepare(`
+    INSERT INTO timeline_block_reviews (
+      id, block_id, date, evidence_key, review_state, original_block_json,
+      correction_json, created_at, updated_at
+    ) VALUES ('review_live_split', 'live_split_block', ?, 'live_split_block', 'ignored', ?, '{}', ?, ?)
+  `).run(today, JSON.stringify({ startTime: spanStart, endTime: spanEnd }), writtenAt, writtenAt)
+
+  const facts = queryCorrectedActivityFactsForRange(db, dayStart, dayEnd, {
+    markTrailingOpenSessionLive: true,
+  })
+  const liveSessions = facts.sessions.filter((s) => s.id === LIVE_SESSION_SENTINEL_ID)
+  assert.equal(liveSessions.length, 1, 'exactly one session carries the live sentinel')
+  assert.ok(liveSessions[0].startTime >= spanEnd, 'the live piece is the one after the deleted span')
+
+  const payload = getTimelineDayPayload(db, today, null, { materialize: false })
+  assert.equal(payload.blocks.filter((block) => block.isLive).length, 1)
+  db.close()
+})
+
 test('the live day marks the trailing open canonical session with the live sentinel', () => {
   const db = createProductionTestDatabase()
   const today = localDateString()
