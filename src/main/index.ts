@@ -132,6 +132,8 @@ import { consumePendingNavigationRoute } from './services/dailySummaryNavigation
 import { registerCommandPaletteShortcut, unregisterCommandPaletteShortcut } from './services/commandPalette'
 import { registerDistractionAlerterHandlers, resetDistractionStateOnResume, setDistractionAlertWindow, startDistractionAlerter } from './services/distractionAlerter'
 import { startExternalSignalCollection, stopExternalSignalCollection } from './services/externalSignals'
+import { startConnectorSyncSchedule, stopConnectorSyncSchedule } from './connectors/service'
+import { registerConnectorHandlers } from './ipc/connectors.handlers'
 import { getLinuxDesktopDiagnostics, syncLinuxLaunchOnLogin } from './services/linuxDesktop'
 import {
   performUninstallCleanup,
@@ -545,6 +547,9 @@ function startCaptureServices(): void {
   if (process.platform === 'win32') startWindowsFocusCapture()
   if (!SMOKE_TEST && (process.platform === 'win32' || process.platform === 'linux')) ensureProcessMonitor()
   if (!SMOKE_TEST) startExternalSignalCollection()
+  // DEV-186: connected sources re-sync on their manifest cadence. The gate
+  // (capture consent + the connected-sources switch) is re-checked every tick.
+  if (!SMOKE_TEST) startConnectorSyncSchedule()
 
   if (!SMOKE_TEST) {
     if (captureAdapterStartupTimer) clearTimeout(captureAdapterStartupTimer)
@@ -570,6 +575,7 @@ function stopCaptureServices(): void {
   stopBrowserTracking()
   stopProcessMonitor()
   stopExternalSignalCollection()
+  stopConnectorSyncSchedule()
 }
 
 function startBackgroundServices(): void {
@@ -1300,6 +1306,7 @@ app.whenReady()
     registerSyncHandlers()
     registerDistractionAlerterHandlers()
     registerNotificationHandlers()
+    registerConnectorHandlers()
 
     // IPC: renderer drains any pending notification-route the main process
     // queued before the renderer's listener was attached.
