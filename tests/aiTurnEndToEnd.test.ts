@@ -8,6 +8,7 @@ import { insertAppSession } from '../src/main/db/queries.ts'
 import { getThreadMessages } from '../src/main/db/queries.ts'
 import { sendMessage } from '../src/main/jobs/aiService.ts'
 import { getThread } from '../src/main/services/artifacts.ts'
+import { getContextPacketForMessage } from '../src/main/services/contextPacket.ts'
 
 const usage = {
   inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
@@ -96,6 +97,13 @@ test('sendMessage completes a grounded tool turn and persists the streamed threa
     assert.match(result.assistantMessage.agent?.toolTrace[0]?.output ?? '', /Acme launch plan\.md/)
     assert.ok(streamEvents.some((event) => event.status === 'Reading 2026-07-14'))
     assert.equal(streamEvents.at(-1)?.snapshot, result.assistantMessage.content)
+
+    // DEV-182: every chat turn records its context packet before the request
+    // leaves and binds it to the persisted assistant message.
+    assert.ok(result.assistantMessage.agent?.contextPacketId, 'the turn recorded a context packet')
+    const boundPacket = getContextPacketForMessage(db, result.assistantMessage.id)
+    assert.equal(boundPacket?.id, result.assistantMessage.agent?.contextPacketId)
+    assert.equal(boundPacket?.exchangeKind, 'chat')
 
     assert.ok(result.threadId)
     assert.ok(getThread(result.threadId))

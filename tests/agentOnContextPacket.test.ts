@@ -38,6 +38,8 @@ import { indexMemoryForDay } from '../src/main/services/memoryIndex.ts'
 import { materializeTimelineDayProjection } from '../src/main/core/query/projections.ts'
 import { writeTimelineBlockReview } from '../src/main/services/workBlocks.ts'
 import { writeAIBlockLabel } from '../src/main/db/queries.ts'
+import { deleteHistoryForApp } from '../src/main/services/trackingHistory.ts'
+import { addWorkMemoryFact } from '../src/main/services/workMemoryProfile.ts'
 
 const DATE = '2026-04-22'
 const NOW = new Date(2026, 3, 23, 12, 0, 0, 0)
@@ -286,6 +288,136 @@ test('a database without the packet ledger still answers: tools-only turn, no pa
     assert.equal(result.contextPacketId, null, 'no ledger ⇒ no packet id claimed')
     assert.equal(result.text, 'Planner work led the day¹.', 'the in-memory packet still resolves markers')
     assert.equal(result.citations.length, 1)
+  } finally {
+    db.close()
+  }
+})
+
+test('deleted evidence never appears in the prompt, the trace, or the answer', async () => {
+  const db = createProductionTestDatabase()
+  insertSession(db, 'Refactoring the retrieval planner', 14, 30)
+  const secretStart = localMs(9)
+  db.prepare(`
+    INSERT INTO app_sessions (
+      bundle_id, app_name, start_time, end_time, duration_sec,
+      category, is_focused, window_title, raw_app_name, capture_source, capture_version
+    ) VALUES ('com.secret.vault', 'VaultApp', ?, ?, 2700, 'development', 1, 'Secret vault planning', 'VaultApp', 'test', 1)
+  `).run(secretStart, secretStart + 45 * 60_000)
+  indexMemoryForDay(db, DATE)
+
+  setTestDb(db) // deleteHistoryForApp reaches the db through the service locator
+  try {
+    const purged = deleteHistoryForApp({ appName: 'VaultApp', bundleId: 'com.secret.vault' })
+    assert.ok(purged.deletedRows > 0, 'the purge deleted the secret evidence')
+
+    const prompts: string[] = []
+    let call = 0
+    const model = new MockLanguageModelV3({
+      doStream: async (options) => {
+        prompts.push(JSON.stringify((options as { prompt: unknown }).prompt))
+        call += 1
+        if (call === 1) {
+          return response([
+            { type: 'tool-call', toolCallId: 'search-1', toolName: 'search_history', input: '{"query":"vault planning"}' },
+            { type: 'finish', finishReason: { unified: 'tool-calls', raw: undefined }, usage },
+          ] as never[])
+        }
+        return response([
+          { type: 'text-start', id: 'answer-1' },
+          { type: 'text-delta', id: 'answer-1', delta: 'Only the retrieval planner refactor shows up for that day.' },
+          { type: 'text-end', id: 'answer-1' },
+          { type: 'finish', finishReason: { unified: 'stop', raw: undefined }, usage },
+        ] as never[])
+      },
+    })
+
+    const result = await runChatAgentTurn(
+      `What vault planning and retrieval planner work happened on ${DATE}?`,
+      [],
+      agentDeps(db, model),
+    )
+    for (const prompt of prompts) {
+      assert.ok(!prompt.includes('Secret vault planning'), 'deleted evidence never enters a prompt')
+      assert.ok(!prompt.includes('VaultApp'), 'the deleted app never enters a prompt')
+    }
+    for (const entry of result.toolTrace) {
+      assert.ok(!entry.output.includes('Secret vault planning'), 'deleted evidence never enters the trace')
+    }
+    assert.ok(!result.text.includes('Secret vault planning'))
+    assert.ok(result.contextPacketId)
+    const stored = getContextPacketById(db, result.contextPacketId!)
+    assert.ok(
+      !stored!.packet.items.some((item) => item.statement.includes('Secret vault planning')),
+      'deleted evidence never enters the recorded packet',
+    )
+  } finally {
+    clearTestDb()
+    db.close()
+  }
+})
+
+test('grounding verification still works: packet-disclosed facts count as evidence, ungrounded times still trigger the corrective retry', async () => {
+  const db = createProductionTestDatabase()
+  insertSession(db, 'Refactoring the retrieval planner', 14, 30)
+  addWorkMemoryFact(db, 'Standup runs at 09:00 every day')
+  indexMemoryForDay(db, DATE)
+
+  // Turn 1: the answer's only time comes from a packet item (the supplied
+  // memory fact), not a tool result — that must NOT read as a hallucination.
+  let call = 0
+  const groundedModel = new MockLanguageModelV3({
+    doStream: async () => {
+      call += 1
+      if (call === 1) {
+        return response([
+          { type: 'tool-call', toolCallId: 'search-1', toolName: 'search_history', input: '{"query":"standup"}' },
+          { type: 'finish', finishReason: { unified: 'tool-calls', raw: undefined }, usage },
+        ] as never[])
+      }
+      return response([
+        { type: 'text-start', id: 'answer-1' },
+        { type: 'text-delta', id: 'answer-1', delta: 'Your standup runs at 09:00; nothing else was captured about it.' },
+        { type: 'text-end', id: 'answer-1' },
+        { type: 'finish', finishReason: { unified: 'stop', raw: undefined }, usage },
+      ] as never[])
+    },
+  })
+  const grounded = await runChatAgentTurn(`When is my standup? Context day ${DATE}.`, [], agentDeps(db, groundedModel))
+  assert.equal(grounded.groundingRetried, false, 'a packet-disclosed time is evidence, not a violation')
+  assert.match(grounded.text, /09:00/)
+
+  // Turn 2: a time that appears in neither tool results nor the packet still
+  // triggers the corrective retry — the packet did not weaken the verifier.
+  let retryCall = 0
+  const ungroundedModel = new MockLanguageModelV3({
+    doStream: async () => {
+      retryCall += 1
+      if (retryCall === 1) {
+        return response([
+          { type: 'tool-call', toolCallId: 'search-2', toolName: 'search_history', input: '{"query":"standup"}' },
+          { type: 'finish', finishReason: { unified: 'tool-calls', raw: undefined }, usage },
+        ] as never[])
+      }
+      if (retryCall === 2) {
+        return response([
+          { type: 'text-start', id: 'answer-2' },
+          { type: 'text-delta', id: 'answer-2', delta: 'Your standup ran at 07:41 sharp.' },
+          { type: 'text-end', id: 'answer-2' },
+          { type: 'finish', finishReason: { unified: 'stop', raw: undefined }, usage },
+        ] as never[])
+      }
+      return response([
+        { type: 'text-start', id: 'answer-3' },
+        { type: 'text-delta', id: 'answer-3', delta: 'Your standup runs at 09:00.' },
+        { type: 'text-end', id: 'answer-3' },
+        { type: 'finish', finishReason: { unified: 'stop', raw: undefined }, usage },
+      ] as never[])
+    },
+  })
+  const retried = await runChatAgentTurn(`When is my standup? Context day ${DATE}.`, [], agentDeps(db, ungroundedModel))
+  try {
+    assert.equal(retried.groundingRetried, true, 'an ungrounded time still triggers the corrective retry')
+    assert.equal(retried.text, 'Your standup runs at 09:00.')
   } finally {
     db.close()
   }
