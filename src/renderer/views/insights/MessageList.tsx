@@ -5,6 +5,7 @@ import { ipc } from '../../lib/ipc'
 import { MarkdownMessage } from './markdown'
 import { MentionText } from './mentions'
 import { StreamingMessage } from './StreamingMessage'
+import { LiveActivityTrail, PendingFallback, SettledActivityTrail } from './ActivityTrail'
 import { ActionWidget } from './ActionWidget'
 import {
   IconActionButton,
@@ -217,12 +218,18 @@ function MessageListImpl({
               } : {}),
             }}>
               {message.state === 'pending' ? (
-                <StreamingMessage
-                  messageId={String(message.id)}
-                  fallback={<div style={{ fontSize: 13, color: 'var(--color-text-tertiary)' }}>Thinking<span className="ai-caret" /></div>}
-                  renderContent={(text) => <><MarkdownMessage content={text} /><span className="ai-caret" /></>}
-                  onSnapshotUpdate={scrollToBottom}
-                />
+                // The live activity trail (issue #25): tool steps tick off
+                // above the streaming answer; the "Thinking" placeholder
+                // steps aside once the trail has rows.
+                <>
+                  <LiveActivityTrail messageId={String(message.id)} reducedMotion={reducedMotion} />
+                  <StreamingMessage
+                    messageId={String(message.id)}
+                    fallback={<PendingFallback messageId={String(message.id)} />}
+                    renderContent={(text) => <><MarkdownMessage content={text} /><span className="ai-caret" /></>}
+                    onSnapshotUpdate={scrollToBottom}
+                  />
+                </>
               ) : message.state === 'cancelled' ? (
                 // An honestly-stopped turn — no partial text presented as an
                 // answer, no error card. Retry re-runs the question in place.
@@ -386,21 +393,18 @@ function MessageListImpl({
                     </div>
                   )}
 
-                  {canInspect(message) && (
-                    // "What the AI saw" (DEV-183): every agent answer exposes
-                    // its recorded context packet — items with reasons, the
-                    // disclosure record, conflicts, gaps, and what was held
-                    // back. Read-only; works with no model configured.
-                    <div style={{ marginTop: (message.agent?.citations?.length ?? 0) > 0 ? 8 : 12 }}>
-                      <button
-                        type="button"
-                        onClick={() => onInspectPacket?.(message)}
-                        title="Open the recorded context packet for this answer"
-                        style={{ fontSize: 11.5, fontWeight: 600, padding: '3px 10px', borderRadius: 999, border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-tertiary)', cursor: 'pointer' }}
-                      >
-                        What the AI saw
-                      </button>
-                    </div>
+                  {message.agent != null && (
+                    // The settled trail (issue #25) + "What the AI saw"
+                    // (DEV-183): the answer's quiet summary and step list,
+                    // reconstructed from the persisted tool trace, next to
+                    // the recorded context-packet pill. Read-only; works
+                    // with no model configured.
+                    <SettledActivityTrail
+                      message={message}
+                      canInspect={canInspect(message)}
+                      onInspect={() => onInspectPacket?.(message)}
+                      reducedMotion={reducedMotion}
+                    />
                   )}
 
                   {(message.agent?.fileDisclosures?.length ?? 0) > 0 && (

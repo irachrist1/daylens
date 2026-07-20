@@ -460,7 +460,14 @@ a[href], button.link-style {
   50% { opacity: 0.35; }
 }
 
+/* The activity trail's in-progress row: a subtle pulsing dot, never a hard
+   spinner. */
+.ai-trail-dot {
+  animation: live-pulse 1.4s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .ai-message-in { animation: none; }
   .ai-caret { animation: none; }
+  .ai-trail-dot { animation: none; }
 }

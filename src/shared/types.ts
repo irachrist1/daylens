@@ -762,12 +762,28 @@ export interface AISurfaceSummary {
   stale?: boolean
 }
 
+/** One step of the live activity trail while an agent turn runs. `id` is
+ *  stable per tool call, so the renderer settles an active row in place when
+ *  its result (or failure) arrives. `label` is always a short human one-liner
+ *  — never raw tool arguments, payloads, or file paths. */
+export type AIAgentStepState = 'active' | 'done' | 'failed'
+
+export interface AIAgentStep {
+  id: string
+  label: string
+  state: AIAgentStepState
+  startedAt: number
+}
+
 export interface AIChatStreamEvent {
   requestId: string
   delta: string
   snapshot: string
   /** Short human status line while the agent works ("Searching for…"). */
   status?: string
+  /** Structured step for the live activity trail. Rides alongside `status`,
+   *  which stays populated for consumers of the plain status line. */
+  step?: AIAgentStep
 }
 
 /** The agent's one clarifying question, pushed to the renderer. */
@@ -907,7 +923,7 @@ export interface ContextPacketListEntry {
 export interface AIThreadMessageMetadata {
   /** Agent-turn evidence: which tools ran and what they returned. */
   agent?: {
-    toolTrace: Array<{ tool: string; input: unknown; output: string }>
+    toolTrace: Array<{ tool: string; input: unknown; output: string; failed?: boolean }>
     stepCount: number
     groundingRetried: boolean
     fileDisclosures?: AIMessageFileDisclosure[]

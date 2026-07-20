@@ -15,7 +15,8 @@
 import { streamText, stepCountIs, type LanguageModel, type ModelMessage, type ToolSet } from 'ai'
 import type Database from 'better-sqlite3'
 import os from 'node:os'
-import type { AIMessageArtifact } from '@shared/types'
+import type { AIAgentStep, AIMessageArtifact } from '@shared/types'
+import { statusForTool } from '@shared/agentTrail'
 import type { ResolvedProviderConfig, AIProviderUsage } from '../services/aiOrchestration'
 import { providerLabel } from '../services/aiOrchestration'
 import { recordProviderCall } from '../services/aiRateLimiter'
@@ -52,13 +53,16 @@ export interface AgentToolTraceEntry {
   input: unknown
   /** JSON of the tool result, truncated for persistence. */
   output: string
+  /** The call errored (distinct from a tool's own explicit miss), so a
+   *  reconstructed trail can show the failure honestly. */
+  failed?: boolean
 }
 
 export interface ChatAgentDeps {
   db: Database.Database
   config: ResolvedProviderConfig
   /** Streams the growing answer (and tool status lines) to the renderer / bench collector. */
-  onStreamEvent?: (event: { delta: string; snapshot: string; status?: string }) => void | Promise<void>
+  onStreamEvent?: (event: { delta: string; snapshot: string; status?: string; step?: AIAgentStep }) => void | Promise<void>
   askUser: (question: AgentQuestion) => Promise<string>
   artifactDir: string
   mcpServers?: McpServerConfig[]
@@ -94,28 +98,6 @@ export interface ChatAgentResult {
     excerptEnd: number
     disclosedAt: number
   }>
-}
-
-function statusForTool(tool: string, input: unknown): string {
-  const params = (input ?? {}) as Record<string, unknown>
-  switch (tool) {
-    case 'get_moment': return `Looking at ${params.date ?? ''} ${params.time ?? ''}`.trim()
-    case 'get_time_chunks': return `Building ${params.incrementMinutes ?? ''}-minute intervals`.trim()
-    case 'get_day_overview': return `Reading ${params.date ?? 'the day'}`
-    case 'search_history': return `Searching for "${params.query ?? ''}"`
-    case 'list_page_visits': return 'Going through your page visits'
-    case 'get_app_usage': return `Checking time in ${params.appName ?? 'that app'}`
-    case 'get_week_summary': return 'Reading the week'
-    case 'discover_repositories': return 'Finding active repositories'
-    case 'search_files': return `Searching files for "${params.query ?? ''}"`
-    case 'git': return 'Reading git history'
-    case 'read_file': return 'Reading a file'
-    case 'list_dir': return 'Listing a folder'
-    case 'create_artifact': return 'Building your file'
-    case 'ask_user': return 'Asking you'
-    case 'propose_memory': return 'Asking to remember'
-    default: return tool.startsWith('mcp_') ? 'Checking a connected source' : 'Working'
-  }
 }
 
 /**
@@ -275,6 +257,15 @@ export async function runChatAgentTurn(
       let finalText = ''
       let stepText = ''
       let stepUsedTool = false
+      // Steps still running, keyed by tool call id, so the result (or error)
+      // settles the SAME trail row its call opened.
+      const openSteps = new Map<string, AIAgentStep>()
+      const settleStep = async (toolCallId: string, state: 'done' | 'failed') => {
+        const opened = openSteps.get(toolCallId)
+        if (!opened) return
+        openSteps.delete(toolCallId)
+        await deps.onStreamEvent?.({ delta: '', snapshot: '', step: { ...opened, state } })
+      }
       for await (const part of result.fullStream) {
         switch (part.type) {
           case 'start-step':
@@ -287,10 +278,18 @@ export async function runChatAgentTurn(
             stepText += part.text
             break
           }
-          case 'tool-call':
+          case 'tool-call': {
             stepUsedTool = true
-            await deps.onStreamEvent?.({ delta: '', snapshot: '', status: statusForTool(part.toolName, part.input) })
+            const step: AIAgentStep = {
+              id: part.toolCallId,
+              label: statusForTool(part.toolName, part.input),
+              state: 'active',
+              startedAt: Date.now(),
+            }
+            openSteps.set(part.toolCallId, step)
+            await deps.onStreamEvent?.({ delta: '', snapshot: '', status: step.label, step })
             break
+          }
           case 'tool-result': {
             if (part.toolName === 'get_time_chunks') timeChunkResult = part.output as TimeChunkResult
             if (part.toolName === 'list_page_visits') pageVisitResult = part.output as PageVisitToolResult
@@ -298,11 +297,13 @@ export async function runChatAgentTurn(
             const bounded = output.length > MAX_TOOL_RESULT_CHARS ? `${output.slice(0, MAX_TOOL_RESULT_CHARS)}…` : output
             toolTrace.push({ tool: part.toolName, input: part.input, output: bounded })
             toolResultStrings.push(evidenceWithFormattedTimes(bounded))
+            await settleStep(part.toolCallId, 'done')
             break
           }
           case 'tool-error': {
             const message = JSON.stringify({ found: false, reason: String((part as { error?: unknown }).error ?? 'tool error') })
-            toolTrace.push({ tool: part.toolName, input: part.input, output: message })
+            toolTrace.push({ tool: part.toolName, input: part.input, output: message, failed: true })
+            await settleStep(part.toolCallId, 'failed')
             break
           }
           case 'finish-step':
