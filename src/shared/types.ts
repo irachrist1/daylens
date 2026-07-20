@@ -1643,6 +1643,16 @@ export interface ConnectorListing {
   itemsIngested: number
 }
 
+/** What a connect/sync action reports back to Settings. `error` is always a
+ *  sanitized summary — never a provider body that could carry secrets. */
+export interface ConnectorSyncSummary {
+  status: 'ok' | 'blocked_consent' | 'blocked_disabled' | 'failed' | 'not_connected'
+  ingested: number
+  quarantined: number
+  tombstoned: number
+  error?: string
+}
+
 // ─── Full-history export (privacy-retention-and-sync.md §Export, DEV-196) ────
 // The renderer sees plans, progress, results, and verification reports — never
 // a raw row. Everything here is metadata about the export, safe to display.
@@ -2704,9 +2714,13 @@ export const IPC = {
     PICK_PATH: 'file-access:pick-path',
   },
   CONNECTORS: {
-    // Listing only in this slice — lifecycle IPC (connect/disconnect/sync)
-    // arrives with the first connectable provider.
     LIST: 'connectors:list',
+    // Lifecycle IPC (DEV-188, with the first connectable provider). CONNECT
+    // runs the provider's authorization flow and first sync; DISCONNECT
+    // carries the person's explicit keep-or-delete choice for imported data.
+    CONNECT: 'connectors:connect',
+    SYNC: 'connectors:sync',
+    DISCONNECT: 'connectors:disconnect',
   },
   EXPORT: {
     // Full-history export (DEV-196). PLAN previews what an export would

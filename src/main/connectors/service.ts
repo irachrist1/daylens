@@ -9,7 +9,7 @@
 // projection and carries only the fields in shared ConnectorListing.
 
 import type Database from 'better-sqlite3'
-import type { ConnectorId, ConnectorListing } from '@shared/types'
+import type { ConnectorId, ConnectorListing, ConnectorSyncSummary } from '@shared/types'
 import { getDb } from '../services/database'
 import {
   appendDeletionJournalEntry,
@@ -74,13 +74,7 @@ export function listConnectorListings(db: Database.Database): ConnectorListing[]
 
 // ─── Connect ─────────────────────────────────────────────────────────────────
 
-export interface ConnectorSyncSummary {
-  status: 'ok' | 'blocked_consent' | 'blocked_disabled' | 'failed' | 'not_connected'
-  ingested: number
-  quarantined: number
-  tombstoned: number
-  error?: string
-}
+export type { ConnectorSyncSummary }
 
 export async function connectConnector(
   db: Database.Database,
@@ -148,7 +142,13 @@ export async function syncConnector(
     }
   } catch (error) {
     const failures = row.consecutive_failures + 1
-    const retryDelay = computeBackoffMs(adapter.manifest.rateLimit, failures)
+    // "Rate limits … respect provider reset information": an adapter attaches
+    // the provider's retry-after hint to the thrown error and the bounded
+    // backoff honors it (computeBackoffMs still caps it at backoffMaxMs).
+    const providerResetMs = typeof (error as { retryAfterMs?: unknown } | null)?.retryAfterMs === 'number'
+      ? (error as { retryAfterMs: number }).retryAfterMs
+      : null
+    const retryDelay = computeBackoffMs(adapter.manifest.rateLimit, failures, providerResetMs)
     const summary = error instanceof Error ? error.message : 'Sync failed.'
     recordConnectorSyncFailure(db, connectorId, {
       errorSummary: summary,
