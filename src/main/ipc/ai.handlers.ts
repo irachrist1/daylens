@@ -24,6 +24,12 @@ import { getWrapPreflight } from '../services/wrapPreflight'
 import { markRecapGenerated } from '../services/dailySummaryNotifier'
 import { getTimelineDayPayload, getBlockDetailPayload } from '../services/workBlocks'
 import { commitAction, undoAction } from '../ai/actions'
+import {
+  getContextPacketById,
+  getContextPacketForMessage,
+  listContextPackets,
+  type ContextPacketExchangeKind,
+} from '../services/contextPacket'
 import { getCurrentSession } from '../services/tracking'
 import { materializeTimelineDayProjection } from '../core/query/projections'
 import { localDateString } from '../lib/localDate'
@@ -64,6 +70,23 @@ const pendingAgentQuestions = new Map<string, (answer: string) => void>()
 const AGENT_QUESTION_TIMEOUT_MS = 5 * 60 * 1000
 
 export function registerAIHandlers(): void {
+  // DEV-181: fetch the recorded context packet behind an AI exchange, so the
+  // renderer can show exactly what the model was given for an answer.
+  ipcMain.handle(IPC.CONTEXT_PACKETS.GET, (_e, packetId: string) => {
+    return getContextPacketById(getDb(), packetId)
+  })
+
+  ipcMain.handle(IPC.CONTEXT_PACKETS.GET_FOR_MESSAGE, (_e, messageId: number) => {
+    return getContextPacketForMessage(getDb(), messageId)
+  })
+
+  ipcMain.handle(IPC.CONTEXT_PACKETS.LIST, (
+    _e,
+    payload: { limit?: number; exchangeKind?: ContextPacketExchangeKind; scopeKey?: string } = {},
+  ) => {
+    return listContextPackets(getDb(), payload)
+  })
+
   ipcMain.handle(IPC.AI.SEND_MESSAGE, async (event, payload: AIChatSendRequest) => {
     return sendMessage(payload, {
       onStreamEvent: (streamEvent) => {

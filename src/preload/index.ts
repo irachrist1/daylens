@@ -490,6 +490,14 @@ const api = {
     listDisclosures: (payload: { limit?: number } = {}) =>
       ipcRenderer.invoke(IPC.FILE_ACCESS.LIST_DISCLOSURES, payload),
   },
+  contextPackets: {
+    // DEV-181: the recorded, deterministic bundle behind an AI exchange.
+    get: (packetId: string) => ipcRenderer.invoke(IPC.CONTEXT_PACKETS.GET, packetId),
+    getForMessage: (messageId: number) =>
+      ipcRenderer.invoke(IPC.CONTEXT_PACKETS.GET_FOR_MESSAGE, messageId),
+    list: (payload: { limit?: number; exchangeKind?: 'chat' | 'day_analysis'; scopeKey?: string } = {}) =>
+      ipcRenderer.invoke(IPC.CONTEXT_PACKETS.LIST, payload),
+  },
   mcp: {
     getConfig: (): Promise<McpServerConfig | null> => ipcRenderer.invoke(IPC.MCP.GET_CONFIG),
   },
