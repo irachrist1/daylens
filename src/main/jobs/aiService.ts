@@ -3370,7 +3370,7 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
     }
   })()
   const pendingMemoryNote = memoryEnvelope
-    ? 'A memory preview is shown separately for this turn. Respond naturally, but do not claim the memory has already been saved.'
+    ? 'A memory preview is shown separately for this turn. Respond naturally, but do not claim the memory has already been saved, and do not call propose_memory this turn — the preview already covers it.'
     : null
   const extraSystem = [threadInstructionBlock, memoryContextBlock, pendingMemoryNote]
     .filter(Boolean).join('\n\n') || null
