@@ -138,13 +138,14 @@ Source-specific tables may store typed payload fields efficiently. They must be 
 
 The first contract supports these families:
 
-| Family           | Kinds                                                                                                            | Purpose                                              |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| Application      | `app_activated`, `app_deactivated`, `window_changed`                                                             | Foreground ownership and visible native context      |
-| Browser          | `page_started`, `page_ended`, `page_visited`                                                                     | Active page context and corroborated browser history |
-| Machine state    | `idle_started`, `idle_ended`, `locked`, `unlocked`, `sleep`, `wake`                                              | Honest boundaries and explained gaps                 |
-| Capture state    | `capture_started`, `capture_stopped`, `capture_paused`, `capture_resumed`, `capture_failed`, `capture_recovered` | Health and missing-data explanations                 |
-| Connected source | `calendar_event`, `meeting_record`, `repository_activity`, `message_reference`, `document_reference`             | Facts the desktop cannot infer reliably              |
+| Family             | Kinds                                                                                                            | Purpose                                              |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| Application        | `app_activated`, `app_deactivated`, `window_changed`                                                             | Foreground ownership and visible native context      |
+| Browser            | `page_started`, `page_ended`, `page_visited`                                                                     | Active page context and corroborated browser history |
+| Display visibility | `display_visible_changed`, `display_visible_sampled`                                                             | What each display showed full-screen, separate from input focus |
+| Machine state      | `idle_started`, `idle_ended`, `locked`, `unlocked`, `sleep`, `wake`                                              | Honest boundaries and explained gaps                 |
+| Capture state      | `capture_started`, `capture_stopped`, `capture_paused`, `capture_resumed`, `capture_failed`, `capture_recovered` | Health and missing-data explanations                 |
+| Connected source   | `calendar_event`, `meeting_record`, `repository_activity`, `message_reference`, `document_reference`             | Facts the desktop cannot infer reliably              |
 
 Connected-source kinds establish the common boundary only. Their payloads and synchronization behavior belong in the connector specification.
 
@@ -163,6 +164,22 @@ One application owns foreground time at any instant.
 - Daylens itself and operating-system infrastructure are rejected before persistence.
 
 An application identity keeps the raw process or bundle identity, the normalized application identity, and the display name. Renaming a display name does not alter the source identity.
+
+## Per-display visibility (full screen and second monitors)
+
+Foreground ownership answers "what owns input focus". A full-screen course on a second monitor, or a full-screen video playing while the person types elsewhere, is real activity that foreground capture alone cannot see. The display-visibility stream fixes exactly that hole.
+
+For each attached display, the platform adapter reports only the identity of the window that occupies the display full-screen (or effectively full-screen): application identity, the window title through the same title pipeline and privacy filters as foreground capture, and which display showed it. Nothing else. It is never an enumeration of everything open — a display with no full-screen window contributes only an identity-free "watching, nothing full-screen" health signal.
+
+Rules:
+
+- Visible time is presence evidence, not input-focused time. Every consumer labels it as visible/playing; it never adds to foreground totals, and one minute is never counted twice — time an app was both visible and input-focused belongs to foreground ownership alone.
+- A visible span extends only as far as its last proof. A sampling hole, helper failure, sleep, lock, pause, or capture stop closes the span at the last observation; the gap is never stretched over.
+- The same pre-persistence privacy gates apply: consent, pause, application exclusions, private-window rejection. A browser visible full-screen keeps application identity and timing only — its title and page detail follow the browser rules above unchanged.
+- Titles degrade honestly with permissions. On macOS, full-screen window titles need Screen Recording (or the accessibility fallback); without them, evidence is identity-only with a null title — never a guess — and capture health says which displays are being watched.
+- The stream is versioned behind a capability handshake: an application that does not understand display-visibility events never receives them from a newer helper.
+
+macOS ships first (`cg_display_visibility`). Windows monitor topology follows the same contract when its adapter lands.
 
 ## Browser evidence
 
