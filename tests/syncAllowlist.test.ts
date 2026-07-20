@@ -151,11 +151,11 @@ test('WorkspaceLivePresence is allowlisted and rejects credential labels', () =>
   )
 })
 
-test('DEV-177/DEV-184/DEV-178 tables cannot serialize: entity rows, aliases, grants, disclosures, and memory records are rejected', () => {
-  // The durable-entity, file-access, and exact-search memory tables are
-  // LOCAL-ONLY. None of their shapes have allowlist keys, so any attempt to
-  // ride the sync payload — as a new root collection or nested onto an
-  // allowed object — must throw.
+test('DEV-177/DEV-184/DEV-178/DEV-180 tables cannot serialize: entity rows, aliases, grants, disclosures, memory records, and embeddings are rejected', () => {
+  // The durable-entity, file-access, exact-search memory, and semantic
+  // embedding tables are LOCAL-ONLY. None of their shapes have allowlist
+  // keys, so any attempt to ride the sync payload — as a new root collection
+  // or nested onto an allowed object — must throw.
   const cases: Array<{ name: string; mutate: (payload: ReturnType<typeof makeCleanRemoteSyncPayload>) => unknown }> = [
     {
       name: 'entities table rows as a root collection',
@@ -213,6 +213,29 @@ test('DEV-177/DEV-184/DEV-178 tables cannot serialize: entity rows, aliases, gra
       mutate: (payload) => ({
         ...payload,
         memoryIndexDays: [{ date: '2026-07-20', fingerprint: 'v1|fe:0:0' }],
+      }),
+    },
+    // DEV-180: semantic embeddings are LOCAL-ONLY — generated on-device and
+    // never synced, in any shape.
+    {
+      name: 'embedding vector bookkeeping as a root collection',
+      mutate: (payload) => ({
+        ...payload,
+        memoryRecordVectors: [{ record_id: 'mem_x', model: 'all-MiniLM-L6-v2', model_version: 1, dims: 384 }],
+      }),
+    },
+    {
+      name: 'a raw embedding vector nested onto a synced entity rollup',
+      mutate: (payload) => ({
+        ...payload,
+        entities: [{ ...payload.entities[0]!, embedding: [0.12, -0.5, 0.33] }],
+      }),
+    },
+    {
+      name: 'semantic-search text nested onto a work block',
+      mutate: (payload) => ({
+        ...payload,
+        workBlocks: [{ ...payload.workBlocks[0]!, semanticText: 'Acme pricing draft — private window title' }],
       }),
     },
   ]
