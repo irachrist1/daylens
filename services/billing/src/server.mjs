@@ -39,6 +39,22 @@ const litellmModelAlias = process.env.LITELLM_MODEL_ALIAS || 'daylens-default'
 const economyModelConfigured = Boolean(process.env.DAYLENS_ECONOMY_MODEL)
 const litellmEconomyModelAlias = process.env.LITELLM_ECONOMY_MODEL_ALIAS || 'daylens-economy'
 const localPassAmount = Number(process.env.FLUTTERWAVE_LOCAL_PASS_RWF || 15000)
+// Ed25519 key that signs entitlement snapshots.
+// Optional during migration: when unset, GET /v1/entitlement answers 503 and the
+// desktop's legacy /v1/billing access checks govern unchanged. Mint one with
+// scripts/generate-entitlement-key.mjs; the matching public key is pinned into
+// the desktop build (DAYLENS_ENTITLEMENT_PUBLIC_KEYS) and selected by kid, so
+// rotation ships the new public key in an app update BEFORE signing with it.
+const entitlementKid = process.env.ENTITLEMENT_SIGNING_KID || 'ent-1'
+const entitlementPrivateKey = process.env.ENTITLEMENT_SIGNING_KEY
+  ? crypto.createPrivateKey({ key: Buffer.from(process.env.ENTITLEMENT_SIGNING_KEY, 'base64'), format: 'der', type: 'pkcs8' })
+  : null
+if (entitlementPrivateKey && entitlementPrivateKey.asymmetricKeyType !== 'ed25519') {
+  throw new Error('ENTITLEMENT_SIGNING_KEY must be a base64 PKCS8 DER Ed25519 private key')
+}
+// Snapshots are short-lived; the desktop revalidates every 6 hours online and
+// may honor a persisted snapshot offline until this expiry (spec max: 72h).
+const entitlementTtlMs = 6 * 60 * 60 * 1000
 
 function assertProductionSafety() {
   if (!Number.isFinite(port) || port <= 0) throw new Error('PORT must be a positive number')
@@ -269,6 +285,93 @@ async function billingSnapshot(account) {
           ? 'Your Rwanda mobile-money pass is active.'
           : 'AI is paused. Subscribe or add your own key; capture and local views keep working.',
   }
+}
+
+// ─── Signed entitlement snapshot ─────────────────────────────────────────────
+// One signed statement of what the account is entitled to. The desktop
+// validates the Ed25519 signature against a build-pinned public key selected
+// by `kid` and honors the snapshot offline until `expiresAt` — it never infers
+// paid access from a UI flag or payment receipt alone.
+//
+// The signature covers the UTF-8 bytes of this exact serialization: every
+// field except `signature`, in this exact order. The desktop builds the
+// identical string before verifying (entitlementSigningPayload in
+// src/main/services/entitlement.ts) — change one and you must change both.
+function entitlementSigningPayload(snapshot) {
+  return JSON.stringify({
+    accountId: snapshot.accountId,
+    state: snapshot.state,
+    periodStart: snapshot.periodStart,
+    periodEnd: snapshot.periodEnd,
+    managedCreditGrantedUsd: snapshot.managedCreditGrantedUsd,
+    managedCreditReservedUsd: snapshot.managedCreditReservedUsd,
+    managedCreditConsumedUsd: snapshot.managedCreditConsumedUsd,
+    canUseManagedAI: snapshot.canUseManagedAI,
+    canUseCloud: snapshot.canUseCloud,
+    issuedAt: snapshot.issuedAt,
+    expiresAt: snapshot.expiresAt,
+    kid: snapshot.kid,
+  })
+}
+
+// Entitlement state from the account row. `unavailable` is never signed — the
+// client synthesizes it locally when it has no valid snapshot.
+function entitlementState(account, mode, now) {
+  // A failed renewal (Polar reports past_due) runs the seven-day grace period;
+  // managed access during grace follows the same credit enforcement the
+  // completion path applies, so canUseManagedAI stays truthful to the server.
+  if (account.plan === 'subscription' && account.subscription_status === 'past_due') {
+    const graceEnd = (account.renewal_at ? new Date(account.renewal_at).getTime() : now) + 7 * 86400000
+    return now < graceEnd ? 'grace' : 'expired'
+  }
+  if (mode === 'subscription' || mode === 'local_pass') return 'active'
+  if (mode === 'free_credit') return 'trial'
+  if (account.plan === 'subscription' && account.subscription_status === 'revoked') return 'refunded'
+  if (account.plan !== 'free') return 'expired'
+  return 'exhausted'
+}
+
+async function entitlementSnapshot(account) {
+  const now = Date.now()
+  const mode = accessMode(account)
+  const state = entitlementState(account, mode, now)
+  const paidSpend = await periodSpendMicros(account)
+
+  // Credit mapping during migration: the trial's fixed credit grant maps
+  // directly; paid plans map the fair-use ceiling as the period allowance
+  // until per-period credit grants replace it (per the spec's starting point).
+  const onFreeCredit = mode === 'free_credit' || account.plan === 'free'
+  const grantedMicros = onFreeCredit ? Number(account.free_credit_granted_micros) : fairUseMicros
+  const consumedMicros = onFreeCredit
+    ? Math.min(grantedMicros, grantedMicros - Math.max(0, Number(account.free_credit_remaining_micros)))
+    : Math.min(grantedMicros, paidSpend)
+  const reservationActive = account.spend_reserved_until && new Date(account.spend_reserved_until).getTime() > now
+  const reservedMicros = reservationActive ? Number(account.spend_reserved_micros || 0) : 0
+
+  // Managed access mirrors exactly what the managed completion path enforces
+  // (mode !== 'none'); the in-scope cloud features share the entitlement.
+  const canUseManagedAI = mode !== 'none'
+
+  const unsigned = {
+    accountId: account.id,
+    state,
+    periodStart: mode === 'subscription' && account.period_started_at ? new Date(account.period_started_at).getTime() : null,
+    periodEnd: account.plan === 'local_pass' && account.local_pass_expires_at
+      ? new Date(account.local_pass_expires_at).getTime()
+      : account.renewal_at ? new Date(account.renewal_at).getTime() : null,
+    managedCreditGrantedUsd: grantedMicros / 1_000_000,
+    managedCreditReservedUsd: reservedMicros / 1_000_000,
+    managedCreditConsumedUsd: consumedMicros / 1_000_000,
+    canUseManagedAI,
+    canUseCloud: canUseManagedAI,
+    issuedAt: now,
+    expiresAt: now + entitlementTtlMs,
+    kid: entitlementKid,
+  }
+  const signature = crypto
+    .sign(null, Buffer.from(entitlementSigningPayload(unsigned), 'utf8'), entitlementPrivateKey)
+    .toString('base64')
+  return { ...unsigned, signature }
 }
 
 // The client fully controls the LEFT side of X-Forwarded-For; trusted proxies
@@ -957,6 +1060,10 @@ async function route(req, res) {
 
   const account = await accountForToken(req)
   if (req.method === 'GET' && url.pathname === '/v1/billing') return json(res, 200, await billingSnapshot(account))
+  if (req.method === 'GET' && url.pathname === '/v1/entitlement') {
+    if (!entitlementPrivateKey) return json(res, 503, { error: 'entitlement_signing_unconfigured' })
+    return json(res, 200, await entitlementSnapshot(account))
+  }
   if (req.method === 'GET' && url.pathname === '/v1/usage') return usage(account, url, res)
   if (req.method === 'GET' && url.pathname === '/v1/payments') return payments(account, res)
   if (req.method === 'POST' && url.pathname === '/v1/installations/rotate-token') return rotateInstallationToken(account, req, res)

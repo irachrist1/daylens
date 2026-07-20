@@ -163,6 +163,13 @@ process.env.FLUTTERWAVE_API_BASE_URL = `http://127.0.0.1:${UPSTREAM}/flutterwave
 process.env.FLUTTERWAVE_SECRET_KEY = 'FLWSECK_TEST-sandbox'
 process.env.FLUTTERWAVE_SECRET_HASH = `sandbox-verif-hash-${randHex()}`
 process.env.INTERCOM_IDENTITY_VERIFICATION_SECRET = randSecret()
+// Entitlement-snapshot signing (checks 29-31): the sandbox mints its own
+// Ed25519 keypair, hands the private half to the server, and verifies the
+// signatures it gets back with the public half — the exact trust shape the
+// desktop uses with its build-pinned public key.
+const entitlementKeys = crypto.generateKeyPairSync('ed25519')
+process.env.ENTITLEMENT_SIGNING_KEY = entitlementKeys.privateKey.export({ format: 'der', type: 'pkcs8' }).toString('base64')
+process.env.ENTITLEMENT_SIGNING_KID = 'sandbox-ent-1'
 const LOCAL_PASS_RWF = Number(process.env.FLUTTERWAVE_LOCAL_PASS_RWF)
 
 const fakeServer = await startFakeUpstream(UPSTREAM)
@@ -643,6 +650,77 @@ try {
     'Spoofed X-Forwarded-For entries cannot evade the bootstrap rate limit',
     spoofStatuses.filter((status) => status === 200).length <= 20 && spoofStatuses[20] === 429,
     `bootstraps=${spoofStatuses.filter((s) => s === 200).length} allowed, 21st=${spoofStatuses[20]}`,
+  )
+
+  // ── Signed entitlement snapshots (DEV-194 / DEV-195) ─────────────────────
+  // Verify with the same canonical payload the desktop uses
+  // (src/main/services/entitlement.ts): every field except `signature`, in
+  // this exact order, UTF-8, Ed25519.
+  const entitlementPayload = (snap) => JSON.stringify({
+    accountId: snap.accountId,
+    state: snap.state,
+    periodStart: snap.periodStart,
+    periodEnd: snap.periodEnd,
+    managedCreditGrantedUsd: snap.managedCreditGrantedUsd,
+    managedCreditReservedUsd: snap.managedCreditReservedUsd,
+    managedCreditConsumedUsd: snap.managedCreditConsumedUsd,
+    canUseManagedAI: snap.canUseManagedAI,
+    canUseCloud: snap.canUseCloud,
+    issuedAt: snap.issuedAt,
+    expiresAt: snap.expiresAt,
+    kid: snap.kid,
+  })
+  const verifiesWithPinnedKey = (snap) => {
+    try {
+      return crypto.verify(null, Buffer.from(entitlementPayload(snap), 'utf8'), entitlementKeys.publicKey, Buffer.from(snap.signature, 'base64'))
+    } catch {
+      return false
+    }
+  }
+
+  const entitlementToken = await bootstrapInstall('entitlement')
+  const trialEntitlement = await api('/v1/entitlement', { token: entitlementToken })
+  check(
+    29,
+    'A fresh install gets a signed, verifiable, short-lived trial entitlement',
+    trialEntitlement.status === 200
+      && trialEntitlement.json.state === 'trial'
+      && trialEntitlement.json.canUseManagedAI === true
+      && trialEntitlement.json.managedCreditGrantedUsd === 5
+      && trialEntitlement.json.kid === 'sandbox-ent-1'
+      && verifiesWithPinnedKey(trialEntitlement.json)
+      && trialEntitlement.json.expiresAt - trialEntitlement.json.issuedAt <= 72 * 3600_000,
+    `state=${trialEntitlement.json.state}, verified=${verifiesWithPinnedKey(trialEntitlement.json)}, ttl=${(trialEntitlement.json.expiresAt - trialEntitlement.json.issuedAt) / 3600_000}h`,
+  )
+
+  const forged = { ...trialEntitlement.json, state: 'active', canUseManagedAI: true, expiresAt: trialEntitlement.json.expiresAt + 365 * 86400_000 }
+  check(
+    30,
+    'A tampered snapshot fails signature verification (snapshots cannot be forged)',
+    verifiesWithPinnedKey(trialEntitlement.json) && !verifiesWithPinnedKey(forged),
+    `original=${verifiesWithPinnedKey(trialEntitlement.json)}, forged=${verifiesWithPinnedKey(forged)}`,
+  )
+
+  // Running out of credit (DEV-195): drain the $5 trial credit in one call,
+  // then the signed snapshot flips to exhausted, managed sessions are refused,
+  // and the billing message keeps local use and BYOK alive.
+  const entitlementSession = (await api('/v1/ai/session', { method: 'POST', token: entitlementToken, body: {} })).json
+  await managedCall(entitlementSession, 'drain')
+  const exhaustedEntitlement = await api('/v1/entitlement', { token: entitlementToken })
+  const exhaustedSession = await api('/v1/ai/session', { method: 'POST', token: entitlementToken, body: {} })
+  const exhaustedBilling = await api('/v1/billing', { token: entitlementToken })
+  check(
+    31,
+    'Exhaustion flips the signed snapshot, pauses managed AI, and leaves local use intact',
+    exhaustedEntitlement.status === 200
+      && exhaustedEntitlement.json.state === 'exhausted'
+      && exhaustedEntitlement.json.canUseManagedAI === false
+      && exhaustedEntitlement.json.canUseCloud === false
+      && exhaustedEntitlement.json.managedCreditConsumedUsd === 5
+      && verifiesWithPinnedKey(exhaustedEntitlement.json)
+      && exhaustedSession.status === 402
+      && /capture and local views keep working/i.test(exhaustedBilling.json.message || ''),
+    `state=${exhaustedEntitlement.json.state}, consumed=$${exhaustedEntitlement.json.managedCreditConsumedUsd}, session=${exhaustedSession.status}`,
   )
 } catch (error) {
   console.error('\nSandbox run threw:', error)

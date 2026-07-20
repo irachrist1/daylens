@@ -43,6 +43,7 @@
     "timeline:eval": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader.mjs ./tests/timeline-eval/run.ts",
     "bench:queries": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader.mjs ./scripts/benchmark-year-queries.ts",
     "billing:check": "node --check services/billing/src/server.mjs",
+    "billing:entitlement-key": "node services/billing/scripts/generate-entitlement-key.mjs",
     "billing:sandbox": "node services/billing/sandbox/run.mjs",
     "billing:e2e": "node services/billing/sandbox/run.mjs",
     "timeline": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader-real.mjs ./tests/ai-behaviour/show-timeline.ts",

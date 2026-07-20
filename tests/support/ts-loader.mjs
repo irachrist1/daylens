@@ -14,6 +14,7 @@ const BUILD_DEFINES = {
   __POSTHOG_KEY__: process.env.POSTHOG_KEY || '',
   __POSTHOG_HOST__: process.env.POSTHOG_HOST || '',
   __SENTRY_DSN__: process.env.SENTRY_DSN || '',
+  __DAYLENS_ENTITLEMENT_PUBLIC_KEYS__: process.env.DAYLENS_ENTITLEMENT_PUBLIC_KEYS || '{}',
 }
 
 function buildDefineShim(source) {

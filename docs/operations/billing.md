@@ -69,6 +69,12 @@ Configuration names and required values are documented in `services/billing/.env
 
 The desktop release must be built with `DAYLENS_BILLING_API_URL`. Without it, Daylens continues to support bring-your-own-key while managed access remains unavailable.
 
+### Signed entitlement snapshots
+
+The service signs `GET /v1/entitlement` responses with Ed25519 when `ENTITLEMENT_SIGNING_KEY` (base64 PKCS8 DER private key) and `ENTITLEMENT_SIGNING_KID` are set. Mint a keypair with `node services/billing/scripts/generate-entitlement-key.mjs <kid>`: the private half goes to the service environment, and the printed `DAYLENS_ENTITLEMENT_PUBLIC_KEYS` JSON (kid → base64 raw public key) is set when building the desktop release so the public key is pinned into the build.
+
+Until both halves are deployed the entitlement gate is unarmed on both sides: the endpoint answers 503 and desktop access checks continue to follow `/v1/billing` unchanged. Once a desktop build pins a public key, the signed snapshot governs managed access on that build — validated on receipt, persisted, honored offline until its signed expiry (at most 72 hours), and failed closed for managed AI (open for local use and BYOK) when no valid snapshot exists. Rotation is kid-based: ship the new public key in an app update before the service signs with the new private key.
+
 ## Deployment order
 
 1. Accept the billing product specification and confirm pricing.

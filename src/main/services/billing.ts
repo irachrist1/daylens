@@ -5,6 +5,7 @@ import { app } from 'electron'
 import { deliverNotification } from './notificationDelivery'
 import type {
   BillingAccessSnapshot,
+  EntitlementSnapshot,
   BillingUsageCostSource,
   BillingUsageHourlyPoint,
   BillingUsageJobSummary,
@@ -20,6 +21,13 @@ import { getDb } from './database'
 import { estimateUsageCostUsd, lookupModelPricing } from './modelPricing'
 import { getSecureStore } from './secureStore'
 import { getSettingsAsync, hasApiKey, setSettings } from './settings'
+import {
+  deriveEntitlementAccess,
+  pinnedEntitlementPublicKeys,
+  preExhaustionWarning,
+  usablePersistedSnapshot,
+  validateEntitlementSnapshot,
+} from './entitlement'
 import { assertRealDayExternalAccessAllowed, isRealDayHarness } from '../lib/realDayHarness'
 
 declare const __DAYLENS_BILLING_API_URL__: string
@@ -243,6 +251,99 @@ function maybeWarnFairUse(snapshot: BillingAccessSnapshot): void {
   }
 }
 
+// ─── Signed entitlement snapshot ─────────────────────────────────────────────
+// The consolidation seam for desktop access checks: when the
+// build pins an entitlement public key, the signed EntitlementSnapshot from
+// GET /v1/entitlement governs managed access — validated, persisted, honored
+// offline until its signed expiry, and failed CLOSED for managed AI (open for
+// local use) when no valid snapshot exists. When no key is pinned (the state
+// of every current build), the gate is unarmed and the legacy /v1/billing
+// snapshot governs unchanged.
+
+type EntitlementLookup =
+  | { armed: false }
+  | { armed: true; snapshot: EntitlementSnapshot | null }
+
+function entitlementSnapshotPath(): string {
+  return path.join(app.getPath('userData'), 'entitlement-snapshot.json')
+}
+
+function readPersistedEntitlement(keys: Record<string, string>): EntitlementSnapshot | null {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(entitlementSnapshotPath(), 'utf8')) as unknown
+    // Re-validates signature and expiry, so a tampered or stale file on disk
+    // fails closed exactly like a forged network response.
+    return usablePersistedSnapshot(parsed, keys, Date.now())
+  } catch {
+    return null
+  }
+}
+
+async function getEntitlement(): Promise<EntitlementLookup> {
+  const keys = pinnedEntitlementPublicKeys()
+  if (Object.keys(keys).length === 0 || !apiUrl()) return { armed: false }
+  try {
+    const fetched = await request<EntitlementSnapshot>('/v1/entitlement')
+    const result = validateEntitlementSnapshot(fetched, keys, Date.now())
+    if (result.valid) {
+      try {
+        fs.writeFileSync(entitlementSnapshotPath(), JSON.stringify(result.snapshot, null, 2))
+      } catch {
+        // Persistence is best-effort; the validated in-memory snapshot still governs.
+      }
+      return { armed: true, snapshot: result.snapshot }
+    }
+    // An invalid response never overwrites a previously validated snapshot.
+    return { armed: true, snapshot: readPersistedEntitlement(keys) }
+  } catch {
+    // Service unreachable (or /v1/entitlement not deployed yet): honor the
+    // persisted validated snapshot until its signed expiry, per the spec.
+    return { armed: true, snapshot: readPersistedEntitlement(keys) }
+  }
+}
+
+// One pre-exhaustion warning per period at 80% of the allowance (DEV-195).
+// Same once-per-period persistence pattern as the fair-use warning above, in
+// its own state file because the period keys are entitlement-shaped.
+function entitlementWarnStatePath(): string {
+  return path.join(app.getPath('userData'), 'entitlement-warn-state.json')
+}
+
+function maybeWarnPreExhaustion(snapshot: EntitlementSnapshot): void {
+  try {
+    let warned: string[] = []
+    try {
+      const parsed = JSON.parse(fs.readFileSync(entitlementWarnStatePath(), 'utf8')) as { warnedPeriods?: string[] }
+      warned = Array.isArray(parsed.warnedPeriods) ? parsed.warnedPeriods : []
+    } catch {
+      warned = []
+    }
+    const { shouldWarn, periodKey, usedFraction } = preExhaustionWarning(snapshot, warned)
+    if (!shouldWarn) return
+    const resetNote = snapshot.periodEnd
+      ? ` It resets on ${new Date(snapshot.periodEnd).toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}.`
+      : ''
+    deliverNotification({
+      title: 'Daylens AI: nearing this period’s included credit',
+      body: `You’ve used ${Math.round(usedFraction * 100)}% of your included AI credit.${resetNote} To keep going without limits, add your own API key in Settings.`,
+      surface: 'billing-pre-exhaustion',
+    })
+    fs.writeFileSync(entitlementWarnStatePath(), JSON.stringify({ warnedPeriods: [...warned.slice(-11), periodKey] }, null, 2))
+  } catch {
+    // The warning is best-effort; never let it break the access snapshot path.
+  }
+}
+
+// Apply the entitlement verdict to the legacy access snapshot. Managed access
+// follows the signed snapshot; own-key and local behavior are untouched.
+function applyEntitlementGate(value: BillingAccessSnapshot, lookup: EntitlementLookup): BillingAccessSnapshot {
+  if (!lookup.armed) return value
+  if (lookup.snapshot) maybeWarnPreExhaustion(lookup.snapshot)
+  const derived = deriveEntitlementAccess(lookup.snapshot, Date.now())
+  if (derived.canUseManagedAI || !value.managed) return value
+  return { ...value, canUseAI: false, message: derived.message }
+}
+
 export async function getBillingAccess(options: { force?: boolean } = {}): Promise<BillingAccessSnapshot> {
   const ownKeyProvider = await selectedOwnKeyProvider()
   if (ownKeyProvider) {
@@ -258,7 +359,8 @@ export async function getBillingAccess(options: { force?: boolean } = {}): Promi
   if (!apiUrl()) return unavailableSnapshot()
   if (!options.force && cachedAccess && Date.now() - cachedAccess.at < MANAGED_STATE_TTL_MS) return cachedAccess.value
   try {
-    const value = await request<BillingAccessSnapshot>('/v1/billing')
+    const fetched = await request<BillingAccessSnapshot>('/v1/billing')
+    const value = applyEntitlementGate(fetched, await getEntitlement())
     // subscription_started: the app learns a purchase completed only by the
     // access snapshot flipping into a paid mode after the browser checkout.
     // (The API reports no price; `plan` carries the billing mode.) `trigger`
@@ -273,6 +375,17 @@ export async function getBillingAccess(options: { force?: boolean } = {}): Promi
     maybeWarnFairUse(value)
     return value
   } catch (error) {
+    // Billing service unreachable. When the entitlement gate is armed and a
+    // validated snapshot is persisted, say what the person actually keeps
+    // (until the snapshot's signed expiry) instead of a bare error.
+    const keys = pinnedEntitlementPublicKeys()
+    if (Object.keys(keys).length > 0) {
+      const persisted = readPersistedEntitlement(keys)
+      if (persisted) {
+        const until = new Date(persisted.expiresAt).toLocaleString('en-US', { month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+        return unavailableSnapshot(`Daylens can’t reach the billing service right now. Your ${persisted.state === 'trial' ? 'trial' : 'plan'} status is remembered until ${until}; local features and your own key keep working.`)
+      }
+    }
     return unavailableSnapshot(error instanceof Error ? error.message : String(error))
   }
 }
