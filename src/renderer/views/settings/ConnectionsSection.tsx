@@ -58,11 +58,21 @@ const inputStyle: React.CSSProperties = {
 
 function ConnectorCard({ listing, onChanged }: { listing: ConnectorListing; onChanged: () => Promise<void> }) {
   const connected = listing.authState !== 'disconnected'
+  const needsReauth = listing.authState === 'needs_attention'
   const [busy, setBusy] = useState<'connect' | 'sync' | 'disconnect' | null>(null)
   const [actionNote, setActionNote] = useState<string | null>(null)
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false)
   const [clientId, setClientId] = useState('')
   const [clientSecret, setClientSecret] = useState('')
+
+  // Honest progress for the bounded initial import: "waiting for your
+  // browser" and "importing your last N days" are different states.
+  useEffect(() => ipc.connectors.onConnectProgress((event) => {
+    if (event.connectorId !== listing.id) return
+    setActionNote(event.phase === 'authorizing'
+      ? 'Waiting for authorization in your browser…'
+      : `Authorized. Importing your last ${listing.lookbackDays} days of events…`)
+  }), [listing.id, listing.lookbackDays])
 
   const run = useCallback(async (
     kind: 'connect' | 'sync' | 'disconnect',
@@ -137,8 +147,13 @@ function ConnectorCard({ listing, onChanged }: { listing: ConnectorListing; onCh
         </div>
       )}
 
-      {listing.available && !connected && (
+      {listing.available && (!connected || needsReauth) && (
         <div style={{ display: 'grid', gap: 6 }}>
+          {needsReauth && (
+            <div style={{ fontSize: 11.5, color: 'var(--color-danger, #d33)' }}>
+              The authorization no longer works. Reconnect to resume syncing — your imported data is untouched.
+            </div>
+          )}
           {listing.authKind === 'oauth' && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
               <input
@@ -160,11 +175,11 @@ function ConnectorCard({ listing, onChanged }: { listing: ConnectorListing; onCh
           )}
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <button style={buttonStyle} disabled={busy != null} onClick={connect}>
-              {busy === 'connect' ? 'Connecting…' : 'Connect'}
+              {busy === 'connect' ? 'Connecting…' : needsReauth ? 'Reconnect' : 'Connect'}
             </button>
             {listing.authKind === 'oauth' && (
               <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>
-                Connecting opens your browser to authorize read-only access.
+                Opens your browser to grant exactly the read-only scopes listed above — nothing more.
               </span>
             )}
           </div>

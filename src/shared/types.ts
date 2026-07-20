@@ -1630,6 +1630,8 @@ export interface ConnectorListing {
   whatItBrings: string
   /** Exact read-only scopes, each with plain-language meaning. */
   scopes: Array<{ scope: string; grants: string }>
+  /** Bounded initial-sync lookback, for honest progress copy. */
+  lookbackDays: number
   /** True when a working adapter ships today; false = listed for the wave. */
   available: boolean
   authState: ConnectorAuthState
@@ -2721,6 +2723,8 @@ export const IPC = {
     CONNECT: 'connectors:connect',
     SYNC: 'connectors:sync',
     DISCONNECT: 'connectors:disconnect',
+    /** Main → renderer: connect-phase progress ({ connectorId, phase }). */
+    PROGRESS: 'connectors:progress',
   },
   EXPORT: {
     // Full-history export (DEV-196). PLAN previews what an export would

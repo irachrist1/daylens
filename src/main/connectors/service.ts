@@ -60,6 +60,7 @@ export function listConnectorListings(db: Database.Database): ConnectorListing[]
       authKind: manifest.authKind,
       whatItBrings: manifest.whatItBrings,
       scopes: manifest.scopes.map((scope) => ({ ...scope })),
+      lookbackDays: manifest.lookbackDays,
       available: manifest.available,
       authState: connected ? connection.status : 'disconnected',
       accountLabel: connected ? connection.account_label : null,
@@ -76,11 +77,21 @@ export function listConnectorListings(db: Database.Database): ConnectorListing[]
 
 export type { ConnectorSyncSummary }
 
+/** Phases a connect reports while it runs, so Settings can show honest
+ *  progress: the authorization hand-off, then the bounded initial import. */
+export type ConnectorConnectPhase = 'authorizing' | 'syncing'
+
 export async function connectConnector(
   db: Database.Database,
   connectorId: ConnectorId,
   config: Record<string, unknown>,
-  options: { adapter?: ConnectorAdapter; gate?: ConnectorIngestGate; nowMs?: number } = {},
+  options: {
+    adapter?: ConnectorAdapter
+    gate?: ConnectorIngestGate
+    nowMs?: number
+    /** Called as the connect advances phases (never with any credential). */
+    onProgress?: (phase: ConnectorConnectPhase) => void
+  } = {},
 ): Promise<ConnectorSyncSummary> {
   const gate = options.gate ?? defaultConnectorGate()
   const gateState = connectorGateState(gate)
@@ -96,6 +107,7 @@ export async function connectConnector(
       ? `${manifest.displayName} is not available to connect yet.`
       : `Unknown connector: ${connectorId}`)
   }
+  options.onProgress?.('authorizing')
   const result = await adapter.connect({ config })
   saveConnectorConnection(db, {
     connectorId,
@@ -103,7 +115,9 @@ export async function connectConnector(
     config: result.config,
     nowMs: options.nowMs,
   })
-  // First sync immediately — connecting should visibly bring data or say why not.
+  // First sync immediately — connecting should visibly bring data or say why
+  // not. The bounded initial lookback runs here, so the phase is reported.
+  options.onProgress?.('syncing')
   return syncConnector(db, connectorId, options)
 }
 
@@ -150,10 +164,15 @@ export async function syncConnector(
       : null
     const retryDelay = computeBackoffMs(adapter.manifest.rateLimit, failures, providerResetMs)
     const summary = error instanceof Error ? error.message : 'Sync failed.'
+    // An authorization-shaped failure (expired/revoked/missing token) flags
+    // needs_attention IMMEDIATELY — retrying cannot fix it, only the
+    // reauthorize affordance in Settings can.
+    const needsAttention = failures >= 3
+      || (error as { needsAttention?: unknown } | null)?.needsAttention === true
     recordConnectorSyncFailure(db, connectorId, {
       errorSummary: summary,
       nextRetryAt: nowMs + retryDelay,
-      needsAttention: failures >= 3,
+      needsAttention,
       nowMs,
     })
     return { status: 'failed', ingested: 0, quarantined: 0, tombstoned: 0, error: summary }

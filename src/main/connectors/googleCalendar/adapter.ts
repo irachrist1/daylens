@@ -143,20 +143,37 @@ export function createGoogleCalendarAdapter(deps: GoogleCalendarAdapterDeps = {}
     await setConnectorSecret(GOOGLE_CALENDAR_CONNECTOR_ID, JSON.stringify(tokens), secretStore)
   }
 
+  /** Marks an error as reauthorization-shaped: the connection flags
+   *  needs_attention on the FIRST failure and Settings offers Reconnect. */
+  function asReauthorizationError(error: Error): Error {
+    Object.assign(error, { needsAttention: true })
+    return error
+  }
+
   /** A working access token, refreshing (and re-persisting) when the stored
    *  one is at or past its safety-margin expiry. */
   async function freshTokens(nowMs: number): Promise<GoogleOAuthTokens> {
     const tokens = await readTokens()
     if (!tokens) {
-      throw new Error('Google Calendar authorization is missing. Reconnect to resume syncing.')
+      throw asReauthorizationError(new Error('Google Calendar authorization is missing. Reconnect to resume syncing.'))
     }
     if (tokens.expiresAtMs > nowMs) return tokens
-    const refreshed = await refreshGoogleAccessToken({
-      fetchImpl,
-      tokenEndpoint: deps.endpoints?.token,
-      tokens,
-      nowMs,
-    })
+    let refreshed: GoogleOAuthTokens
+    try {
+      refreshed = await refreshGoogleAccessToken({
+        fetchImpl,
+        tokenEndpoint: deps.endpoints?.token,
+        tokens,
+        nowMs,
+      })
+    } catch (error) {
+      // Google ANSWERED and refused (revoked/expired grant) → reauthorize.
+      // An unreachable token service is transient — plain retryable failure.
+      if (error instanceof Error && !/unreachable/.test(error.message)) {
+        throw asReauthorizationError(error)
+      }
+      throw error
+    }
     await writeTokens(refreshed)
     return refreshed
   }

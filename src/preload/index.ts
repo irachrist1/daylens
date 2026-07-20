@@ -531,6 +531,14 @@ const api = {
       ipcRenderer.invoke(IPC.CONNECTORS.SYNC, connectorId),
     disconnect: (connectorId: ConnectorId, options: { deleteData: boolean }): Promise<void> =>
       ipcRenderer.invoke(IPC.CONNECTORS.DISCONNECT, connectorId, options),
+    onConnectProgress: (
+      callback: (event: { connectorId: ConnectorId; phase: 'authorizing' | 'syncing' }) => void,
+    ): (() => void) => {
+      const handler = (_e: Electron.IpcRendererEvent, event: { connectorId: ConnectorId; phase: 'authorizing' | 'syncing' }) =>
+        callback(event)
+      ipcRenderer.on(IPC.CONNECTORS.PROGRESS, handler)
+      return () => { ipcRenderer.removeListener(IPC.CONNECTORS.PROGRESS, handler) }
+    },
   },
   export: {
     // DEV-196: full-history export. Plans, progress, and verification reports

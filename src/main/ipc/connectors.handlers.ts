@@ -28,9 +28,15 @@ export function registerConnectorHandlers(): void {
     return listConnectorListings(getDb())
   })
 
-  ipcMain.handle(IPC.CONNECTORS.CONNECT, async (_event, connectorId: ConnectorId, config: Record<string, unknown>) => {
+  ipcMain.handle(IPC.CONNECTORS.CONNECT, async (event, connectorId: ConnectorId, config: Record<string, unknown>) => {
     try {
-      return await connectConnector(getDb(), connectorId, config ?? {})
+      return await connectConnector(getDb(), connectorId, config ?? {}, {
+        // Honest progress for the bounded initial import: the renderer shows
+        // "waiting for your browser" vs "importing your history" truthfully.
+        onProgress: (phase) => {
+          try { event.sender.send(IPC.CONNECTORS.PROGRESS, { connectorId, phase }) } catch { /* window gone */ }
+        },
+      })
     } catch (error) {
       throw sanitizedError(error)
     }

@@ -15,8 +15,11 @@ export class GoogleSyncTokenExpiredError extends Error {
   }
 }
 
-/** The stored authorization no longer works (HTTP 401/403 auth-shaped). */
+/** The stored authorization no longer works (HTTP 401/403 auth-shaped).
+ *  `needsAttention` makes the connection flag needs_attention immediately —
+ *  Settings shows the reauthorize affordance instead of a silent retry loop. */
 class GoogleAuthorizationError extends Error {
+  readonly needsAttention = true
   constructor() {
     super('Google Calendar authorization was rejected. Reconnect to resume syncing.')
   }
