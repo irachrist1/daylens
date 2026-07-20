@@ -29,6 +29,17 @@ const mac = {
   artifactName: 'Daylens-${version}-${arch}.${ext}',
   hardenedRuntime: true,
   gatekeeperAssess: false,
+  // Hardened-runtime exceptions Electron needs (V8 JIT / wasm). Explicit files
+  // instead of electron-builder's bundled defaults so signed builds are
+  // deterministic and reviewable.
+  entitlements: 'build/entitlements.mac.plist',
+  entitlementsInherit: 'build/entitlements.mac.plist',
+  // Notarization runs automatically after Developer ID signing when the Apple
+  // credentials are present in the environment: either APPLE_API_KEY (path to
+  // the App Store Connect .p8) + APPLE_API_KEY_ID + APPLE_API_ISSUER, or
+  // APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID. Ad-hoc builds
+  // never sign with an identity, so notarization is skipped there.
+  notarize: true,
 }
 
 const macAfterSign = './scripts/mac-afterSign.js'
@@ -90,6 +101,23 @@ if (
 
 if (process.env.DAYLENS_REQUIRE_WIN_SIGNING === '1' && !fs.existsSync(process.env.WIN_CERTIFICATE_FILE_PATH)) {
   throw new Error(`DAYLENS_REQUIRE_WIN_SIGNING=1 requires WIN_CERTIFICATE_FILE_PATH to exist: ${process.env.WIN_CERTIFICATE_FILE_PATH}`)
+}
+
+// Mirrors DAYLENS_REQUIRE_WIN_SIGNING: when a release must ship Developer-ID
+// signed and notarized, fail the build up front with the exact list of missing
+// credentials instead of silently producing an ad-hoc build.
+if (process.env.DAYLENS_REQUIRE_MAC_SIGNING === '1') {
+  const missing = []
+  if (!process.env.CSC_LINK) missing.push('CSC_LINK (base64 Developer ID Application .p12)')
+  if (!process.env.CSC_KEY_PASSWORD) missing.push('CSC_KEY_PASSWORD (.p12 password)')
+  const hasApiKeyNotary = process.env.APPLE_API_KEY && process.env.APPLE_API_KEY_ID && process.env.APPLE_API_ISSUER
+  const hasAppleIdNotary = process.env.APPLE_ID && process.env.APPLE_APP_SPECIFIC_PASSWORD && process.env.APPLE_TEAM_ID
+  if (!hasApiKeyNotary && !hasAppleIdNotary) {
+    missing.push('notarization credentials: either APPLE_API_KEY + APPLE_API_KEY_ID + APPLE_API_ISSUER, or APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID')
+  }
+  if (missing.length > 0) {
+    throw new Error(`DAYLENS_REQUIRE_MAC_SIGNING=1 but credentials are missing:\n- ${missing.join('\n- ')}`)
+  }
 }
 
 module.exports = {

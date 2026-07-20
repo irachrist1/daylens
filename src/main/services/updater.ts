@@ -23,6 +23,10 @@ import { isRealDayHarness } from '../lib/realDayHarness'
 
 const MANUAL_DOWNLOAD_URL = 'https://christian-tonny.dev/daylens'
 const REMOTE_UPDATE_FEED_URL = process.env.DAYLENS_UPDATE_FEED_URL?.trim() || 'https://christian-tonny.dev/daylens/api/update-feed'
+// First check shortly after launch, then keep re-checking in the background so
+// a long-running app still learns about a release shipped days later.
+const FIRST_UPDATE_CHECK_DELAY_MS = 10_000
+const BACKGROUND_RECHECK_INTERVAL_MS = 4 * 60 * 60 * 1000
 
 export interface UpdaterState {
   status: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'not-available' | 'error' | 'installing'
@@ -77,6 +81,37 @@ export function cancelPendingAutoInstall(): void {
 }
 export function registerUpdaterShutdown(fn: () => Promise<void>): void { _beforeInstall = fn }
 export function getUpdaterState(): UpdaterState { return { ..._state } }
+
+// The updater keeps module-level caches (signing probe results, pending
+// update, timers). Tests that exercise both the ad-hoc and the signed Mac
+// paths in one process need a clean slate between scenarios.
+export function __resetUpdaterForTests(): void {
+  if (_firstCheckTimer) clearTimeout(_firstCheckTimer)
+  if (_recheckTimer) clearInterval(_recheckTimer)
+  _firstCheckTimer = null
+  _recheckTimer = null
+  _macAdhocCache = null
+  _windowsAuthenticodeCache = null
+  _updateAvailable = null
+  _installingUpdate = false
+  _statusWindow = null
+  _beforeInstall = null
+  _pendingRemoteUpdate = null
+  _state = {
+    status: 'idle',
+    version: null,
+    progressPct: null,
+    errorMessage: null,
+    releaseName: null,
+    releaseNotesText: null,
+    releaseDate: null,
+    packageType: null,
+    supported: false,
+    supportMessage: null,
+    downloadUrl: null,
+    canAutoInstall: true,
+  }
+}
 
 // Squirrel.Mac validates the downloaded bundle against the running app's
 // designated requirement before swapping it in. Ad-hoc signatures (no Apple
@@ -204,7 +239,7 @@ function getAutoUpdateSupport(): { supported: boolean; message: string | null; p
     }
     return {
       supported: true,
-      message: 'Automatic update checks are enabled for this Daylens build. Daylens installs a new version only when you choose it.',
+      message: 'This Daylens build is signed with an Apple Developer ID. Daylens downloads updates in the background and installs one only when you choose Restart to update (or when you quit the app).',
       packageType: null,
     }
   }
@@ -264,13 +299,17 @@ function supportsAutoUpdates(): boolean {
 }
 
 function usesRemoteUpdateFeed(): boolean {
-  // macOS needs the remote feed because Squirrel.Mac validates the bundle against
-  // the running app's designated requirement. Ad-hoc builds (no Developer ID) always
-  // fail that check, so we bypass Squirrel entirely and do the swap ourselves.
+  // Ad-hoc Mac builds need the remote feed because Squirrel.Mac validates the
+  // bundle against the running app's designated requirement. Ad-hoc builds (no
+  // Developer ID) always fail that check, so we bypass Squirrel entirely and do
+  // the swap ourselves. A Developer-ID-signed Daylens satisfies Squirrel's
+  // check, so signed Mac builds use electron-updater's native path against the
+  // published latest-mac.yml — Squirrel then verifies the downloaded bundle's
+  // signature before swapping it in, which the ad-hoc swap can never do.
   // Windows uses electron-updater's native NSIS update path, which silently downloads
   // the new installer in the background and applies it on the next app quit — no remote
   // feed needed there.
-  return process.platform === 'darwin'
+  return process.platform === 'darwin' && isMacAdhocSigned()
 }
 
 function normalizeUpdaterErrorMessage(message: string): string {
@@ -281,6 +320,17 @@ function normalizeUpdaterErrorMessage(message: string): string {
   if (process.platform === 'win32') {
     if (/latest\.yml/i.test(message) && /(404|Cannot find)/i.test(message)) {
       return 'This Windows release was published without updater metadata, so in-app updates are unavailable for this build. Download the latest Windows installer from the Daylens site instead.'
+    }
+    return message
+  }
+
+  if (process.platform === 'darwin') {
+    // Developer-ID-signed builds check the electron-updater feed directly.
+    if (/latest-mac\.yml/i.test(message) && /(404|Cannot find)/i.test(message)) {
+      return 'This macOS release was published without updater metadata, so in-app updates are unavailable for this build. Download the latest macOS build from the Daylens site instead.'
+    }
+    if (/code signature|codesign|did not pass validation/i.test(message)) {
+      return 'The downloaded update failed macOS signature verification, so it was not installed. Download the latest macOS build from the Daylens site instead.'
     }
     return message
   }
@@ -308,6 +358,30 @@ function normalizeUpdaterErrorMessage(message: string): string {
   }
 
   return message
+}
+
+let _firstCheckTimer: NodeJS.Timeout | null = null
+let _recheckTimer: NodeJS.Timeout | null = null
+
+// A single launch check would strand long-running apps on old builds: someone
+// who never quits Daylens would never hear about a release shipped a week
+// later. Check shortly after launch, then on a fixed cadence — skipping any
+// tick where a check, download, staged install, or install is already in
+// flight so the recheck can never clobber active updater work.
+function scheduleBackgroundChecks(check: () => void): void {
+  if (_firstCheckTimer) clearTimeout(_firstCheckTimer)
+  if (_recheckTimer) clearInterval(_recheckTimer)
+
+  const busyStatuses = new Set<UpdaterState['status']>(['checking', 'downloading', 'downloaded', 'installing'])
+  const runIfIdle = () => {
+    if (_installingUpdate || busyStatuses.has(_state.status)) return
+    check()
+  }
+
+  _firstCheckTimer = setTimeout(runIfIdle, FIRST_UPDATE_CHECK_DELAY_MS)
+  _recheckTimer = setInterval(runIfIdle, BACKGROUND_RECHECK_INTERVAL_MS)
+  _firstCheckTimer.unref?.()
+  _recheckTimer.unref?.()
 }
 
 function emitState(): void {
@@ -732,6 +806,13 @@ async function scheduleAdhocMacSwap(staged: StagedAdhocMacUpdate): Promise<void>
   // the bundle at the original path (so dock icons / launchd refs survive),
   // re-sign ad-hoc + clear quarantine xattr so Gatekeeper accepts the moved
   // bundle, then relaunch.
+  //
+  // Migration to signed releases: when the downloaded bundle carries a real
+  // Developer ID signature (the first notarized release an ad-hoc install
+  // updates into), re-signing it ad-hoc here would strip that signature and
+  // strand the user on the ad-hoc path forever. Leave real signatures intact —
+  // the swapped-in build then detects itself as signed and switches to the
+  // verified Squirrel.Mac updater from the next launch.
   const script = `#!/bin/bash
 set -u
 exec >>"${logPath}" 2>&1
@@ -745,7 +826,12 @@ if [ -d "${targetApp}" ]; then
   rm -rf "${targetApp}"
 fi
 mv "${stagedApp}" "${targetApp}" || { echo "[swap] mv failed"; exit 1; }
-/usr/bin/codesign --force --deep --sign - "${targetApp}" || true
+SIG_INFO="$(/usr/bin/codesign -dv --verbose=2 "${targetApp}" 2>&1 || true)"
+if printf '%s' "$SIG_INFO" | grep -q 'TeamIdentifier=' && ! printf '%s' "$SIG_INFO" | grep -qiE 'Signature=adhoc|TeamIdentifier=not set'; then
+  echo "[swap] Developer ID signature detected; leaving it intact"
+else
+  /usr/bin/codesign --force --deep --sign - "${targetApp}" || true
+fi
 /usr/bin/xattr -cr "${targetApp}" || true
 /usr/bin/open -n "${targetApp}"
 rm -rf "${extractDir}" "${zipParent}" 2>/dev/null || true
@@ -896,12 +982,14 @@ export function initUpdater(
   ipcMain.handle('update:install', async () => {
     if (!supportsAutoUpdates()) return false
 
-    if (process.platform === 'darwin') {
+    // Ad-hoc Mac builds install through the detached swap helper. Signed Mac
+    // builds fall through to the electron-updater path below, where
+    // Squirrel.Mac verifies the downloaded bundle's Developer ID signature
+    // before swapping it in.
+    if (usesRemoteUpdateFeed()) {
       if (_state.status !== 'available' || _installingUpdate) return false
       return performAdhocMacInstall()
     }
-
-
 
     if (_state.status !== 'downloaded' || _installingUpdate) return false
 
@@ -952,10 +1040,10 @@ export function initUpdater(
   if (!supportsAutoUpdates()) return
 
   if (usesRemoteUpdateFeed()) {
-    setTimeout(() => {
+    scheduleBackgroundChecks(() => {
       console.log('[updater] checking public update feed…')
       void checkRemoteFeed('background', support)
-    }, 10_000)
+    })
     return
   }
 
@@ -1079,8 +1167,8 @@ export function initUpdater(
     })
   })
 
-  setTimeout(() => {
+  scheduleBackgroundChecks(() => {
     console.log('[updater] checking for updates…')
     autoUpdater.checkForUpdates().catch(() => { /* silent */ })
-  }, 10_000)
+  })
 }
