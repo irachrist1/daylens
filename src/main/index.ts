@@ -98,6 +98,7 @@ import { capture, captureException, initAnalytics, shutdown } from './services/a
 import { getBillingAccess } from './services/billing'
 import { registerAIHandlers } from './ipc/ai.handlers'
 import { registerDbHandlers } from './ipc/db.handlers'
+import { registerEntityHandlers } from './ipc/entities.handlers'
 import { registerErrorHandlers } from './ipc/errors.handlers'
 import { registerDebugHandlers } from './ipc/debug.handlers'
 import { registerFocusHandlers } from './ipc/focus.handlers'
@@ -1274,6 +1275,7 @@ app.whenReady()
     // once tracking is enabled; diagnostics requests reuse the same instance.
 
     registerDbHandlers()
+    registerEntityHandlers()
     registerErrorHandlers()
     registerDebugHandlers()
     registerFocusHandlers()

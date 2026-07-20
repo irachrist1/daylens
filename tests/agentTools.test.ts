@@ -15,6 +15,7 @@ import ExcelJS from 'exceljs'
 import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { buildDaylensTools } from '../src/main/agent/daylensTools.ts'
 import { buildSystemTools } from '../src/main/agent/systemTools.ts'
+import { addFileAccessGrant } from '../src/main/services/fileAccess.ts'
 import { mcpChildEnv } from '../src/main/agent/mcpTools.ts'
 import { buildInteractionTools } from '../src/main/agent/interactionTools.ts'
 import type { AIMessageArtifact } from '../src/shared/types.ts'
@@ -226,7 +227,7 @@ function makePolicyHome(): { home: string; documents: string } {
   return { home, documents }
 }
 
-test('read_file reads a visible home file and denies hidden, system, and outside paths', async () => {
+test('read_file reads a granted visible home file and denies hidden, system, and outside paths', async () => {
   const { home, documents } = makePolicyHome()
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'daylens-outside-'))
   fs.writeFileSync(path.join(documents, 'plan.md'), 'launch plan contents')
@@ -237,13 +238,21 @@ test('read_file reads a visible home file and denies hidden, system, and outside
   fs.writeFileSync(path.join(documents, '.env'), 'SECRET=1')
   fs.writeFileSync(path.join(outside, 'passwd.txt'), 'system data')
 
-  const tools = buildSystemTools({ homeDir: home })
+  // DEV-184: content reads need a model-readable grant above the path floor.
+  const db = setupDb()
+  addFileAccessGrant(db, { scopeKind: 'folder', path: home, state: 'model_readable' })
+  const tools = buildSystemTools({
+    db,
+    homeDir: home,
+    fileAccess: { db, destination: 'test:model' },
+  })
   const read = (input: { path: string }) => (tools.read_file as any).execute(input, {} as any)
 
   const visible = await read({ path: path.join(documents, 'plan.md') })
   assert.equal(visible.found, true)
   assert.equal(visible.content, 'launch plan contents')
 
+  // The floor denies hidden/system/outside paths even under a home-wide grant.
   for (const denied of [
     path.join(home, '.ssh', 'id_ed25519'),
     path.join(home, 'Library', 'cookies.txt'),
@@ -254,6 +263,19 @@ test('read_file reads a visible home file and denies hidden, system, and outside
     assert.equal(result.found, false, `expected denial for ${denied}`)
     assert.equal(result.content, undefined)
   }
+  db.close()
+})
+
+test('read_file without any grant is deny-by-default with an explicit permission miss', async () => {
+  const { home, documents } = makePolicyHome()
+  fs.writeFileSync(path.join(documents, 'plan.md'), 'launch plan contents')
+  const db = setupDb()
+  const tools = buildSystemTools({ db, homeDir: home, fileAccess: { db, destination: 'test:model' } })
+  const result = await (tools.read_file as any).execute({ path: path.join(documents, 'plan.md') }, {} as any)
+  assert.equal(result.found, false)
+  assert.equal(result.permissionRequired, true)
+  assert.equal(result.content, undefined)
+  db.close()
 })
 
 test('read_file denies a symlink inside a visible folder that escapes the home directory', async () => {
@@ -320,13 +342,18 @@ test('file search never matches hidden files inside visible folders', async () =
   fs.writeFileSync(path.join(home, '.netrc'), 'machine example login launch plan')
   fs.writeFileSync(path.join(documents, 'visible.md'), 'the launch plan overview')
 
-  const tools = buildSystemTools({ homeDir: home })
+  // Content matching requires a model-readable grant (DEV-184); the hidden
+  // files stay invisible even under a home-wide grant.
+  const db = setupDb()
+  addFileAccessGrant(db, { scopeKind: 'folder', path: home, state: 'model_readable' })
+  const tools = buildSystemTools({ db, homeDir: home, fileAccess: { db, destination: 'test:model' } })
   const byContent = await (tools.search_files as any).execute({ query: 'launch plan' }, {} as any)
   assert.equal(byContent.found, true)
   assert.ok(byContent.matches.every((match: { name: string }) => !match.name.startsWith('.')))
 
   const homeRoot = await (tools.search_files as any).execute({ query: 'launch plan', roots: [home] }, {} as any)
   assert.ok((homeRoot.matches ?? []).every((match: { name: string }) => !match.name.startsWith('.')))
+  db.close()
 })
 
 test('git branch is forced to list mode and cannot create or delete branches', async () => {
@@ -375,13 +402,18 @@ test('file search finds visible notes and excludes private system folders', asyn
   fs.writeFileSync(path.join(documents, 'weekly-notes.md'), 'The product review meeting covered launch readiness.')
   fs.writeFileSync(path.join(system, 'private-notes.md'), 'The product review meeting contains private system data.')
 
-  const tools = buildSystemTools({ homeDir: home })
+  // Content matching requires a model-readable grant (DEV-184); Library is
+  // outside the floor regardless of the grant.
+  const db = setupDb()
+  addFileAccessGrant(db, { scopeKind: 'folder', path: home, state: 'model_readable' })
+  const tools = buildSystemTools({ db, homeDir: home, fileAccess: { db, destination: 'test:model' } })
   const result = await (tools.search_files as any).execute({ query: 'product review meeting' }, {} as any)
 
   assert.equal(result.found, true)
   assert.equal(result.matches.length, 1)
   assert.equal(result.matches[0].path, fs.realpathSync(path.join(documents, 'weekly-notes.md')))
   assert.ok(result.roots.every((root: string) => !root.includes('Library')))
+  db.close()
 })
 
 // ─── interactionTools: create_artifact ──────────────────────────────────────

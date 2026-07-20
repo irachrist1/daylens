@@ -414,6 +414,38 @@ const api = {
   distractionAlerter: {
     setThreshold: (payload: { minutes: number }) => ipcRenderer.invoke('distraction-alerter:set-threshold', payload),
   },
+  entities: {
+    list: (payload: { type?: string | null; search?: string | null; limit?: number } = {}): Promise<Array<{
+      id: string
+      type: string
+      name: string
+      nameSource: 'inferred' | 'user'
+      origin: string
+      sensitivity: string
+      status: string
+      firstObservedAt: number | null
+      lastObservedAt: number | null
+      aliases: string[]
+      evidenceCount: number
+    }>> =>
+      ipcRenderer.invoke(IPC.ENTITIES.LIST, payload),
+    detail: (entityId: string) => ipcRenderer.invoke(IPC.ENTITIES.DETAIL, entityId),
+    suggestedMerges: () => ipcRenderer.invoke(IPC.ENTITIES.SUGGESTED_MERGES),
+    previewCorrection: (command: unknown) => ipcRenderer.invoke(IPC.ENTITIES.PREVIEW_CORRECTION, command),
+    applyCorrection: (command: unknown) => ipcRenderer.invoke(IPC.ENTITIES.APPLY_CORRECTION, command),
+    undoCorrection: (correctionId: string) => ipcRenderer.invoke(IPC.ENTITIES.UNDO_CORRECTION, correctionId),
+    createProject: (payload: { name: string; clientId?: string | null; color?: string | null }) =>
+      ipcRenderer.invoke(IPC.ENTITIES.CREATE_PROJECT, payload),
+  },
+  fileAccess: {
+    listGrants: (payload: { includeRevoked?: boolean } = {}) =>
+      ipcRenderer.invoke(IPC.FILE_ACCESS.LIST_GRANTS, payload),
+    addGrant: (payload: { scopeKind: 'file' | 'folder'; path: string; state: 'indexed' | 'model_readable'; allowHighSensitivity?: boolean }) =>
+      ipcRenderer.invoke(IPC.FILE_ACCESS.ADD_GRANT, payload),
+    revokeGrant: (grantId: string) => ipcRenderer.invoke(IPC.FILE_ACCESS.REVOKE_GRANT, grantId),
+    listDisclosures: (payload: { limit?: number } = {}) =>
+      ipcRenderer.invoke(IPC.FILE_ACCESS.LIST_DISCLOSURES, payload),
+  },
   mcp: {
     getConfig: (): Promise<McpServerConfig | null> => ipcRenderer.invoke(IPC.MCP.GET_CONFIG),
   },

@@ -22,7 +22,8 @@ import { recordProviderCall } from '../services/aiRateLimiter'
 import { verifyTimestamps, verifyCitedEntities } from '../ai/citations'
 import { languageModelFor } from './providerModel'
 import { buildDaylensTools } from './daylensTools'
-import { buildSystemTools } from './systemTools'
+import { buildSystemTools, type FileAccessAnswer } from './systemTools'
+import type { FileDisclosureRow } from '../services/fileAccess'
 import { buildInteractionTools, createArtifact, type AgentQuestion, type InteractionDeps } from './interactionTools'
 import { connectMcpTools, type McpServerConfig } from './mcpTools'
 import { buildAgentSystemPrompt } from './systemPrompt'
@@ -57,6 +58,8 @@ export interface ChatAgentDeps {
   now?: Date
   trackingStart?: string | null
   model?: LanguageModel
+  /** Thread the turn belongs to; recorded on file disclosures (DEV-184). */
+  threadId?: number | null
 }
 
 export interface ChatAgentResult {
@@ -66,6 +69,16 @@ export interface ChatAgentResult {
   usage: AIProviderUsage
   stepCount: number
   groundingRetried: boolean
+  /** Files whose contents were disclosed to the model this turn (DEV-184) —
+   *  persisted with the message so the sources row can cite opened files. */
+  fileDisclosures: Array<{
+    path: string
+    name: string
+    versionFingerprint: string
+    excerptStart: number
+    excerptEnd: number
+    disclosedAt: number
+  }>
 }
 
 function statusForTool(tool: string, input: unknown): string {
@@ -137,9 +150,35 @@ export async function runChatAgentTurn(
       onArtifact: (artifact) => artifacts.push(artifact),
       signal: deps.signal,
     }
+    // The in-chat file-permission card (DEV-184): a content read on an
+    // ungranted path pauses the turn through the existing askUser machinery.
+    // "Allow this folder" persists a chat-sourced model-readable grant;
+    // "Allow once" covers exactly this turn; anything else is a denial.
+    const fileDisclosures: FileDisclosureRow[] = []
+    const requestFileAccess = async (request: { path: string; sizeBytes: number | null; reason: string }): Promise<FileAccessAnswer> => {
+      const size = request.sizeBytes != null ? ` (${Math.max(1, Math.round(request.sizeBytes / 1024))} KB)` : ''
+      const answer = await deps.askUser({
+        question: `Daylens wants to open ${request.path}${size} to answer this.`,
+        options: ['Allow once', 'Allow this folder', 'Deny'],
+        allowFreeText: false,
+      })
+      const normalized = answer.trim().toLowerCase()
+      if (normalized === 'allow once') return 'allow_once'
+      if (normalized === 'allow this folder') return 'allow_folder'
+      return 'deny'
+    }
     const tools: ToolSet = {
       ...buildDaylensTools(deps.db),
-      ...buildSystemTools({ db: deps.db }),
+      ...buildSystemTools({
+        db: deps.db,
+        fileAccess: {
+          db: deps.db,
+          threadId: deps.threadId ?? null,
+          destination: `${deps.config.provider}:${deps.config.model}`,
+          requestFileAccess,
+          onDisclosure: (row) => fileDisclosures.push(row),
+        },
+      }),
       ...buildInteractionTools(interactionDeps),
       ...mcp.tools,
     }
@@ -270,7 +309,22 @@ export async function runChatAgentTurn(
     text = sanitizeForRender(text).text
     if (text) await deps.onStreamEvent?.({ delta: text, snapshot: text })
 
-    return { text, toolTrace, artifacts, usage, stepCount, groundingRetried }
+    return {
+      text,
+      toolTrace,
+      artifacts,
+      usage,
+      stepCount,
+      groundingRetried,
+      fileDisclosures: fileDisclosures.map((row) => ({
+        path: row.file_path,
+        name: row.display_name,
+        versionFingerprint: row.version_fingerprint,
+        excerptStart: row.excerpt_start,
+        excerptEnd: row.excerpt_end,
+        disclosedAt: row.disclosed_at,
+      })),
+    }
   } finally {
     await mcp.close()
   }
