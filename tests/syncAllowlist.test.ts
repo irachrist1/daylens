@@ -55,6 +55,30 @@ test('extra root field on sync payload fails strict schema', () => {
   )
 })
 
+// DEV-185: supplied memory is LOCAL-ONLY — supplied_memory_facts and
+// memory_proposal_rejections have no allowlist keys, so any attempt to
+// serialize them into a remote payload fails the strict schema.
+test('supplied memory facts and proposal rejections can never ride a sync payload', () => {
+  for (const field of ['suppliedMemoryFacts', 'memoryProposalRejections']) {
+    const dirty = {
+      ...makeCleanRemoteSyncPayload(),
+      [field]: [{ statement: 'You lead the pricing project.' }],
+    }
+    assert.throws(
+      () => assertSyncPayloadAllowed(dirty),
+      (error: unknown) => {
+        assert.ok(error instanceof SyncAllowlistViolation)
+        assert.ok(
+          error.violations.some((item) => item.class === 'extra_field'
+            && (item.path.includes(field) || item.detail?.includes(field))),
+          `expected extra_field violation for ${field}`,
+        )
+        return true
+      },
+    )
+  }
+})
+
 test('credential in a work block label fails the allowlist', () => {
   const payload = makeCleanRemoteSyncPayload()
   payload.workBlocks[0]!.label = 'Draft with sk-abcdefghijklmnopqrstuvwxyz012345'
