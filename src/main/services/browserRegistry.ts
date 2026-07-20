@@ -165,6 +165,28 @@ function inspectMacBrowserApplication(appPath: string): BrowserApplication | nul
   }
 }
 
+// Same-install identity across capture backends: the poll backend only knows
+// the executable path when the active-window module reports no bundle id,
+// while macOS focus events report the real CFBundleIdentifier. Reading the
+// .app bundle's Info.plist maps the path onto that same identifier so one
+// install never mints two identities. Results — including misses — are cached
+// because this sits on the capture poll.
+const bundleIdentifierByAppPath = new Map<string, string | null>()
+
+export function macBundleIdentifierForExecutablePath(
+  executablePath: string | null | undefined,
+): string | null {
+  const bundlePath = appBundlePath(executablePath)
+  if (!bundlePath || !bundlePath.startsWith('/')) return null
+  const cacheKey = normalizedPath(bundlePath)
+  const cached = bundleIdentifierByAppPath.get(cacheKey)
+  if (cached !== undefined) return cached
+  const plist = plistJson(bundlePath)
+  const bundleId = plist ? plistString(plist, 'CFBundleIdentifier') : null
+  bundleIdentifierByAppPath.set(cacheKey, bundleId)
+  return bundleId
+}
+
 export function parseLaunchServicesBrowserDump(dump: string): BrowserApplication[] {
   const applications: BrowserApplication[] = []
   const records = dump.split(/\n-{40,}\n/g)

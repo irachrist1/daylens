@@ -3,6 +3,8 @@ import { normalizeUrlForStorage, pageKeyForUrl, resolveCanonicalApp, resolveCano
 import { deriveClientAliasTokens } from '../lib/clientAliases'
 import { ensureAIMessageFeedbackSchema, ensureAIThreadSchema } from './aiThreadSchema'
 import { runEntityAdoptionBackfill } from '../services/entities/entityAdoption'
+import { dedupeAppIdentityTwins } from '../services/entities/appIdentityTwinDedupe'
+import { macBundleIdentifierForExecutablePath } from '../services/browserRegistry'
 import {
   migrateLegacyUserFactsToSupplied,
   reconcileSuppliedMemoryRecords,
@@ -2826,8 +2828,10 @@ const migrations: Migration[] = [
       `)
     },
   },
-  // v57 is reserved by the app-identity twin dedupe branch (#22); the two
-  // migrations touch disjoint tables so either merge order applies cleanly.
+  // v57 is intentionally skipped: it was reserved for the app-identity twin
+  // dedupe (#22), but v58 shipped on main first and runMigrations() filters on
+  // MAX(applied version) — a database already at v58 would never gap-fill a
+  // later-added v57. The dedupe therefore landed as v59 below.
   {
     version: 58,
     description:
@@ -2954,6 +2958,22 @@ const migrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_focus_events_type ON focus_events(event_type);
         CREATE INDEX IF NOT EXISTS idx_focus_events_platform ON focus_events(platform);
       `)
+    },
+  },
+  {
+    version: 59,
+    description:
+      'Same app, one entity (#22 / DEV-224): the poll capture backend keyed apps by executable path when the active-window module reported no bundle id, while macOS focus events keyed the same install by its CFBundleIdentifier — one install became two app_identities rows and two entities. Resolve each path-keyed identity to its real bundle id via the installed bundle\'s Info.plist, link the rows through canonical_app_id, merge twin entities through the reversible merge machinery (user renames and prior explicit merges outrank), and stamp the unified id onto historical app_sessions so Apps/Timeline group one app. Identities that no longer resolve are left for the Needs-attention review — display names alone never merge. (Numbered v59, not the reserved v57: v58 shipped first and the runner never revisits versions below MAX(applied).)',
+    up: () => {
+      const result = dedupeAppIdentityTwins(getDb(), macBundleIdentifierForExecutablePath)
+      if (result.pathIdentitiesResolved > 0) {
+        console.log(
+          `[migrations:v59] unified ${result.pathIdentitiesResolved} path-keyed app identit${result.pathIdentitiesResolved === 1 ? 'y' : 'ies'}: `
+          + `${result.entitiesMerged} entit${result.entitiesMerged === 1 ? 'y' : 'ies'} merged, `
+          + `${result.entitiesRekeyed} re-keyed, `
+          + `${result.sessionsRestamped} session row${result.sessionsRestamped === 1 ? '' : 's'} restamped`,
+        )
+      }
     },
   },
 ]
