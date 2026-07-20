@@ -65,6 +65,8 @@ import type {
   WorkMemoryProfile,
   WorkMemoryMutationResult,
   WorkMemoryFact,
+  SuppliedMemoryFactView,
+  MemoryProposalRejectionView,
   ScopedMemoryProfile,
   MemoryAuditEntry,
   WorkspaceResult,
@@ -254,6 +256,18 @@ const api = {
       ipcRenderer.invoke(IPC.DB.ADD_WORK_MEMORY_FACT, text),
     forgetWorkMemoryFact: (id: string): Promise<WorkMemoryMutationResult> =>
       ipcRenderer.invoke(IPC.DB.FORGET_WORK_MEMORY_FACT, id),
+    confirmDraftedMemoryFact: (id: string): Promise<WorkMemoryProfile> =>
+      ipcRenderer.invoke(IPC.DB.CONFIRM_DRAFTED_MEMORY_FACT, id),
+    listSuppliedMemoryFacts: (): Promise<SuppliedMemoryFactView[]> =>
+      ipcRenderer.invoke(IPC.DB.LIST_SUPPLIED_MEMORY_FACTS),
+    updateSuppliedMemoryFact: (id: string, statement: string): Promise<SuppliedMemoryFactView[]> =>
+      ipcRenderer.invoke(IPC.DB.UPDATE_SUPPLIED_MEMORY_FACT, id, statement),
+    deleteSuppliedMemoryFact: (id: string): Promise<SuppliedMemoryFactView[]> =>
+      ipcRenderer.invoke(IPC.DB.DELETE_SUPPLIED_MEMORY_FACT, id),
+    listMemoryProposalRejections: (): Promise<MemoryProposalRejectionView[]> =>
+      ipcRenderer.invoke(IPC.DB.LIST_MEMORY_PROPOSAL_REJECTIONS),
+    deleteMemoryProposalRejection: (id: string): Promise<MemoryProposalRejectionView[]> =>
+      ipcRenderer.invoke(IPC.DB.DELETE_MEMORY_PROPOSAL_REJECTION, id),
     rebuildWorkMemory: (): Promise<WorkMemoryMutationResult> =>
       ipcRenderer.invoke(IPC.DB.REBUILD_WORK_MEMORY),
     getMemoryAudit: (): Promise<MemoryAuditEntry[]> =>

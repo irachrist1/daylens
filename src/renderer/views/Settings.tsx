@@ -20,6 +20,7 @@ import type {
 import { ACTIVITY_COLOR_CHOICES, ACTIVITY_COLOR_GROUPS, applyAppearanceSettings } from '@shared/activityColors'
 import { ipc } from '../lib/ipc'
 import { EntityMemorySection } from './settings/EntityMemorySection'
+import { SuppliedMemorySection } from './settings/SuppliedMemorySection'
 import { FileAccessSection } from './settings/FileAccessSection'
 import { track } from '../lib/analytics'
 import { setPendingChatSeed } from '../lib/aiSeed'
@@ -2132,6 +2133,9 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
   // appear on hover so the view reads as plain sentences, not a control panel.
   const [hoveredFactId, setHoveredFactId] = useState<string | null>(null)
   const [memoryExpanded, setMemoryExpanded] = useState(false)
+  // DEV-185: bump to make the "Things you've told me" panel reload after a
+  // mutation that can move facts into or out of the supplied store.
+  const [suppliedReloadToken, setSuppliedReloadToken] = useState(0)
   // DEV-108: each client's scoped memory, shown under that client; plus the
   // per-client "add a fact" drafts keyed by client id.
   const [clientMemory, setClientMemory] = useState<ClientMemoryGroup[]>([])
@@ -2422,6 +2426,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
         return next
       })
       setWorkMemoryChange('Saved — the AI will use this the next time it talks about you.')
+      setSuppliedReloadToken((token) => token + 1)
       void reloadMemoryAudit()
       void reloadClientMemory()
     } catch (error) {
@@ -2535,6 +2540,11 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
             transition: 'opacity 120ms',
           }}
         >
+          {fact.origin === 'drafted' && (
+            <button type="button" disabled={anyBusy} onClick={() => void keepDraftedFact(fact.id)} style={{ ...memoryActionStyle, color: 'var(--color-text-primary)' }}>
+              {busy ? 'Keeping…' : 'Keep'}
+            </button>
+          )}
           <button type="button" disabled={anyBusy} onClick={() => startEditFact(fact.id, fact.text)} style={memoryActionStyle}>
             Edit
           </button>
@@ -2556,6 +2566,25 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       setWorkMemoryProfile(profile.facts)
       setNewFactText('')
       setWorkMemoryChange('Added — the AI will use this the next time it talks about you.')
+      setSuppliedReloadToken((token) => token + 1)
+      void reloadMemoryAudit()
+    } catch (error) {
+      setWorkMemoryError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setWorkMemoryBusy(null)
+    }
+  }
+
+  // DEV-185 (spec migration slice 2): keeping a drafted fact is an explicit
+  // confirmation — it becomes supplied memory, searchable and packet-visible.
+  async function keepDraftedFact(id: string) {
+    setWorkMemoryBusy(id)
+    setWorkMemoryError(null)
+    try {
+      const profile = await ipc.db.confirmDraftedMemoryFact(id)
+      setWorkMemoryProfile(profile.facts)
+      setWorkMemoryChange('Kept — saved to "Things you\'ve told me".')
+      setSuppliedReloadToken((token) => token + 1)
       void reloadMemoryAudit()
     } catch (error) {
       setWorkMemoryError(error instanceof Error ? error.message : String(error))
@@ -2571,6 +2600,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       const result = await ipc.db.forgetWorkMemoryFact(id)
       setWorkMemoryProfile(result.facts)
       setWorkMemoryChange(result.changeSummary)
+      setSuppliedReloadToken((token) => token + 1)
       void reloadMemoryAudit()
       void reloadClientMemory()
     } catch (error) {
@@ -2605,6 +2635,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       const profile = await ipc.db.getWorkMemoryProfile()
       setWorkMemoryProfile(profile.facts)
       setWorkMemoryChange('Forgot everything Daylens had learned about you.')
+      setSuppliedReloadToken((token) => token + 1)
       void reloadMemoryAudit()
     } catch (error) {
       setWorkMemoryError(error instanceof Error ? error.message : String(error))
@@ -2981,7 +3012,9 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
                   { key: 'personal', label: 'Personal' },
                   { key: 'preferences', label: 'Preferences' },
                 ] as const).map((section) => {
-                  const sectionFacts = workMemoryProfile.filter((fact) => fact.category === section.key)
+                  // Supplied facts live in "Things you've told me" below; this
+                  // panel keeps the evidence-drafted profile (DEV-185).
+                  const sectionFacts = workMemoryProfile.filter((fact) => fact.category === section.key && !fact.supplied)
                   if (sectionFacts.length === 0) return null
                   return (
                     <div key={section.key} style={{ paddingTop: 16 }}>
@@ -3149,6 +3182,10 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
             )}
             </div>
             )}
+
+            {/* DEV-185: the confirmed supplied-memory tier — every fact here
+                was explicitly saved, with when/context, edit, and delete. */}
+            <SuppliedMemorySection reloadToken={suppliedReloadToken} />
 
             {semanticStatus && (
               <div style={{ marginTop: 14, padding: '14px 18px', borderRadius: 14, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-low)', display: 'grid', gap: 5 }}>
