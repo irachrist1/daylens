@@ -852,6 +852,16 @@ export interface ContextPacketInspectionOmission {
   label: string
 }
 
+/** One tool the agent actually called during the exchange, read from the
+ *  persisted turn trace bound to the packet's assistant message. `source`
+ *  separates built-in Daylens tools from the person's own MCP servers (spec:
+ *  inspection identifies which MCP server a result came from). */
+export interface ContextPacketToolConsulted {
+  tool: string
+  calls: number
+  source: 'daylens' | 'mcp'
+}
+
 export interface ContextPacketInspection {
   packetId: string
   exchangeKind: 'chat' | 'day_analysis'
@@ -868,6 +878,10 @@ export interface ContextPacketInspection {
   destination: string
   leftDevice: boolean
   itemCount: number
+  /** Tools the agent called for this answer, in first-use order — from the
+   *  persisted turn trace. Empty array: a bound turn ran and used no tools.
+   *  Null: no turn record is bound (e.g. the turn failed after recording). */
+  toolsConsulted: ContextPacketToolConsulted[] | null
   groups: ContextPacketInspectionGroup[]
   conflicts: Array<{ identity: string; detail: string; resolvedBy: string }>
   gaps: Array<{ date: string; detail: string; kind: string }>

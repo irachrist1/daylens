@@ -31,6 +31,7 @@ import {
   listContextPacketEntries,
   omissionLabel,
   resolveEvidencePresence,
+  toolsConsultedForMessage,
   KIND_LABELS,
 } from '../src/main/services/contextPacketInspection.ts'
 import { indexMemoryForDay } from '../src/main/services/memoryIndex.ts'
@@ -39,7 +40,10 @@ import {
   addFileAccessGrant,
   revokeFileAccessGrant,
   storeDerivedText,
+  listFileDisclosures,
 } from '../src/main/services/fileAccess.ts'
+import { buildAgentSystemPrompt } from '../src/main/agent/systemPrompt.ts'
+import { setApiKey } from './support/settings-stub.mjs'
 
 const DATE = '2026-04-22'
 const NOW = new Date(2026, 3, 23, 12, 0, 0, 0)
@@ -320,6 +324,144 @@ test('lookup contract: by packet id, by bound message id, honest null, and brows
   for (const entry of entries) {
     assert.ok(!('packet' in entry), 'list entries stay light — the full packet never rides the list')
   }
+  db.close()
+})
+
+test('the inspection shows exactly what the disclosure record captured — compared item for item and against the file ledger', async () => {
+  const db = createProductionTestDatabase()
+  insertSession(db, 'Editing the launch checklist', 9, 45)
+  indexMemoryForDay(db, DATE)
+  const grant = addFileAccessGrant(db, {
+    scopeKind: 'file',
+    path: '/home/person/notes/launch-checklist.md',
+    state: 'model_readable',
+  })
+  storeDerivedText(db, grant.id, 'Launch checklist: confirm pricing, ship notes, tag release.')
+
+  const packet = await buildAndRecord(db, 'launch checklist')
+  const inspection = inspectContextPacket(db, { packetId: packet.id })
+  assert.ok(inspection)
+
+  // Item for item: the inspector shows the identical identities AND the
+  // identical disclosed statements the record captured — nothing added,
+  // nothing reworded, nothing dropped.
+  const inspected = inspection.groups.flatMap((group) => group.items)
+    .map((item) => ({ identity: item.identity, statement: item.statement, kind: item.kind }))
+  const recorded = packet.items
+    .map((item) => ({ identity: item.identity, statement: item.statement, kind: item.kind }))
+  assert.deepEqual(
+    [...inspected].sort((a, b) => a.identity.localeCompare(b.identity)),
+    [...recorded].sort((a, b) => a.identity.localeCompare(b.identity)),
+    'the inspection and the disclosure record are the same facts and excerpts',
+  )
+
+  // And against the DEV-184 file ledger: the packet's file excerpt is the
+  // same disclosure (path, version fingerprint, destination) the ledger row
+  // recorded when the packet was written.
+  const fileItem = packet.items.find((item) => item.kind === 'file_excerpt')
+  assert.ok(fileItem)
+  const ledger = listFileDisclosures(db)
+  const ledgerRow = ledger.find((row) => row.file_path === fileItem.identity.slice('file:'.length))
+  assert.ok(ledgerRow, 'recording the packet also wrote the file-disclosure ledger row')
+  assert.equal(ledgerRow.version_fingerprint, fileItem.version)
+  assert.equal(ledgerRow.destination, DESTINATION)
+  const inspectedFile = inspected.find((item) => item.kind === 'file_excerpt')
+  assert.ok(inspectedFile)
+  assert.equal(inspectedFile.identity, `file:${ledgerRow.file_path}`)
+  db.close()
+})
+
+test('excluded content: the omission category is shown without revealing the withheld content', async () => {
+  const db = createProductionTestDatabase()
+  const secretText = 'vault master passphrase rotation for the production signing keys'
+  const grant = addFileAccessGrant(db, {
+    scopeKind: 'file',
+    path: '/home/person/notes/passwords-rotation.md',
+    state: 'model_readable',
+  })
+  storeDerivedText(db, grant.id, secretText)
+
+  const packet = await buildAndRecord(db, 'passwords rotation')
+  const inspection = inspectContextPacket(db, { packetId: packet.id })
+  assert.ok(inspection)
+
+  // The category is named…
+  const omission = inspection.omissions.find((candidate) => candidate.reason === 'high-sensitivity')
+  assert.ok(omission, 'the omission is visible with its category')
+  assert.equal(omission.kind, 'file_excerpt')
+
+  // …and the withheld content appears nowhere in the entire inspection.
+  const serialized = JSON.stringify(inspection)
+  assert.ok(!serialized.includes(secretText), 'omitted content is never revealed')
+  assert.ok(!serialized.includes('passphrase'), 'not even fragments of the withheld text surface')
+  db.close()
+})
+
+test('no credentials, provider system prompts, or tool trace payloads appear anywhere in the inspection', async () => {
+  const db = createProductionTestDatabase()
+  const credential = 'sk-ant-test-1f4c9d2e7b8a-secret'
+  await setApiKey('anthropic', credential)
+  insertSession(db, 'Reviewing the pricing deck', 15, 30)
+  indexMemoryForDay(db, DATE)
+
+  const packet = await buildAndRecord(db, 'pricing deck')
+  // Bind a persisted assistant turn carrying a tool trace with real inputs
+  // and outputs — the inspection may name the TOOLS but must never carry the
+  // traced payloads themselves.
+  const conversationId = db.prepare(`INSERT INTO ai_conversations (messages, created_at) VALUES ('[]', ?)`)
+    .run(Date.now()).lastInsertRowid as number
+  const traceOutput = 'raw tool output that already has its own governed surface'
+  const messageId = db.prepare(`
+    INSERT INTO ai_messages (conversation_id, role, content, created_at, metadata_json)
+    VALUES (?, 'assistant', 'The deck took the afternoon.', ?, ?)
+  `).run(conversationId, Date.now(), JSON.stringify({
+    agent: {
+      toolTrace: [
+        { tool: 'search_moments', input: { query: 'pricing deck' }, output: traceOutput },
+        { tool: 'search_moments', input: { query: 'deck' }, output: traceOutput },
+        { tool: 'mcp_notion_search', input: {}, output: traceOutput },
+      ],
+      stepCount: 3,
+    },
+  })).lastInsertRowid as number
+  linkContextPacketToMessage(db, packet.id, messageId)
+
+  const inspection = inspectContextPacket(db, { packetId: packet.id })
+  assert.ok(inspection)
+
+  // Tools consulted: names and counts, first-use order, MCP identified.
+  assert.deepEqual(inspection.toolsConsulted, [
+    { tool: 'search_moments', calls: 2, source: 'daylens' },
+    { tool: 'mcp_notion_search', calls: 1, source: 'mcp' },
+  ])
+
+  const serialized = JSON.stringify(inspection)
+  // Credentials: the configured provider key never surfaces.
+  assert.ok(!serialized.includes(credential), 'no credential material in the inspection')
+  assert.ok(!serialized.includes('sk-ant'), 'no key-shaped fragments either')
+  // Provider system prompt: none of its distinctive content surfaces.
+  const systemPrompt = buildAgentSystemPrompt({
+    now: NOW,
+    timezone: 'UTC',
+    trackingStart: DATE,
+    providerLabel: 'Anthropic',
+    model: 'test-model',
+    homeDir: '/home/person',
+  })
+  assert.ok(!serialized.includes('You are the Daylens assistant'), 'no system prompt preamble')
+  for (const line of systemPrompt.split('\n').filter((candidate) => candidate.length > 40).slice(0, 20)) {
+    assert.ok(!serialized.includes(line), `no system prompt line leaks: ${line.slice(0, 50)}…`)
+  }
+  // Tool trace payloads stay on their own surface — the inspection carries
+  // tool NAMES only.
+  assert.ok(!serialized.includes(traceOutput), 'traced outputs never ride the inspection')
+
+  // A packet with no bound turn record says so (null), not an empty list.
+  const second = await buildAndRecord(db, 'pricing deck again', new Date(NOW.getTime() + 60_000))
+  const unbound = inspectContextPacket(db, { packetId: second.id })
+  assert.ok(unbound)
+  assert.equal(unbound.toolsConsulted, null)
+  assert.equal(toolsConsultedForMessage(db, null), null)
   db.close()
 })
 

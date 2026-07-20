@@ -24,12 +24,14 @@
 // from the packet the person's own data produced (spec §Context inspection).
 import type Database from 'better-sqlite3'
 import type {
+  AIThreadMessageMetadata,
   ContextPacketEvidenceState,
   ContextPacketInspection,
   ContextPacketInspectionGroup,
   ContextPacketInspectionItem,
   ContextPacketInspectionOmission,
   ContextPacketListEntry,
+  ContextPacketToolConsulted,
 } from '@shared/types'
 import {
   getContextPacketById,
@@ -178,6 +180,50 @@ export function resolveEvidencePresence(
   }
 }
 
+// ─── Tools consulted ─────────────────────────────────────────────────────────
+// The packet is recorded before the model call, so tool calls live in the
+// persisted turn trace, not in the packet: read them from the assistant
+// message the packet was later bound to. Only tool NAMES and call counts are
+// exposed — never the traced inputs/outputs, which the message view already
+// governs separately. An mcp_-prefixed name is one of the person's own MCP
+// servers (the namespace connectMcpTools applies), identified as such.
+
+/** Tools called during the exchange, in first-use order; null when no turn
+ *  record is bound to the message. */
+export function toolsConsultedForMessage(
+  db: Database.Database,
+  messageId: number | null,
+): ContextPacketToolConsulted[] | null {
+  if (messageId == null) return null
+  let metadataJson: string | undefined
+  try {
+    const row = db.prepare(`SELECT metadata_json FROM ai_messages WHERE id = ?`).get(messageId) as
+      | { metadata_json: string }
+      | undefined
+    metadataJson = row?.metadata_json
+  } catch {
+    return null
+  }
+  if (!metadataJson) return null
+  let metadata: AIThreadMessageMetadata
+  try {
+    metadata = JSON.parse(metadataJson) as AIThreadMessageMetadata
+  } catch {
+    return null
+  }
+  const trace = metadata.agent?.toolTrace
+  if (!Array.isArray(trace)) return null
+  const byTool = new Map<string, ContextPacketToolConsulted>()
+  for (const entry of trace) {
+    const tool = typeof entry?.tool === 'string' ? entry.tool : null
+    if (!tool) continue
+    const existing = byTool.get(tool)
+    if (existing) existing.calls += 1
+    else byTool.set(tool, { tool, calls: 1, source: tool.startsWith('mcp_') ? 'mcp' : 'daylens' })
+  }
+  return [...byTool.values()]
+}
+
 // ─── Assembly ────────────────────────────────────────────────────────────────
 
 function toInspectionItem(db: Database.Database, item: ContextPacketItem): ContextPacketInspectionItem {
@@ -233,6 +279,7 @@ export function assembleContextPacketInspection(
     destination: stored.destination,
     leftDevice: packet.disclosure.leftDevice,
     itemCount: packet.disclosure.itemCount,
+    toolsConsulted: toolsConsultedForMessage(db, stored.messageId),
     groups,
     conflicts: packet.conflicts.map((conflict) => ({
       identity: conflict.identity,

@@ -220,6 +220,27 @@ export function ContextPacketInspector({ packetId, messageId, onClose }: Context
               ))}
 
               <div style={{ display: 'grid', gap: 6 }}>
+                <span style={sectionTitleStyle}>Tools consulted</span>
+                {inspection.toolsConsulted === null ? (
+                  <div style={quietTextStyle}>
+                    No turn record is bound to this exchange, so the tools it called cannot be listed here.
+                  </div>
+                ) : inspection.toolsConsulted.length === 0 ? (
+                  <div style={quietTextStyle}>The answer used no tools — it came from the context above.</div>
+                ) : (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                    {inspection.toolsConsulted.map((consulted) => (
+                      <span key={consulted.tool} style={badgeStyle} title={consulted.source === 'mcp' ? 'One of your own MCP servers' : 'Built-in Daylens tool'}>
+                        {consulted.tool}
+                        {consulted.calls > 1 ? ` ×${consulted.calls}` : ''}
+                        {consulted.source === 'mcp' ? ' · your MCP server' : ''}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div style={{ display: 'grid', gap: 6 }}>
                 <span style={sectionTitleStyle}>Considered and not sent</span>
                 {inspection.omissions.length === 0 ? (
                   <div style={quietTextStyle}>Nothing that matched this question was held back.</div>
