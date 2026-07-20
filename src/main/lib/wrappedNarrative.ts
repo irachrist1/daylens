@@ -33,6 +33,7 @@ import {
   type LineGuardContext,
   type WrapLineRejection,
 } from './wrapNarrativeShared'
+import { groundingFormsForRuntime, type WrapFactTable } from './wrapFactTable'
 
 // ─── Hashing & cache key ──────────────────────────────────────────────────────
 
@@ -101,7 +102,12 @@ export function wrappedNarrativeCacheKey(facts: DayWrapFacts, factsHash: string)
   return `${facts.date}|${factsHash}`
 }
 
-function guardContext(facts: DayWrapFacts, slides: WrapSlideSpec[], enrichment?: DayEnrichment | null): LineGuardContext {
+function guardContext(
+  facts: DayWrapFacts,
+  slides: WrapSlideSpec[],
+  enrichment?: DayEnrichment | null,
+  factTable?: WrapFactTable | null,
+): LineGuardContext {
   // Durations ground against everything the writer actually saw: the compact
   // facts JSON plus every slide's own card text. A close-but-wrong "8h 57m"
   // (facts: 8h 58m) dies deterministically instead of costing accuracy 0 at
@@ -120,6 +126,10 @@ function guardContext(facts: DayWrapFacts, slides: WrapSlideSpec[], enrichment?:
     // Completion words are earned only by verified output: real commits/PRs or
     // recorded meeting notes. Without them, "finished" is a guess.
     outputVerified: Boolean(enrichment?.shipped || enrichment?.meetingNotes),
+    // The fact-table backstop: every numeric token in a line must match the
+    // table or a number the writer was shown. Only wired when the caller
+    // supplies the table (the service does; lib-only callers may not).
+    ...(factTable ? { groundedNumericForms: groundingFormsForRuntime(factTable, durationSource) } : {}),
   }
 }
 
@@ -311,9 +321,10 @@ export function validateWrappedNarrativeObject(
   facts: DayWrapFacts,
   factsHash: string,
   enrichment?: DayEnrichment | null,
+  factTable?: WrapFactTable | null,
 ): WrappedNarrativeValidation {
   const slides = planDayWrapSlides(facts)
-  const ctx = guardContext(facts, slides, enrichment)
+  const ctx = guardContext(facts, slides, enrichment, factTable)
   const linesRaw = (obj.lines && typeof obj.lines === 'object') ? obj.lines as Record<string, unknown> : null
   const { lines, rejections } = validateDeckLinesDetailed(linesRaw, slides, ctx)
 
@@ -354,6 +365,32 @@ export function validateWrappedNarrativeResponse(
   const obj = parseWrapResponse(raw)
   if (!obj) return null
   return validateWrappedNarrativeObject(obj, facts, factsHash, enrichment).narrative
+}
+
+/** Re-ground a STORED narrative against the CURRENT facts. A day accrues
+ *  activity after its wrap generates (today keeps growing), so the stored
+ *  prose can drift out from under the deterministic cards. Rather than showing
+ *  a line that contradicts the card it sits on, every stored piece re-runs the
+ *  same guards against the current slide plan: pieces that still ground
+ *  survive, pieces that don't fall back to that slide's deterministic line.
+ *  Returns null when the OPENING no longer grounds — the stored wrap has no
+ *  honest lead left, and the caller shows the deterministic narrative instead. */
+export function reconcileStoredNarrative(
+  stored: AIWrappedNarrative,
+  facts: DayWrapFacts,
+  currentFactsHash: string,
+  enrichment?: DayEnrichment | null,
+  factTable?: WrapFactTable | null,
+): AIWrappedNarrative | null {
+  if (stored.source !== 'ai') return null
+  const { narrative } = validateWrappedNarrativeObject(
+    { lines: stored.lines ?? {}, question: stored.question, reflection: stored.reflection },
+    facts,
+    currentFactsHash,
+    enrichment,
+    factTable,
+  )
+  return narrative
 }
 
 /** The repair-round user message for this day's rejections. */

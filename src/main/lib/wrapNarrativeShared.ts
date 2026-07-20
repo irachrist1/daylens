@@ -5,6 +5,7 @@
 // deterministic fallbackLine takes over per slide, never per wrap.
 
 import type { WrapSlideSpec } from '../../renderer/lib/wrapDeck'
+import { firstUngroundedNumericToken } from './wrapFactTable'
 
 export const EMOJI_REGEX = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F000}-\u{1F2FF}]/u
 
@@ -177,6 +178,13 @@ export interface LineGuardContext {
    *  recorded meeting notes). Without it, completion claims ("finished",
    *  "shipped", "is done") are invented outcomes and die. */
   outputVerified?: boolean
+  /** The wrap fact table's groundable forms unioned with every numeric token
+   *  the writer was actually shown (compact facts JSON + slide card text).
+   *  When present, EVERY numeric token in a line must match one of these
+   *  forms — the fact-table backstop under the per-kind checks above, and the
+   *  only check that catches a bare invented integer ("opened it 14 times").
+   *  Undefined = backstop off (callers that predate the fact table). */
+  groundedNumericForms?: ReadonlySet<string>
 }
 
 export function guardContextPercents(slides: WrapSlideSpec[]): Set<number> {
@@ -321,6 +329,12 @@ export function wrapLineViolation(value: string, ctx: LineGuardContext, opts?: W
   }
   const count = countClaimViolation(value, ctx)
   if (count) return count
+  if (ctx.groundedNumericForms) {
+    const ungrounded = firstUngroundedNumericToken(value, ctx.groundedNumericForms)
+    if (ungrounded) {
+      return `writes the ${ungrounded.kind} "${ungrounded.raw}" which matches no fact in this wrap's fact table; every number must be copied from the facts you were given, so copy one character for character or drop the number`
+    }
+  }
   return null
 }
 

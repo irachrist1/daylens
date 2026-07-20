@@ -14,7 +14,7 @@
 // in src/main/lib, but stays framework-free).
 
 import { createHash } from 'node:crypto'
-import type { WorkContextBlock, WrappedPeriodFacts } from '@shared/types'
+import type { DayEnrichment, WorkContextBlock, WrappedPeriodFacts } from '@shared/types'
 import { formatHm, type DayWrapFacts } from '../../renderer/lib/dayWrapScenes'
 import { largestRemainderPercentages, looksLikeRawArtifactLabel } from '../../renderer/lib/wrappedFacts'
 
@@ -213,6 +213,10 @@ function addPercent(table: Record<string, WrapFact>, id: string, pct: number): v
   table[id] = makeFact(id, 'percent', pct, `${Math.round(pct)}%`)
 }
 
+function addCount(table: Record<string, WrapFact>, id: string, n: number): void {
+  table[id] = makeFact(id, 'count', Math.round(n), String(Math.round(n)))
+}
+
 function addLabel(table: Record<string, WrapFact>, id: string, value: string): void {
   table[id] = makeFact(id, 'label', value, value)
 }
@@ -248,9 +252,39 @@ function sanitizeTopAppName(name: string): string | null {
   return trimmed
 }
 
+// ─── Enrichment facts ─────────────────────────────────────────────────────────
+// Connected-evidence numbers (git commits, pull requests, calendar counts,
+// focus-timer runs) can reach deck copy, so they are facts like any other.
+// Each count gets a stable id and the standard groundable forms (digits plus
+// the spelled-out small-number words).
+
+function addEnrichmentFacts(table: Record<string, WrapFact>, enrichment: DayEnrichment | null | undefined): void {
+  if (!enrichment) return
+  const used = new Set<string>()
+  let commitTotal = 0
+  for (const c of enrichment.shipped?.commitsByProject ?? []) {
+    addCount(table, `shipped.commits.${uniqueSlug(slugify(c.project), used)}.count`, c.commits)
+    commitTotal += c.commits
+  }
+  if (commitTotal > 0) addCount(table, 'shipped.commits.total.count', commitTotal)
+  let prTotal = 0
+  for (const p of enrichment.shipped?.pullRequests ?? []) {
+    addCount(table, `shipped.prs.${uniqueSlug(slugify(`${p.project}-${p.state}`), used)}.count`, p.count)
+    prTotal += p.count
+  }
+  if (prTotal > 0) addCount(table, 'shipped.prs.total.count', prTotal)
+  if (enrichment.meetings) addCount(table, 'calendar.meetings.count', enrichment.meetings.count)
+  if (enrichment.focusSessions) addCount(table, 'focusSessions.count', enrichment.focusSessions.sessions)
+}
+
 // ─── Day fact table ────────────────────────────────────────────────────────────
 
-export function buildDayFactTable(facts: DayWrapFacts, blocks: WorkContextBlock[], periodKey: string): WrapFactTable {
+export function buildDayFactTable(
+  facts: DayWrapFacts,
+  blocks: WorkContextBlock[],
+  periodKey: string,
+  enrichment?: DayEnrichment | null,
+): WrapFactTable {
   // One consistency check per invariant: the reconciled split must sum to the
   // reconciled total, or the whole table is untrustworthy (P0 item 2).
   assertConsistent(
@@ -264,6 +298,9 @@ export function buildDayFactTable(facts: DayWrapFacts, blocks: WorkContextBlock[
   addDuration(table, 'total.tracked', facts.activeSeconds)
   addClockFromDisplay(table, 'day.start', facts.mainStartClock)
   addClockFromDisplay(table, 'day.end', facts.ribbonEndClock)
+  // The literal first activity of the calendar day can differ from the day
+  // proper (a spillover sliver from last night); both are real clock facts.
+  addClockFromDisplay(table, 'day.firstActivity', facts.ribbonStartClock)
 
   addDuration(table, 'split.work.duration', facts.workSeconds)
   addDuration(table, 'split.leisure.duration', facts.leisureSeconds)
@@ -273,6 +310,14 @@ export function buildDayFactTable(facts: DayWrapFacts, blocks: WorkContextBlock[
   addPercent(table, 'split.work.percent', pcts.work)
   addPercent(table, 'split.leisure.percent', pcts.leisure)
   addPercent(table, 'split.personal.percent', pcts.personal)
+
+  // The split SLIDE shows a two-way work-versus-leisure ratio; those exact
+  // percentages are deck-reachable numbers, so they are facts too.
+  if (facts.workSeconds > 0 && facts.leisureSeconds > 0) {
+    const [wp, lp] = largestRemainderPercentages([facts.workSeconds, facts.leisureSeconds])
+    addPercent(table, 'split.workVsLeisure.work.percent', wp)
+    addPercent(table, 'split.workVsLeisure.leisure.percent', lp)
+  }
 
   // Meeting truth: SPANS of meeting-category blocks, not category-weighted
   // seconds — the fix for the 11:15-12:28 block that displayed as 49m
@@ -309,6 +354,8 @@ export function buildDayFactTable(facts: DayWrapFacts, blocks: WorkContextBlock[
     addDuration(table, `appSite.${slug}.duration`, slice.seconds)
   }
 
+  addEnrichmentFacts(table, enrichment)
+
   return { cadence: 'day', periodKey, facts: table, factsHash: computeTableHash(table) }
 }
 
@@ -333,7 +380,23 @@ export function buildPeriodFactTable(period: WrappedPeriodFacts): WrapFactTable 
   addPercent(table, 'split.leisure.percent', pcts.leisure)
   addPercent(table, 'split.personal.percent', pcts.personal)
 
+  // The split slide's two-way ratio, same as the day table.
+  if (period.workSeconds > 0 && period.leisureSeconds > 0) {
+    const [wp, lp] = largestRemainderPercentages([period.workSeconds, period.leisureSeconds])
+    addPercent(table, 'split.workVsLeisure.work.percent', wp)
+    addPercent(table, 'split.workVsLeisure.leisure.percent', lp)
+  }
+
   if (period.meetingsSeconds > 0) addDuration(table, 'meeting.total.duration', period.meetingsSeconds)
+
+  addCount(table, 'days.active.count', period.daysWithActivity)
+  if (period.daysWithActivity >= 1) {
+    addDuration(table, 'day.average.duration', Math.round(period.totalSeconds / period.daysWithActivity))
+  }
+  if (period.previousPeriodSeconds > 0) {
+    addDuration(table, 'previousPeriod.duration', period.previousPeriodSeconds)
+    addDuration(table, 'previousPeriod.delta.duration', Math.abs(period.totalSeconds - period.previousPeriodSeconds))
+  }
 
   const usedDaySlugs = new Set<string>()
   for (const day of period.days) {
@@ -453,4 +516,76 @@ export function checkCopyGrounding(
     }
   }
   return { ok: violations.length === 0, violations }
+}
+
+// ─── Runtime grounding forms ──────────────────────────────────────────────────
+// The runtime validator checks every model line against ONE flat set of
+// grounded numeric forms: everything in the fact table (with its honest
+// approximations) plus every numeric token in the substrate the writer was
+// actually shown (the compact facts JSON and each slide's own card text). A
+// number a line could only have invented matches nothing in that set and the
+// line dies to the repair round.
+
+/** Every groundable form of every fact in the table, lowercased. */
+export function allFactForms(table: WrapFactTable): Set<string> {
+  const forms = new Set<string>()
+  for (const fact of Object.values(table.facts)) {
+    for (const form of fact.groundableForms) forms.add(form.toLowerCase())
+  }
+  return forms
+}
+
+/** Every normalized numeric token in a text — the harvest side of the same
+ *  tokenizer the checker runs, so a number shown to the writer always grounds
+ *  the writer copying it. Spacing variants ("8h 58m" / "8h58m", "12:28 pm" /
+ *  "12:28pm") are the same claim, so both spellings are added. */
+export function numericFormsInText(text: string): Set<string> {
+  const forms = new Set<string>()
+  for (const token of extractNumericTokens(text)) {
+    forms.add(token.normalized)
+    forms.add(token.normalized.replace(/\s+/g, ''))
+  }
+  return forms
+}
+
+/** Add the space-stripped spelling of every form, so spacing never decides
+ *  groundedness. */
+export function withSpacelessVariants(forms: ReadonlySet<string>): Set<string> {
+  const out = new Set<string>()
+  for (const form of forms) {
+    out.add(form)
+    out.add(form.replace(/\s+/g, ''))
+  }
+  return out
+}
+
+/** The one set the runtime validator checks lines against: every fact form in
+ *  the table plus every numeric token in the substrate the writer was shown,
+ *  with spacing variants, and with the bare-digits spelling of pure-minute
+ *  durations (a real 30m fact makes "a 30-minute call" an honest claim). */
+export function groundingFormsForRuntime(table: WrapFactTable, substrateText: string): Set<string> {
+  const union = withSpacelessVariants(allFactForms(table))
+  for (const form of numericFormsInText(substrateText)) union.add(form)
+  for (const form of [...union]) {
+    const wholeUnit = /^(\d{1,3})[mh]$/.exec(form)
+    if (wholeUnit) union.add(wholeUnit[1])
+  }
+  return union
+}
+
+/** The first numeric token in `copy` that matches none of the grounded forms,
+ *  or null when every number is grounded. "1:1" is prose (a meeting shape,
+ *  not a claim about quantities), so it is never treated as a numeric token.
+ *  Callers should build `groundedForms` through `groundingFormsForRuntime`. */
+export function firstUngroundedNumericToken(
+  copy: string,
+  groundedForms: ReadonlySet<string>,
+): { raw: string; kind: string } | null {
+  const prose = copy.replace(/\b1:1s?\b/g, ' ')
+  for (const token of extractNumericTokens(prose)) {
+    if (groundedForms.has(token.normalized)) continue
+    if (groundedForms.has(token.normalized.replace(/\s+/g, ''))) continue
+    return { raw: token.raw, kind: token.kind }
+  }
+  return null
 }
