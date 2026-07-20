@@ -1490,6 +1490,87 @@ export interface ConnectorListing {
   itemsIngested: number
 }
 
+// ─── Full-history export (privacy-retention-and-sync.md §Export, DEV-196) ────
+// The renderer sees plans, progress, results, and verification reports — never
+// a raw row. Everything here is metadata about the export, safe to display.
+
+/** One withheld category, listed in the manifest so nothing is silently
+ *  omitted. `tables` and/or `rows` are present when the omission is countable. */
+export interface HistoryExportOmission {
+  category: string
+  reason: string
+  tables?: string[]
+  rows?: number
+}
+
+/** Per-table line of an export plan or manifest. */
+export interface HistoryExportTableSummary {
+  table: string
+  /** Rows that will be (or were) written. */
+  rows: number
+  /** Rows withheld because the person deleted them (tombstones). */
+  deletedWithheld: number
+  /** Rows withheld pending the explicit high-sensitivity selection. */
+  highSensitivityWithheld: number
+}
+
+/** One human-readable section of the export ("Captured activity", "Memory"…). */
+export interface HistoryExportSectionSummary {
+  id: string
+  label: string
+  rows: number
+  tables: HistoryExportTableSummary[]
+}
+
+/** What an export WOULD contain — shown in Settings before running. */
+export interface HistoryExportPlan {
+  sections: HistoryExportSectionSummary[]
+  omissions: HistoryExportOmission[]
+  totalRows: number
+  totalTables: number
+  /** Rows currently withheld that flipping includeHighSensitivity would add. */
+  highSensitivityRows: number
+  /** ISO local-day bounds of captured evidence, null when nothing captured. */
+  firstDay: string | null
+  lastDay: string | null
+}
+
+export interface HistoryExportProgress {
+  stage: 'tables' | 'summaries' | 'verify'
+  /** Table currently streaming, null between stages. */
+  table: string | null
+  tableIndex: number
+  tableCount: number
+  rowsDone: number
+  totalRows: number
+}
+
+export interface HistoryExportVerification {
+  ok: boolean
+  issues: string[]
+  tablesChecked: number
+  rowsChecked: number
+}
+
+export type HistoryExportRunResult =
+  | {
+      ok: true
+      exportDir: string
+      manifestPath: string
+      totalRows: number
+      totalTables: number
+      totalBytes: number
+      omissions: HistoryExportOmission[]
+      verification: HistoryExportVerification
+    }
+  | {
+      ok: false
+      error: string
+      /** Sections that were incomplete when the export failed (spec: export
+       *  failure identifies incomplete sections). */
+      incompleteSections: string[]
+    }
+
 /** The day's external signals, RESOLVED for the wrap writer: sanitized,
  *  humanized, pre-formatted, and stripped of anything the model must never
  *  echo (raw paths, branches, clock times it can't ground). Each block is
@@ -2462,6 +2543,16 @@ export const IPC = {
     // Listing only in this slice — lifecycle IPC (connect/disconnect/sync)
     // arrives with the first connectable provider.
     LIST: 'connectors:list',
+  },
+  EXPORT: {
+    // Full-history export (DEV-196). PLAN previews what an export would
+    // contain; RUN streams the database into a folder the person chose and
+    // verifies it; VERIFY re-checks any previous export against its manifest.
+    PLAN: 'export:plan',
+    CHOOSE_DESTINATION: 'export:choose-destination',
+    RUN: 'export:run',
+    VERIFY: 'export:verify',
+    PROGRESS: 'export:progress',
   },
   CONTEXT_PACKETS: {
     GET: 'context-packets:get',
