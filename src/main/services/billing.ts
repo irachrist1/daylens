@@ -18,7 +18,7 @@ import type {
 import { ANALYTICS_EVENT, type PaywallTrigger } from '@shared/analytics'
 import { capture } from './analytics'
 import { getDb } from './database'
-import { estimateUsageCostUsd, lookupModelPricing } from './modelPricing'
+import { estimateQuestionsRemaining, estimateUsageCostUsd, lookupModelPricing } from './modelPricing'
 import { getSecureStore } from './secureStore'
 import { getSettingsAsync, hasApiKey, setSettings } from './settings'
 import {
@@ -101,7 +101,25 @@ function unavailableSnapshot(message = 'Managed AI is unavailable in this build.
     localCheckoutAvailable: false,
     portalAvailable: false,
     message,
+    estimatedQuestionsRemaining: null,
   }
+}
+
+// Allowance is shown in money AND estimated questions, never raw tokens first.
+// The estimate divides the remaining managed allowance by a typical question's
+// cost at the managed default tier (model-specific estimates arrive with the
+// model picker). Null whenever managed AI is not actually usable — a paused
+// account shows its pause message, not a question count.
+function withEstimatedQuestions(value: BillingAccessSnapshot): BillingAccessSnapshot {
+  const remainingUsd = value.mode === 'free_credit'
+    ? value.creditRemainingUsd
+    : value.mode === 'subscription' || value.mode === 'local_pass'
+      ? value.fairUseRemainingUsd
+      : null
+  const estimatedQuestionsRemaining = value.managed && value.canUseAI
+    ? estimateQuestionsRemaining(remainingUsd, null)
+    : null
+  return { ...value, estimatedQuestionsRemaining }
 }
 
 async function installationId(): Promise<string> {
@@ -360,7 +378,7 @@ export async function getBillingAccess(options: { force?: boolean } = {}): Promi
   if (!options.force && cachedAccess && Date.now() - cachedAccess.at < MANAGED_STATE_TTL_MS) return cachedAccess.value
   try {
     const fetched = await request<BillingAccessSnapshot>('/v1/billing')
-    const value = applyEntitlementGate(fetched, await getEntitlement())
+    const value = withEstimatedQuestions(applyEntitlementGate(fetched, await getEntitlement()))
     // subscription_started: the app learns a purchase completed only by the
     // access snapshot flipping into a paid mode after the browser checkout.
     // (The API reports no price; `plan` carries the billing mode.) `trigger`
@@ -382,6 +400,11 @@ export async function getBillingAccess(options: { force?: boolean } = {}): Promi
     if (Object.keys(keys).length > 0) {
       const persisted = readPersistedEntitlement(keys)
       if (persisted) {
+        const derived = deriveEntitlementAccess(persisted, Date.now())
+        // A snapshot that pauses managed access (exhausted, expired, refunded)
+        // keeps its calm pause message even while the service is unreachable —
+        // the outage never masks the real state.
+        if (!derived.canUseManagedAI) return unavailableSnapshot(derived.message)
         const until = new Date(persisted.expiresAt).toLocaleString('en-US', { month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' })
         return unavailableSnapshot(`Daylens can’t reach the billing service right now. Your ${persisted.state === 'trial' ? 'trial' : 'plan'} status is remembered until ${until}; local features and your own key keep working.`)
       }

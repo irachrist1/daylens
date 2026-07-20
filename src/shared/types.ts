@@ -2160,6 +2160,12 @@ export interface BillingAccessSnapshot {
   localCheckoutAvailable: boolean
   portalAvailable: boolean
   message: string
+  // Whole questions the remaining allowance can still answer, computed on the
+  // desktop from the remaining credit and per-model pricing. Allowance is
+  // displayed in money and estimated questions — never raw tokens first. Null
+  // when there is no remaining managed allowance to estimate (own key,
+  // unavailable, or paused access).
+  estimatedQuestionsRemaining?: number | null
 }
 
 export type BillingUsageCostSource = 'provider' | 'estimated' | 'unknown'

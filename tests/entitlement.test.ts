@@ -175,6 +175,24 @@ test('the warning never fires after managed AI is already paused', () => {
   assert.equal(preExhaustionWarning(exhausted, []).shouldWarn, false)
 })
 
+// ── Allowance in money and estimated questions ──────────────────────────────
+
+test('remaining allowance converts to whole estimated questions, model-specific', async () => {
+  const { estimateQuestionsRemaining, typicalQuestionCostUsd } = await import('../src/main/services/modelPricing.ts')
+  // The default managed tier prices a typical question at 8k in + 600 out.
+  const defaultCost = typicalQuestionCostUsd(null)
+  assert.ok(defaultCost > 0)
+  assert.equal(estimateQuestionsRemaining(5, null), Math.floor(5 / defaultCost))
+  // A cheaper model answers more questions from the same credit.
+  const haiku = estimateQuestionsRemaining(5, 'claude-haiku-4-5')
+  const sonnet = estimateQuestionsRemaining(5, 'claude-sonnet-4-6')
+  assert.ok(haiku != null && sonnet != null && haiku > sonnet)
+  // No meaningful remaining figure → no estimate (never a made-up number).
+  assert.equal(estimateQuestionsRemaining(null, null), null)
+  assert.equal(estimateQuestionsRemaining(-1, null), null)
+  assert.equal(estimateQuestionsRemaining(0, null), 0)
+})
+
 // ── Cross-implementation pin ─────────────────────────────────────────────────
 
 test('desktop and billing-service canonical signing payloads cannot drift apart', () => {
