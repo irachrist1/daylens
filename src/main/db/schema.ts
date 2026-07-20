@@ -1019,4 +1019,33 @@ CREATE TABLE IF NOT EXISTS memory_record_vectors (
   created_at    INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_memory_record_vectors_date ON memory_record_vectors (date);
+
+-- ─── Context packets (agent-runtime-and-context.md §Context packet, DEV-181) ─
+-- One recorded, deterministic disclosure bundle per AI exchange — the
+-- generalization of the file_disclosures ledger to every content kind. The
+-- full packet (items with identity/version/source-type/reason, disclosure
+-- record, content fingerprint) is stored as JSON BEFORE the request leaves the
+-- local boundary; message_id binds it to the persisted assistant message
+-- afterwards, so "what did the model see for this answer" is one lookup.
+-- LOCAL-ONLY: no sync-allowlist keys; packets never leave the device
+-- (tests/syncAllowlist.test.ts).
+CREATE TABLE IF NOT EXISTS context_packets (
+  id                  TEXT PRIMARY KEY,
+  purpose             TEXT NOT NULL CHECK(purpose IN ('answer', 'interpret')),
+  exchange_kind       TEXT NOT NULL CHECK(exchange_kind IN ('chat', 'day_analysis')),
+  thread_id           INTEGER,
+  message_id          INTEGER,
+  scope_key           TEXT,
+  question            TEXT NOT NULL,
+  destination         TEXT NOT NULL,
+  left_device         INTEGER NOT NULL DEFAULT 1,
+  policy_version      INTEGER NOT NULL,
+  item_count          INTEGER NOT NULL,
+  content_fingerprint TEXT NOT NULL,
+  packet_json         TEXT NOT NULL,
+  created_at          INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_context_packets_message ON context_packets (message_id);
+CREATE INDEX IF NOT EXISTS idx_context_packets_thread ON context_packets (thread_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_context_packets_scope ON context_packets (exchange_kind, scope_key, created_at DESC);
 `

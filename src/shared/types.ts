@@ -2378,6 +2378,11 @@ export const IPC = {
     REVOKE_GRANT: 'file-access:revoke-grant',
     LIST_DISCLOSURES: 'file-access:list-disclosures',
   },
+  CONTEXT_PACKETS: {
+    GET: 'context-packets:get',
+    GET_FOR_MESSAGE: 'context-packets:get-for-message',
+    LIST: 'context-packets:list',
+  },
   SHELL: {
     OPEN_EXTERNAL: 'shell:open-external',
     OPEN_PATH: 'shell:open-path',
