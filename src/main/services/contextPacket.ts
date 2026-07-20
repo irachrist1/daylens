@@ -351,7 +351,10 @@ function correctedFactItems(db: Database.Database, question: string): ContextPac
     items.push({
       identity: `fact:${fact.id}`,
       kind: 'corrected_fact',
-      sourceType: 'supplied',
+      // Only an explicitly confirmed or hand-entered fact is `supplied`;
+      // evidence-drafted rows awaiting confirmation are `inferred` (DEV-185,
+      // spec §Memory types).
+      sourceType: fact.origin === 'user' ? 'supplied' : 'inferred',
       statement: fact.text,
       version: null,
       reason,
@@ -367,8 +370,8 @@ function correctedFactItems(db: Database.Database, question: string): ContextPac
     const profile = getScopedMemoryProfile(db)
     for (const fact of profile.general) {
       push(fact, fact.origin === 'user'
-        ? 'Fact the person supplied or corrected by hand'
-        : 'Fact drafted from real evidence and kept in the editable memory profile')
+        ? 'Fact the person supplied and confirmed'
+        : 'Fact drafted from real evidence, awaiting confirmation in the editable memory profile')
     }
     for (const group of profile.clients) {
       if (group.clientName.trim().length < 3 || !wordBounded(question, group.clientName.trim())) continue

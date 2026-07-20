@@ -797,8 +797,12 @@ export function useAIChat() {
     }
   }, [])
 
-  const dismissActionWidget = useCallback((proposalId: string) => {
-    setActionWidgetState((current) => ({ ...current, [proposalId]: { status: 'idle', dismissed: true } }))
+  const dismissActionWidget = useCallback((widget: AIActionWidget) => {
+    // Cancelling a memory preview is a decision — main records the proposed
+    // facts as rejections so they are not proposed again (DEV-185).
+    // Best-effort: the card dismisses either way.
+    void ipc.ai.dismissAction(widget).catch(() => {})
+    setActionWidgetState((current) => ({ ...current, [widget.proposalId]: { status: 'idle', dismissed: true } }))
   }, [])
 
   const clearFeedback = useCallback(() => {

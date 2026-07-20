@@ -1,7 +1,8 @@
-import { ipcMain } from 'electron'
+import { app, ipcMain } from 'electron'
 import { randomUUID } from 'node:crypto'
 import type { AIAgentQuestionEvent } from '@shared/types'
 import { cancelAIRequest } from '../lib/aiCancellation'
+import { appendDeletionJournalEntry } from '../services/deletionJournal'
 import { getThreadMessagesPage, updateAIMessageFeedback, writeAIBlockLabel } from '../db/queries'
 import { getDb } from '../services/database'
 import { uploadRatedAIMessageFeedback } from '../services/aiFeedbackUpload'
@@ -23,7 +24,7 @@ import { getWrapProviderState } from '../services/aiOrchestration'
 import { getWrapPreflight } from '../services/wrapPreflight'
 import { markRecapGenerated } from '../services/dailySummaryNotifier'
 import { getTimelineDayPayload, getBlockDetailPayload } from '../services/workBlocks'
-import { commitAction, undoAction } from '../ai/actions'
+import { commitAction, recordMemoryProposalDismissal, undoAction } from '../ai/actions'
 import {
   getContextPacketById,
   getContextPacketForMessage,
@@ -136,7 +137,30 @@ export function registerAIHandlers(): void {
   // widget, so now run the real change through the manual-edit pipeline. The
   // proposal carries everything needed; nothing was written before this call.
   ipcMain.handle(IPC.AI.COMMIT_ACTION, (_e, action: AIActionWidget): AIActionCommitResult => {
-    return commitAction(getDb(), action)
+    const result = commitAction(getDb(), action)
+    // A confirmed chat delete of a supplied fact is a user-initiated
+    // destructive deletion — journal it so a backup restore replays it
+    // (DEV-220 semantics, DEV-185 supplied memory).
+    if (result.ok && action.kind === 'memory_write') {
+      for (const op of action.ops) {
+        if (op.op === 'delete' && op.targetId?.startsWith('smf_')) {
+          appendDeletionJournalEntry(app.getPath('userData'), {
+            kind: 'supplied-fact',
+            params: { factId: op.targetId },
+          })
+        }
+      }
+    }
+    return result
+  })
+
+  // The user cancelled a proposal card. For memory previews that is a
+  // decision, not silence: the proposed facts are recorded as rejections so
+  // the same fact is not proposed again without new evidence (DEV-185).
+  ipcMain.handle(IPC.AI.DISMISS_ACTION, (_e, action: AIActionWidget): void => {
+    if (action.kind === 'memory_write') {
+      recordMemoryProposalDismissal(getDb(), action)
+    }
   })
 
   ipcMain.handle(IPC.AI.UNDO_ACTION, (_e, undo: AIActionUndo): AIActionCommitResult => {

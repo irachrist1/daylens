@@ -19,11 +19,23 @@ import {
   updateWorkMemoryFact,
   addWorkMemoryFact,
   forgetWorkMemoryFact,
+  confirmDraftedWorkMemoryFact,
   rebuildWorkMemory,
   getMemoryAudit,
   getScopedMemoryProfile,
   addClientMemoryFact,
 } from '../services/workMemoryProfile'
+import {
+  deleteAllSuppliedFacts,
+  deleteMemoryProposalRejection,
+  deleteSuppliedFact,
+  listMemoryProposalRejections,
+  listSuppliedFacts,
+  recordSuppliedMemoryAudit,
+  toRejectionView,
+  toSuppliedFactView,
+  updateSuppliedFact,
+} from '../services/suppliedMemory'
 import { getAppDetailProjection, getArtifactDetailProjection, getHistoryDayProjection, getTimelineDayProjection, getWorkflowPatternsProjection, getWeeklySummaryProjection, materializeTimelineDayProjection } from '../core/query/projections'
 import {
   getCorrectedAppSummariesForRange,
@@ -219,6 +231,9 @@ function forgetAllWorkMemory(db: ReturnType<typeof getDb>): WorkMemorySettingsSu
   for (const table of tables) {
     if (tableExists(db, table)) db.prepare(`DELETE FROM ${table}`).run()
   }
+  // Supplied facts and their retrieval mirrors go too — "forget everything"
+  // must leave nothing findable (DEV-185).
+  deleteAllSuppliedFacts(db)
   return getWorkMemorySettingsSummary(db)
 }
 
@@ -576,7 +591,49 @@ export function registerDbHandlers(): void {
   })
 
   ipcMain.handle(IPC.DB.FORGET_WORK_MEMORY_FACT, (_e, id: string) => {
-    return forgetWorkMemoryFact(getDb(), id)
+    const result = forgetWorkMemoryFact(getDb(), id)
+    // A supplied fact is user data, not rebuildable evidence — journal the
+    // deletion so a backup restore replays it (DEV-220 semantics).
+    if (id.startsWith('smf_')) {
+      recordDeletionInJournal({ kind: 'supplied-fact', params: { factId: id } })
+    }
+    return result
+  })
+
+  // Supplied memory (DEV-185): the confirmed "things you've told me" tier.
+  ipcMain.handle(IPC.DB.CONFIRM_DRAFTED_MEMORY_FACT, (_e, id: string) => {
+    return confirmDraftedWorkMemoryFact(getDb(), id)
+  })
+
+  ipcMain.handle(IPC.DB.LIST_SUPPLIED_MEMORY_FACTS, () => {
+    return listSuppliedFacts(getDb()).map(toSuppliedFactView)
+  })
+
+  ipcMain.handle(IPC.DB.UPDATE_SUPPLIED_MEMORY_FACT, (_e, id: string, statement: string) => {
+    const db = getDb()
+    const updated = updateSuppliedFact(db, id, statement)
+    if (updated) recordSuppliedMemoryAudit(db, 'updated', updated.statement, 'hand', updated.scope)
+    return listSuppliedFacts(db).map(toSuppliedFactView)
+  })
+
+  ipcMain.handle(IPC.DB.DELETE_SUPPLIED_MEMORY_FACT, (_e, id: string) => {
+    const db = getDb()
+    const deleted = deleteSuppliedFact(db, id)
+    if (deleted) {
+      recordSuppliedMemoryAudit(db, 'forgot', deleted.statement, 'hand', deleted.scope)
+      recordDeletionInJournal({ kind: 'supplied-fact', params: { factId: id } })
+    }
+    return listSuppliedFacts(db).map(toSuppliedFactView)
+  })
+
+  ipcMain.handle(IPC.DB.LIST_MEMORY_PROPOSAL_REJECTIONS, () => {
+    return listMemoryProposalRejections(getDb()).map(toRejectionView)
+  })
+
+  ipcMain.handle(IPC.DB.DELETE_MEMORY_PROPOSAL_REJECTION, (_e, id: string) => {
+    const db = getDb()
+    deleteMemoryProposalRejection(db, id)
+    return listMemoryProposalRejections(db).map(toRejectionView)
   })
 
   ipcMain.handle(IPC.DB.REBUILD_WORK_MEMORY, () => {

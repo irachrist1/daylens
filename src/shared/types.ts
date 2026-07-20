@@ -425,6 +425,30 @@ export interface WorkMemoryFact {
   origin: WorkMemoryFactOrigin
   source: WorkMemoryFactSource
   category: WorkMemoryCategory
+  /** True when the fact lives in the supplied-memory store (DEV-185). */
+  supplied?: boolean
+}
+
+/** One confirmed personal fact (DEV-185): explicitly saved by the user, shown
+ *  in Settings → Memory → "Things you've told me" with when/context, editable
+ *  and deletable — deletion leaves retrieval and packets immediately. */
+export interface SuppliedMemoryFactView {
+  id: string
+  statement: string
+  scope: string
+  source: 'chat' | 'hand' | 'migrated'
+  context: string | null
+  threadId: number | null
+  confirmedAt: number
+  updatedAt: number
+}
+
+/** A declined memory proposal (DEV-185): stored so the same fact is not
+ *  proposed again; deletable like any memory. */
+export interface MemoryProposalRejectionView {
+  id: string
+  statement: string
+  rejectedAt: number
 }
 
 export interface WorkMemoryProfile {
@@ -2214,6 +2238,12 @@ export const IPC = {
     UPDATE_WORK_MEMORY_FACT: 'db:update-work-memory-fact',
     ADD_WORK_MEMORY_FACT: 'db:add-work-memory-fact',
     FORGET_WORK_MEMORY_FACT: 'db:forget-work-memory-fact',
+    CONFIRM_DRAFTED_MEMORY_FACT: 'db:confirm-drafted-memory-fact',
+    LIST_SUPPLIED_MEMORY_FACTS: 'db:list-supplied-memory-facts',
+    UPDATE_SUPPLIED_MEMORY_FACT: 'db:update-supplied-memory-fact',
+    DELETE_SUPPLIED_MEMORY_FACT: 'db:delete-supplied-memory-fact',
+    LIST_MEMORY_PROPOSAL_REJECTIONS: 'db:list-memory-proposal-rejections',
+    DELETE_MEMORY_PROPOSAL_REJECTION: 'db:delete-memory-proposal-rejection',
     REBUILD_WORK_MEMORY: 'db:rebuild-work-memory',
     GET_MEMORY_AUDIT: 'db:get-memory-audit',
     GET_SCOPED_MEMORY_PROFILE: 'db:get-scoped-memory-profile',
@@ -2259,6 +2289,7 @@ export const IPC = {
     GET_STARTER_SUGGESTIONS: 'ai:get-starter-suggestions',
     COMMIT_ACTION: 'ai:commit-action',
     UNDO_ACTION: 'ai:undo-action',
+    DISMISS_ACTION: 'ai:dismiss-action',
     SET_MESSAGE_FEEDBACK: 'ai:set-message-feedback',
     GENERATE_DAY_SUMMARY: 'ai:generate-day-summary',
     GET_WEEK_REVIEW: 'ai:get-week-review',

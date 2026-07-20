@@ -12,6 +12,15 @@ import type Database from 'better-sqlite3'
 import type { AppCategory, WorkMemoryCategory } from '@shared/types'
 import { tableExists } from './database'
 import { getReconciledDomainIntervals } from '../db/queries'
+import {
+  confirmSuppliedFact,
+  deleteSuppliedFact,
+  getSuppliedFact,
+  isSuppliedFactId,
+  listSuppliedFacts,
+  suppliedMemoryAvailable,
+  updateSuppliedFact,
+} from './suppliedMemory'
 
 type WorkMemoryFactOrigin = 'drafted' | 'user'
 // Display provenance (memory.md §2.1 "marked as such"). Durability is keyed on
@@ -25,6 +34,9 @@ interface WorkMemoryFact {
   origin: WorkMemoryFactOrigin
   source: WorkMemoryFactSource
   category: WorkMemoryCategory
+  /** True when the fact lives in the supplied-memory store (DEV-185) — the
+   *  confirmed "things you've told me" tier, retrievable through search. */
+  supplied?: boolean
 }
 
 // Group a fact into a readable section for the Manage-memory view (memory.md §3,
@@ -150,11 +162,17 @@ function findDuplicateFact(
   const rows = db.prepare(
     `SELECT fact_text FROM work_memory_facts WHERE status = 'active' ${scopeClause}`,
   ).all(...params) as { fact_text: string }[]
+  // Supplied facts (DEV-185) count as already-known too, so a rebuild or a
+  // chat add cannot duplicate something the person already confirmed.
+  const existing = [
+    ...rows,
+    ...listSuppliedFacts(db, { scope }).map((fact) => ({ fact_text: fact.statement })),
+  ]
 
   const normalized = normalizeFactText(text)
   const newWords = wordSet(text)
 
-  for (const row of rows) {
+  for (const row of existing) {
     const existingNorm = normalizeFactText(row.fact_text)
     if (normalized === existingNorm) return true
     if (normalized.length > 10 && existingNorm.length > 10) {
@@ -191,13 +209,27 @@ function readFactsForScope(db: Database.Database, scope: string): WorkMemoryFact
     WHERE status = 'active' ${scopeClause}
     ORDER BY sort_order ASC, created_at ASC
   `).all(...params) as FactRow[]
-  return rows.map((row) => ({
+  const drafted = rows.map((row) => ({
     id: row.id,
     text: row.fact_text,
     origin: row.origin,
     source: rowSource(row),
     category: classifyWorkMemoryFact(row.fact_text, row.topic_key),
   }))
+  // Supplied facts (DEV-185) are the confirmed tier of the same profile: they
+  // ride every prompt block and the Manage-memory view alongside the drafted
+  // facts, and edit/forget route to the supplied store by id.
+  const supplied: WorkMemoryFact[] = listSuppliedFacts(db, { scope })
+    .map((fact) => ({
+      id: fact.id,
+      text: fact.statement,
+      origin: 'user' as const,
+      source: fact.source === 'chat' ? 'chat' as const : 'hand' as const,
+      category: classifyWorkMemoryFact(fact.statement),
+      supplied: true,
+    }))
+    .reverse() // oldest first, matching the drafted ordering
+  return [...drafted, ...supplied]
 }
 
 export function getWorkMemoryProfile(db: Database.Database): WorkMemoryProfile {
@@ -221,6 +253,22 @@ export function updateWorkMemoryFact(db: Database.Database, id: string, text: st
   if (!trimmed) return getWorkMemoryProfile(db)
   applyUpdate(db, id, trimmed, 'hand')
   recordAudit(db, 'updated', trimmed, 'hand')
+  return getWorkMemoryProfile(db)
+}
+
+// Confirming a drafted fact (spec migration slice 2: evidence-drafted rows are
+// re-presented for confirmation, never silently promoted). The drafted topic
+// is tombstoned so a rebuild cannot re-draft it, and the text becomes a
+// supplied fact — explicitly confirmed, retrievable through search.
+export function confirmDraftedWorkMemoryFact(db: Database.Database, id: string): WorkMemoryProfile {
+  if (!ready(db)) return { facts: [] }
+  const row = db.prepare(
+    `SELECT id, fact_text, origin, status, topic_key, sort_order FROM work_memory_facts WHERE id = ? AND status = 'active'`,
+  ).get(id) as FactRow | undefined
+  if (!row || row.origin !== 'drafted') return getWorkMemoryProfile(db)
+  const scope = factScope(db, row.id)
+  promoteToSupplied(db, row, row.fact_text, 'hand', scope, 'Confirmed from a drafted suggestion')
+  recordAudit(db, 'remembered', row.fact_text, 'hand', scope)
   return getWorkMemoryProfile(db)
 }
 
@@ -257,6 +305,15 @@ export function addClientMemoryFact(db: Database.Database, clientId: string, tex
 // true across the edit-then-forget path (work-memory.md §3.3).
 export function forgetWorkMemoryFact(db: Database.Database, id: string): ForgetResult {
   if (!ready(db)) return { facts: [], changeSummary: 'Nothing to forget.' }
+  if (isSuppliedFactId(id)) {
+    const deleted = deleteSuppliedFact(db, id)
+    if (!deleted) return { facts: getWorkMemoryProfile(db).facts, changeSummary: 'Nothing to forget.' }
+    recordAudit(db, 'forgot', deleted.statement, 'hand', deleted.scope)
+    return {
+      facts: getWorkMemoryProfile(db).facts,
+      changeSummary: `Forgot "${truncate(deleted.statement)}".`,
+    }
+  }
   const row = db.prepare(`SELECT id, fact_text, origin, status, topic_key, sort_order FROM work_memory_facts WHERE id = ?`).get(id) as FactRow | undefined
   if (!row) return { facts: getWorkMemoryProfile(db).facts, changeSummary: 'Nothing to forget.' }
 
@@ -273,13 +330,33 @@ function truncate(text: string, max = 60): string {
 }
 
 // ── Shared mutators (used by both the hand path and the conversation path) ──
+// Since DEV-185, every user-confirmed or hand-entered fact lands in the
+// supplied-memory store (searchable, packet-visible, individually deletable);
+// work_memory_facts keeps only the evidence-drafted proposals and their
+// tombstones. Edits and forgets route by id.
 
 function hasSourceColumn(db: Database.Database): boolean {
   return hasColumn(db, 'work_memory_facts', 'source')
 }
 
+function factScope(db: Database.Database, id: string): string {
+  if (!hasColumn(db, 'work_memory_facts', 'scope')) return GENERAL_SCOPE
+  const row = db.prepare(`SELECT scope FROM work_memory_facts WHERE id = ?`).get(id) as { scope: string } | undefined
+  return row?.scope ?? GENERAL_SCOPE
+}
+
 function applyAdd(db: Database.Database, text: string, source: 'chat' | 'hand', scope: string = GENERAL_SCOPE): string | null {
   if (findDuplicateFact(db, text, scope)) return null
+  if (suppliedMemoryAvailable(db)) {
+    const fact = confirmSuppliedFact(db, {
+      statement: text,
+      scope,
+      source,
+      context: source === 'chat' ? 'Confirmed in chat' : 'Added by hand in Settings',
+    })
+    return fact?.id ?? null
+  }
+  // Pre-migration fallback: the legacy user-origin row.
   const id = newId()
   const max = db.prepare(`SELECT COALESCE(MAX(sort_order), 0) AS m FROM work_memory_facts`).get() as { m: number }
   if (hasSourceColumn(db)) {
@@ -296,10 +373,46 @@ function applyAdd(db: Database.Database, text: string, source: 'chat' | 'hand', 
   return id
 }
 
-// A hand edit or a chat correction flips origin to 'user' so a rebuild never
-// overwrites it (the correction rule). topic_key is preserved so an
-// edit-then-forget still tombstones a drafted topic.
+// Editing a drafted fact is an explicit confirmation of the edited text (spec
+// migration slice 1: hand-edited rows become supplied memory): the drafted
+// topic is tombstoned so a rebuild won't re-draft it, and the corrected text
+// becomes a supplied fact.
+function promoteToSupplied(
+  db: Database.Database,
+  row: Pick<FactRow, 'id' | 'topic_key'>,
+  text: string,
+  source: 'chat' | 'hand',
+  scope: string,
+  context: string,
+): string | null {
+  if (!suppliedMemoryAvailable(db)) return null
+  const promote = db.transaction(() => {
+    if (row.topic_key) {
+      db.prepare(`UPDATE work_memory_facts SET status = 'deleted', updated_at = ? WHERE id = ?`).run(now(), row.id)
+    } else {
+      db.prepare(`DELETE FROM work_memory_facts WHERE id = ?`).run(row.id)
+    }
+    return confirmSuppliedFact(db, { statement: text, scope, source, context })?.id ?? null
+  })
+  return promote()
+}
+
+// An edit flips a fact into the supplied store: supplied facts update in
+// place; a drafted row is confirmed with the edited text (the correction rule
+// — a rebuild never overwrites it). The legacy in-place path remains only for
+// pre-migration databases.
 function applyUpdate(db: Database.Database, id: string, text: string, source: 'chat' | 'hand'): void {
+  if (isSuppliedFactId(id)) {
+    updateSuppliedFact(db, id, text, source)
+    return
+  }
+  const row = db.prepare(`SELECT id, topic_key FROM work_memory_facts WHERE id = ?`)
+    .get(id) as Pick<FactRow, 'id' | 'topic_key'> | undefined
+  if (!row) return
+  if (suppliedMemoryAvailable(db)) {
+    promoteToSupplied(db, row, text, source, factScope(db, id), 'Confirmed by editing a drafted fact')
+    return
+  }
   if (hasSourceColumn(db)) {
     db.prepare(`UPDATE work_memory_facts SET fact_text = ?, origin = 'user', source = ?, updated_at = ? WHERE id = ?`)
       .run(text, source, now(), id)
@@ -311,7 +424,13 @@ function applyUpdate(db: Database.Database, id: string, text: string, source: 'c
 
 // A drafted topic is tombstoned (status=deleted) so a rebuild won't drag it
 // back; a purely hand/chat-added fact has no topic_key and is removed outright.
+// Supplied facts delete through their own store, which removes the retrieval
+// mirror in the same transaction.
 function applyDelete(db: Database.Database, row: Pick<FactRow, 'id' | 'topic_key'>): void {
+  if (isSuppliedFactId(row.id)) {
+    deleteSuppliedFact(db, row.id)
+    return
+  }
   if (row.topic_key) {
     db.prepare(`UPDATE work_memory_facts SET status = 'deleted', updated_at = ? WHERE id = ?`).run(now(), row.id)
   } else {
@@ -348,7 +467,9 @@ export function applyMemoryWriteOps(
       } else if (op.action === 'update') {
         const text = (op.text ?? '').trim()
         if (!text || !op.targetId) continue
-        const exists = db.prepare(`SELECT id FROM work_memory_facts WHERE id = ?`).get(op.targetId)
+        const exists = isSuppliedFactId(op.targetId)
+          ? getSuppliedFact(db, op.targetId) != null
+          : db.prepare(`SELECT id FROM work_memory_facts WHERE id = ?`).get(op.targetId) != null
         if (!exists) {
           // The target vanished — record it as a fresh memory instead of dropping it.
           applyAdd(db, text, source, scope)
@@ -361,6 +482,13 @@ export function applyMemoryWriteOps(
         applied.push({ action: 'update', text })
       } else if (op.action === 'delete') {
         if (!op.targetId) continue
+        if (isSuppliedFactId(op.targetId)) {
+          const deleted = deleteSuppliedFact(db, op.targetId)
+          if (!deleted) continue
+          recordAudit(db, 'forgot', deleted.statement, source, deleted.scope)
+          applied.push({ action: 'delete', text: deleted.statement })
+          continue
+        }
         const row = db.prepare(
           `SELECT id, fact_text, topic_key FROM work_memory_facts WHERE id = ?`,
         ).get(op.targetId) as Pick<FactRow, 'id' | 'fact_text' | 'topic_key'> | undefined
