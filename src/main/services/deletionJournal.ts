@@ -38,6 +38,7 @@ import {
   invalidateTimelineDayBlocks,
   writeIgnoredBlockReviewBackstop,
 } from './workBlocks'
+import { deleteSuppliedFact } from './suppliedMemory'
 
 // Backstop fields are optional so older {fromMs,toMs}-only journal lines still parse.
 export type PurgeBlockJournalParams = PurgeTimelineBlockSpanInput & {
@@ -58,6 +59,7 @@ export type DeletionJournalEntry =
   | { kind: 'tracked-activity'; recordedAtMs: number; params: DeleteTrackedActivityInput }
   | { kind: 'purge-evidence'; recordedAtMs: number; params: PurgeTrackedEvidenceRowsInput }
   | { kind: 'purge-block'; recordedAtMs: number; params: PurgeBlockJournalParams }
+  | { kind: 'supplied-fact'; recordedAtMs: number; params: { factId: string } }
 
 // Distributive omit so each union member keeps its kind/params pairing.
 type WithoutStamp<T> = T extends { recordedAtMs: number } ? Omit<T, 'recordedAtMs'> : never
@@ -69,6 +71,7 @@ const JOURNAL_ENTRY_KINDS = new Set<DeletionJournalEntry['kind']>([
   'tracked-activity',
   'purge-evidence',
   'purge-block',
+  'supplied-fact',
 ])
 
 export function deletionJournalPath(userDataPath: string): string {
@@ -195,6 +198,12 @@ function replayEntry(db: Database.Database, entry: DeletionJournalEntry): void {
       }
       break
     }
+    // DEV-185: a deleted supplied fact must not resurrect from a backup
+    // restore. Fact ids are stable, so replay deletes by id — a no-op when
+    // the restored database never had (or already lost) the fact.
+    case 'supplied-fact':
+      deleteSuppliedFact(db, entry.params.factId)
+      break
   }
 }
 

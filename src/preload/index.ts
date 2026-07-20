@@ -65,6 +65,8 @@ import type {
   WorkMemoryProfile,
   WorkMemoryMutationResult,
   WorkMemoryFact,
+  SuppliedMemoryFactView,
+  MemoryProposalRejectionView,
   ScopedMemoryProfile,
   MemoryAuditEntry,
   WorkspaceResult,
@@ -115,6 +117,10 @@ export type DaylensSearchResult =
       // DEV-178: memory type of the backing record — observed capture,
       // connected source (meetings), supplied, or inferred.
       sourceType?: 'observed' | 'connected' | 'supplied' | 'inferred'
+      // DEV-180: set when the hit was found by local semantic search rather
+      // than an exact word match ("Similar meaning" in the palette).
+      foundBy?: 'meaning'
+      similarity?: number
     }
   | {
       type: 'block'
@@ -169,6 +175,22 @@ export interface DaylensNaturalSearchResult {
   intent: string | null
   terms: string[]
   usedProvider: boolean
+}
+
+// DEV-180: local semantic-search status for the Settings surface — which
+// engine and model run on this device, whether the artifact is present, and
+// how far the background embedding has gotten.
+export interface DaylensSemanticSearchStatus {
+  available: boolean
+  reason: 'ready' | 'model-missing' | 'runtime-missing' | 'load-failed' | 'vector-store-unavailable'
+  detail: string | null
+  engine: string
+  modelId: string
+  modelRevision: string
+  modelPresent: boolean
+  modelBytes: number
+  embeddedRecords: number
+  pendingRecords: number
 }
 
 // Typed IPC surface exposed to the renderer — NO Node/electron APIs leak through
@@ -234,6 +256,18 @@ const api = {
       ipcRenderer.invoke(IPC.DB.ADD_WORK_MEMORY_FACT, text),
     forgetWorkMemoryFact: (id: string): Promise<WorkMemoryMutationResult> =>
       ipcRenderer.invoke(IPC.DB.FORGET_WORK_MEMORY_FACT, id),
+    confirmDraftedMemoryFact: (id: string): Promise<WorkMemoryProfile> =>
+      ipcRenderer.invoke(IPC.DB.CONFIRM_DRAFTED_MEMORY_FACT, id),
+    listSuppliedMemoryFacts: (): Promise<SuppliedMemoryFactView[]> =>
+      ipcRenderer.invoke(IPC.DB.LIST_SUPPLIED_MEMORY_FACTS),
+    updateSuppliedMemoryFact: (id: string, statement: string): Promise<SuppliedMemoryFactView[]> =>
+      ipcRenderer.invoke(IPC.DB.UPDATE_SUPPLIED_MEMORY_FACT, id, statement),
+    deleteSuppliedMemoryFact: (id: string): Promise<SuppliedMemoryFactView[]> =>
+      ipcRenderer.invoke(IPC.DB.DELETE_SUPPLIED_MEMORY_FACT, id),
+    listMemoryProposalRejections: (): Promise<MemoryProposalRejectionView[]> =>
+      ipcRenderer.invoke(IPC.DB.LIST_MEMORY_PROPOSAL_REJECTIONS),
+    deleteMemoryProposalRejection: (id: string): Promise<MemoryProposalRejectionView[]> =>
+      ipcRenderer.invoke(IPC.DB.DELETE_MEMORY_PROPOSAL_REJECTION, id),
     rebuildWorkMemory: (): Promise<WorkMemoryMutationResult> =>
       ipcRenderer.invoke(IPC.DB.REBUILD_WORK_MEMORY),
     getMemoryAudit: (): Promise<MemoryAuditEntry[]> =>
@@ -272,6 +306,8 @@ const api = {
       ipcRenderer.invoke(IPC.AI.COMMIT_ACTION, action),
     undoAction: (undo: AIActionUndo): Promise<AIActionCommitResult> =>
       ipcRenderer.invoke(IPC.AI.UNDO_ACTION, undo),
+    dismissAction: (action: AIActionWidget): Promise<void> =>
+      ipcRenderer.invoke(IPC.AI.DISMISS_ACTION, action),
     generateDaySummary: (date: string): Promise<AIDaySummaryResult> =>
       ipcRenderer.invoke(IPC.AI.GENERATE_DAY_SUMMARY, date),
     getWeekReview: (weekStart: string, force?: boolean): Promise<AISurfaceSummary | null> =>
@@ -321,6 +357,12 @@ const api = {
       ipcRenderer.invoke('search:artifacts', { query, opts }),
     natural: (query: string, opts?: SearchOptions): Promise<DaylensNaturalSearchResult> =>
       ipcRenderer.invoke('search:natural', { query, opts }),
+    // DEV-180: by-meaning results — always session-shaped moments with
+    // foundBy: 'meaning'; [] when the local model is unavailable.
+    semantic: (query: string, opts?: SearchOptions): Promise<Extract<DaylensSearchResult, { type: 'session' }>[]> =>
+      ipcRenderer.invoke('search:semantic', { query, opts }),
+    semanticStatus: (): Promise<DaylensSemanticSearchStatus> =>
+      ipcRenderer.invoke('search:semanticStatus'),
   },
   settings: {
     get: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.SETTINGS.GET),
@@ -463,6 +505,14 @@ const api = {
     revokeGrant: (grantId: string) => ipcRenderer.invoke(IPC.FILE_ACCESS.REVOKE_GRANT, grantId),
     listDisclosures: (payload: { limit?: number } = {}) =>
       ipcRenderer.invoke(IPC.FILE_ACCESS.LIST_DISCLOSURES, payload),
+  },
+  contextPackets: {
+    // DEV-181: the recorded, deterministic bundle behind an AI exchange.
+    get: (packetId: string) => ipcRenderer.invoke(IPC.CONTEXT_PACKETS.GET, packetId),
+    getForMessage: (messageId: number) =>
+      ipcRenderer.invoke(IPC.CONTEXT_PACKETS.GET_FOR_MESSAGE, messageId),
+    list: (payload: { limit?: number; exchangeKind?: 'chat' | 'day_analysis'; scopeKey?: string } = {}) =>
+      ipcRenderer.invoke(IPC.CONTEXT_PACKETS.LIST, payload),
   },
   mcp: {
     getConfig: (): Promise<McpServerConfig | null> => ipcRenderer.invoke(IPC.MCP.GET_CONFIG),

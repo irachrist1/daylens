@@ -6,10 +6,10 @@
 // terms each row matched. Offline / no-provider falls back to deterministic
 // keyword extraction, so search never hard-fails.
 //
-// Deferred (DEV-180): a true embedding/vector index for semantic ranking. This
-// increment gets "relevant results without an exact keyword match" via
-// provider-driven term expansion over exact retrieval, without committing to
-// an embedding store, model, or reindex strategy.
+// The true embedding index landed as DEV-180 (services/semanticIndex.ts). It
+// is a separate retrieval path, not part of this interpreter: the palette
+// runs `search:semantic` alongside whichever exact path answers here and
+// presents by-meaning hits under their own label, ranked below exact matches.
 
 import { getDb } from './database'
 import { interpretSearchIntent } from '../jobs/aiService'

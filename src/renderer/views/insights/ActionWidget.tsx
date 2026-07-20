@@ -18,7 +18,7 @@ export interface ActionWidgetProps {
   state?: ActionWidgetStateEntry
   onConfirm: (widget: AIActionWidget) => void
   onUndo: (proposalId: string, undo: NonNullable<ActionWidgetStateEntry['undo']>) => void
-  onDismiss: (proposalId: string) => void
+  onDismiss: (widget: AIActionWidget) => void
 }
 
 function IconCheck() {
@@ -121,6 +121,11 @@ function MemoryPreview({ proposal }: { proposal: AIMemoryProposal }) {
           </div>
         </div>
       ))}
+      {/* What saving means (DEV-185): exactly this text, used to personalize
+          answers and search, and always yours to edit or delete. */}
+      <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', lineHeight: 1.5 }}>
+        Used to personalize answers and search. You can edit or delete it any time in Settings → Memory.
+      </div>
     </div>
   )
 }
@@ -231,7 +236,7 @@ export function ActionWidget({ widget, state, onConfirm, onUndo, onDismiss }: Ac
         >
           {status === 'committing' ? 'Applying…' : widget.confirmLabel}
         </button>
-        <button type="button" onClick={() => onDismiss(widget.proposalId)} disabled={busy} style={{ ...GHOST_BTN, opacity: busy ? 0.7 : 1 }}>
+        <button type="button" onClick={() => onDismiss(widget)} disabled={busy} style={{ ...GHOST_BTN, opacity: busy ? 0.7 : 1 }}>
           Cancel
         </button>
         {status === 'error' && (

@@ -55,6 +55,30 @@ test('extra root field on sync payload fails strict schema', () => {
   )
 })
 
+// DEV-185: supplied memory is LOCAL-ONLY — supplied_memory_facts and
+// memory_proposal_rejections have no allowlist keys, so any attempt to
+// serialize them into a remote payload fails the strict schema.
+test('supplied memory facts and proposal rejections can never ride a sync payload', () => {
+  for (const field of ['suppliedMemoryFacts', 'memoryProposalRejections']) {
+    const dirty = {
+      ...makeCleanRemoteSyncPayload(),
+      [field]: [{ statement: 'You lead the pricing project.' }],
+    }
+    assert.throws(
+      () => assertSyncPayloadAllowed(dirty),
+      (error: unknown) => {
+        assert.ok(error instanceof SyncAllowlistViolation)
+        assert.ok(
+          error.violations.some((item) => item.class === 'extra_field'
+            && (item.path.includes(field) || item.detail?.includes(field))),
+          `expected extra_field violation for ${field}`,
+        )
+        return true
+      },
+    )
+  }
+})
+
 test('credential in a work block label fails the allowlist', () => {
   const payload = makeCleanRemoteSyncPayload()
   payload.workBlocks[0]!.label = 'Draft with sk-abcdefghijklmnopqrstuvwxyz012345'
@@ -151,11 +175,11 @@ test('WorkspaceLivePresence is allowlisted and rejects credential labels', () =>
   )
 })
 
-test('DEV-177/DEV-184/DEV-178 tables cannot serialize: entity rows, aliases, grants, disclosures, and memory records are rejected', () => {
-  // The durable-entity, file-access, and exact-search memory tables are
-  // LOCAL-ONLY. None of their shapes have allowlist keys, so any attempt to
-  // ride the sync payload — as a new root collection or nested onto an
-  // allowed object — must throw.
+test('DEV-177/DEV-184/DEV-178/DEV-180/DEV-181 tables cannot serialize: entity rows, aliases, grants, disclosures, memory records, embeddings, and context packets are rejected', () => {
+  // The durable-entity, file-access, exact-search memory, semantic embedding,
+  // and context-packet tables are LOCAL-ONLY. None of their shapes have
+  // allowlist keys, so any attempt to ride the sync payload — as a new root
+  // collection or nested onto an allowed object — must throw.
   const cases: Array<{ name: string; mutate: (payload: ReturnType<typeof makeCleanRemoteSyncPayload>) => unknown }> = [
     {
       name: 'entities table rows as a root collection',
@@ -213,6 +237,57 @@ test('DEV-177/DEV-184/DEV-178 tables cannot serialize: entity rows, aliases, gra
       mutate: (payload) => ({
         ...payload,
         memoryIndexDays: [{ date: '2026-07-20', fingerprint: 'v1|fe:0:0' }],
+      }),
+    },
+    // DEV-180: semantic embeddings are LOCAL-ONLY — generated on-device and
+    // never synced, in any shape.
+    {
+      name: 'embedding vector bookkeeping as a root collection',
+      mutate: (payload) => ({
+        ...payload,
+        memoryRecordVectors: [{ record_id: 'mem_x', model: 'all-MiniLM-L6-v2', model_version: 1, dims: 384 }],
+      }),
+    },
+    {
+      name: 'a raw embedding vector nested onto a synced entity rollup',
+      mutate: (payload) => ({
+        ...payload,
+        entities: [{ ...payload.entities[0]!, embedding: [0.12, -0.5, 0.33] }],
+      }),
+    },
+    {
+      name: 'semantic-search text nested onto a work block',
+      mutate: (payload) => ({
+        ...payload,
+        workBlocks: [{ ...payload.workBlocks[0]!, semanticText: 'Acme pricing draft — private window title' }],
+      }),
+    },
+    // DEV-181: context packets are LOCAL-ONLY — the disclosure ledger of what
+    // each AI exchange saw stays on this device, in any shape.
+    {
+      name: 'context packets as a root collection',
+      mutate: (payload) => ({
+        ...payload,
+        contextPackets: [{
+          id: 'ctx_x',
+          question: 'what did I do yesterday',
+          packet_json: '{"items":[{"statement":"09:00–10:00 Acme pricing draft"}]}',
+          destination: 'anthropic:claude-sonnet-4-5',
+        }],
+      }),
+    },
+    {
+      name: 'a packet item statement nested onto a work block',
+      mutate: (payload) => ({
+        ...payload,
+        workBlocks: [{ ...payload.workBlocks[0]!, contextPacketStatement: 'Acme pricing draft — private window title' }],
+      }),
+    },
+    {
+      name: 'a packet disclosure record nested onto a synced entity rollup',
+      mutate: (payload) => ({
+        ...payload,
+        entities: [{ ...payload.entities[0]!, contextDisclosure: { destination: 'anthropic', itemCount: 12 } }],
       }),
     },
   ]

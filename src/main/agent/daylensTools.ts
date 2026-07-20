@@ -7,7 +7,7 @@
 import { tool } from 'ai'
 import { z } from 'zod'
 import type Database from 'better-sqlite3'
-import { executeTool } from '../services/aiTools'
+import { executeTool, execSearchSessionsWithMeaning } from '../services/aiTools'
 import { getMomentEvidence } from '../lib/momentEvidence'
 import { getWebsiteVisitsForRange } from '../db/queries'
 import {
@@ -250,14 +250,16 @@ export function buildDaylensTools(db: Database.Database) {
     }),
 
     search_history: tool({
-      description: 'Full-text fuzzy search over everything captured: app sessions, window titles, page titles and URLs. Use for recall questions ("that drowning video", "the article about transformers"). Returns matches with times, durations, and URLs, or an explicit empty result.',
+      description: 'Full-text fuzzy search over everything captured: app sessions, window titles, page titles and URLs. Use for recall questions ("that drowning video", "the article about transformers"). Returns matches with times, durations, and URLs, or an explicit empty result. When the local semantic index is available, a separate semanticHits array carries moments found by MEANING (on-device embeddings) — present those as "similar meaning" leads, never as exact matches.',
       inputSchema: z.object({
         query: z.string().min(1).describe('Search words. Keep it to the distinctive terms.'),
         startDate: DATE.optional(),
         endDate: DATE.optional(),
         limit: z.number().int().min(1).max(50).optional(),
       }),
-      execute: async (params) => guarded(executeTool('searchSessions', params, db)),
+      // DEV-180: exact retrieval plus the by-meaning path, through the same
+      // two privacy boundaries as every other tool result.
+      execute: async (params) => guarded(await execSearchSessionsWithMeaning(params, db)),
     }),
 
     get_app_usage: tool({

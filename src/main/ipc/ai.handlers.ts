@@ -1,7 +1,8 @@
-import { ipcMain } from 'electron'
+import { app, ipcMain } from 'electron'
 import { randomUUID } from 'node:crypto'
 import type { AIAgentQuestionEvent } from '@shared/types'
 import { cancelAIRequest } from '../lib/aiCancellation'
+import { appendDeletionJournalEntry } from '../services/deletionJournal'
 import { getThreadMessagesPage, updateAIMessageFeedback, writeAIBlockLabel } from '../db/queries'
 import { getDb } from '../services/database'
 import { uploadRatedAIMessageFeedback } from '../services/aiFeedbackUpload'
@@ -23,7 +24,13 @@ import { getWrapProviderState } from '../services/aiOrchestration'
 import { getWrapPreflight } from '../services/wrapPreflight'
 import { markRecapGenerated } from '../services/dailySummaryNotifier'
 import { getTimelineDayPayload, getBlockDetailPayload } from '../services/workBlocks'
-import { commitAction, undoAction } from '../ai/actions'
+import { commitAction, recordMemoryProposalDismissal, undoAction } from '../ai/actions'
+import {
+  getContextPacketById,
+  getContextPacketForMessage,
+  listContextPackets,
+  type ContextPacketExchangeKind,
+} from '../services/contextPacket'
 import { getCurrentSession } from '../services/tracking'
 import { materializeTimelineDayProjection } from '../core/query/projections'
 import { localDateString } from '../lib/localDate'
@@ -64,6 +71,23 @@ const pendingAgentQuestions = new Map<string, (answer: string) => void>()
 const AGENT_QUESTION_TIMEOUT_MS = 5 * 60 * 1000
 
 export function registerAIHandlers(): void {
+  // DEV-181: fetch the recorded context packet behind an AI exchange, so the
+  // renderer can show exactly what the model was given for an answer.
+  ipcMain.handle(IPC.CONTEXT_PACKETS.GET, (_e, packetId: string) => {
+    return getContextPacketById(getDb(), packetId)
+  })
+
+  ipcMain.handle(IPC.CONTEXT_PACKETS.GET_FOR_MESSAGE, (_e, messageId: number) => {
+    return getContextPacketForMessage(getDb(), messageId)
+  })
+
+  ipcMain.handle(IPC.CONTEXT_PACKETS.LIST, (
+    _e,
+    payload: { limit?: number; exchangeKind?: ContextPacketExchangeKind; scopeKey?: string } = {},
+  ) => {
+    return listContextPackets(getDb(), payload)
+  })
+
   ipcMain.handle(IPC.AI.SEND_MESSAGE, async (event, payload: AIChatSendRequest) => {
     return sendMessage(payload, {
       onStreamEvent: (streamEvent) => {
@@ -113,7 +137,30 @@ export function registerAIHandlers(): void {
   // widget, so now run the real change through the manual-edit pipeline. The
   // proposal carries everything needed; nothing was written before this call.
   ipcMain.handle(IPC.AI.COMMIT_ACTION, (_e, action: AIActionWidget): AIActionCommitResult => {
-    return commitAction(getDb(), action)
+    const result = commitAction(getDb(), action)
+    // A confirmed chat delete of a supplied fact is a user-initiated
+    // destructive deletion — journal it so a backup restore replays it
+    // (DEV-220 semantics, DEV-185 supplied memory).
+    if (result.ok && action.kind === 'memory_write') {
+      for (const op of action.ops) {
+        if (op.op === 'delete' && op.targetId?.startsWith('smf_')) {
+          appendDeletionJournalEntry(app.getPath('userData'), {
+            kind: 'supplied-fact',
+            params: { factId: op.targetId },
+          })
+        }
+      }
+    }
+    return result
+  })
+
+  // The user cancelled a proposal card. For memory previews that is a
+  // decision, not silence: the proposed facts are recorded as rejections so
+  // the same fact is not proposed again without new evidence (DEV-185).
+  ipcMain.handle(IPC.AI.DISMISS_ACTION, (_e, action: AIActionWidget): void => {
+    if (action.kind === 'memory_write') {
+      recordMemoryProposalDismissal(getDb(), action)
+    }
   })
 
   ipcMain.handle(IPC.AI.UNDO_ACTION, (_e, undo: AIActionUndo): AIActionCommitResult => {

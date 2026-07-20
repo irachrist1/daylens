@@ -90,5 +90,18 @@ exports.default = async function afterPackNativeModules(context) {
 
     // keytar (secure credential storage)
     copyDependency(context.packager.info.projectDir, resourcesDir, 'keytar')
+
+    // sqlite-vec (DEV-180 semantic search): the JS shim plus whichever
+    // platform packages npm installed (sqlite-vec-<os>-<arch> holds the
+    // loadable vec0 extension SQLite dlopens from disk). Optional — a build
+    // without it ships with semantic search honestly absent.
+    const projectModules = path.join(context.packager.info.projectDir, 'node_modules')
+    if (fs.existsSync(path.join(projectModules, 'sqlite-vec'))) {
+      for (const entry of fs.readdirSync(projectModules)) {
+        if (entry === 'sqlite-vec' || entry.startsWith('sqlite-vec-')) {
+          copyDependency(context.packager.info.projectDir, resourcesDir, entry)
+        }
+      }
+    }
   }
 }

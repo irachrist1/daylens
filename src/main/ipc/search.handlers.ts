@@ -9,6 +9,7 @@ import {
 } from '../db/queries'
 import { searchNatural } from '../services/naturalSearch'
 import { searchExact } from '../services/exactSearch'
+import { getSemanticSearchStatus, searchByMeaning } from '../services/semanticIndex'
 import { ensureDayMemoryIndexed } from '../services/memoryIndex'
 import { localDateString } from '../lib/localDate'
 
@@ -19,6 +20,8 @@ const SEARCH_CHANNELS = {
   BROWSER: 'search:browser',
   ARTIFACTS: 'search:artifacts',
   NATURAL: 'search:natural',
+  SEMANTIC: 'search:semantic',
+  SEMANTIC_STATUS: 'search:semanticStatus',
 } as const
 
 function normalizePayload(payload: { query?: string; opts?: SearchOptions } | string): {
@@ -76,4 +79,15 @@ export function registerSearchHandlers(): void {
     const { query, opts } = normalizePayload(payload)
     return searchNatural(query, opts)
   })
+
+  // DEV-180: by-meaning retrieval — the query embeds locally and k-NNs over
+  // the embedded memory records. Purely additive next to the exact path: []
+  // whenever the local model, extension, or index is unavailable.
+  ipcMain.handle(SEARCH_CHANNELS.SEMANTIC, (_event, payload: { query?: string; opts?: SearchOptions } | string) => {
+    const { query, opts } = normalizePayload(payload)
+    return searchByMeaning(getDb(), query, opts)
+  })
+
+  // Settings: local model + index status ("what runs on this device").
+  ipcMain.handle(SEARCH_CHANNELS.SEMANTIC_STATUS, () => getSemanticSearchStatus(getDb()))
 }

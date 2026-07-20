@@ -20,6 +20,7 @@ import type { AIArtifactContent, AIArtifactKind, AIArtifactRecord, AIThreadSetti
 import { capture } from './analytics'
 import { ANALYTICS_EVENT, byteSizeBucket, type AnalyticsEventName } from '@shared/analytics'
 import { DEFAULT_THREAD_TITLE, normalizeThreadTitle } from '../lib/threadTitles'
+import { detachSuppliedFactsFromThread, purgeRejectionTextForThread } from './suppliedMemory'
 
 const INLINE_LIMIT_BYTES = 32 * 1024
 
@@ -380,6 +381,11 @@ export async function deleteThread(threadId: number): Promise<void> {
   // Also remove the ai_messages rows referencing this thread (no FK, do it explicitly).
   db.prepare(`DELETE FROM ai_messages WHERE thread_id = ?`).run(threadId)
   db.prepare(`DELETE FROM ai_threads WHERE id = ?`).run(threadId)
+  // Confirmed memory survives thread deletion — only the thread reference
+  // clears; declined-proposal text loses its supporting evidence with the
+  // thread, so it is purged (memory-and-entities.md §Conversational memory).
+  detachSuppliedFactsFromThread(db, threadId)
+  purgeRejectionTextForThread(db, threadId)
   emitThreadEvent(ANALYTICS_EVENT.AI_THREAD_DELETED, threadId)
 }
 

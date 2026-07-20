@@ -6,7 +6,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
 import { createProductionTestDatabase } from './support/testDatabase.ts'
-import { attachActionWidgets, buildMemoryProposal, commitAction, undoAction, looksLikeMergeBlocksInstruction } from '../src/main/ai/actions.ts'
+import { attachActionWidgets, buildMemoryProposal, commitAction, undoAction, looksLikeMergeBlocksInstruction, filterMemoryOpsForProposal, recordMemoryProposalDismissal } from '../src/main/ai/actions.ts'
 import { looksLikeRenameBlockInstruction } from '../src/main/ai/actions.ts'
 import { getWorkMemoryProfile } from '../src/main/services/workMemoryProfile.ts'
 import { looksLikeMemoryInstruction } from '../src/main/ai/memoryWrite.ts'
@@ -114,6 +114,49 @@ test('committing a memory proposal writes the fact and offers an undo that remov
     const undone = undoAction(db, result.undo)
     assert.equal(undone.ok, true)
     assert.equal(getWorkMemoryProfile(db).facts.length, 0)
+  } finally {
+    db.close()
+  }
+})
+
+// ── DEV-185: the confirmation gate on the widget path ────────────────────────
+
+test('a dismissed memory proposal does not reappear in the next similar conversation', () => {
+  const db = createProductionTestDatabase()
+  try {
+    // Conversation 1: the fact is extracted and passes the gate — the card shows.
+    const ops = [{ action: 'add' as const, text: 'Fridays are focus days.' }]
+    const firstPass = filterMemoryOpsForProposal(db, ops)
+    assert.equal(firstPass.length, 1)
+    const proposal = buildMemoryProposal(firstPass, [])
+    assert.ok(proposal)
+
+    // The user cancels the card — recorded as a rejection.
+    recordMemoryProposalDismissal(db, proposal)
+
+    // Conversation 2, similar wording: the extracted add is filtered out
+    // before any proposal is built — nothing resurfaces.
+    const secondPass = filterMemoryOpsForProposal(db, [
+      { action: 'add' as const, text: 'fridays are focus days' },
+    ])
+    assert.equal(secondPass.length, 0)
+    assert.equal(buildMemoryProposal(secondPass, []), null)
+  } finally {
+    db.close()
+  }
+})
+
+test('the widget gate never proposes sensitive facts and keeps deletes actionable', () => {
+  const db = createProductionTestDatabase()
+  try {
+    const filtered = filterMemoryOpsForProposal(db, [
+      { action: 'add', text: 'Your bank account number ends in 4411.' },
+      { action: 'update', targetId: 'x', text: 'Your GitHub password is hunter2.' },
+      { action: 'add', text: 'You lead the pricing project.' },
+      { action: 'delete', targetId: 'y' },
+    ])
+    assert.deepEqual(filtered.map((op) => op.action), ['add', 'delete'])
+    assert.equal(filtered[0].text, 'You lead the pricing project.')
   } finally {
     db.close()
   }

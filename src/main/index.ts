@@ -122,6 +122,7 @@ import { getBrowserStatus, startBrowserTracking, stopBrowserTracking } from './s
 import { prewarmBrowserRegistry } from './services/browserRegistry'
 import { startSync, stopSync, finalizePreviousDay, syncNowForQuit } from './services/syncUploader'
 import { startMemoryIndexBackfill, stopMemoryIndexBackfill } from './services/memoryIndex'
+import { startSemanticIndexBackfill, stopSemanticIndexBackfill } from './services/semanticIndex'
 import { backfillWindowsHistory } from './services/windowsHistory'
 import { createTray, destroyTray, getTrayDiagnostics, hasTray } from './tray'
 import { cancelPendingAutoInstall, getUpdaterState, initUpdater, isInstallingUpdate, registerUpdaterShutdown, getUpdateAvailable } from './services/updater'
@@ -604,6 +605,10 @@ function startBackgroundServices(): void {
       // days per tick, newest first, until every captured day is current.
       // Until a day is reached, its searches serve through the legacy path.
       setTimeout(() => startMemoryIndexBackfill(getDb), 15_000)
+
+      // DEV-180: embed memory records for by-meaning search in bounded
+      // background batches (local model; honest no-op when it is absent).
+      setTimeout(() => startSemanticIndexBackfill(getDb), 30_000)
     }
   }
 
@@ -812,6 +817,7 @@ async function shutdownApp(options?: { awaitFinalSync?: boolean; backupBeforeExi
   stopCaptureServices()
   stopSync()
   stopMemoryIndexBackfill()
+  stopSemanticIndexBackfill()
   stopAIUsageRetentionSchedule()
   unregisterCommandPaletteShortcut()
 

@@ -146,6 +146,15 @@ module.exports = {
       from: 'shared/app-normalization.v1.json',
       to: 'app-normalization.v1.json',
     },
+    // DEV-180: the pinned local embedding model for search-by-meaning
+    // (populated by `npm run models:semantic`; ~24 MB). Ships with the
+    // installer so first-run semantic search works offline, per
+    // docs/specs/memory-and-entities.md §Local semantic search. When the
+    // download step was skipped the directory only holds its README and
+    // semantic search is honestly absent at runtime.
+    ...(fs.existsSync('resources/models')
+      ? [{ from: 'resources/models', to: 'models' }]
+      : []),
   ],
   mac,
   afterPack: './scripts/afterPack-native-modules.js',
@@ -206,6 +215,10 @@ module.exports = {
     'node_modules/better-sqlite3/build/Release/*.node',
     'node_modules/@paymoapp/active-window/build/Release/*.node',
     'node_modules/keytar/build/Release/*.node',
+    // DEV-180: SQLite dlopens the sqlite-vec extension from a real file path,
+    // and onnxruntime-node loads its native binding the same way.
+    'node_modules/sqlite-vec-*/**',
+    'node_modules/onnxruntime-node/bin/**',
   ],
   publish: {
     provider: 'github',

@@ -1,0 +1,4 @@
+# Model artifacts are downloaded by `npm run models:semantic`, never committed.
+*
+!.gitignore
+!README.md

@@ -394,6 +394,12 @@ export interface SessionSearchResult {
   /** Memory type of the backing record (spec §Search interface: each result
    *  shows its source type). Legacy-path rows are direct capture: observed. */
   sourceType?: SearchSourceType
+  /** DEV-180: set when the hit came from local semantic search rather than an
+   *  exact word match. Surfaces label these "Similar meaning" and rank them
+   *  below exact matches for the same query. */
+  foundBy?: 'meaning'
+  /** Cosine similarity (0..1) for foundBy === 'meaning' hits. */
+  similarity?: number
 }
 
 export interface BlockSearchResult {
@@ -806,27 +812,31 @@ function memorySearchAvailable(db: Database.Database): boolean {
 // Belt-and-braces correction filters shared by the memory-record readers. The
 // index is built FROM corrected facts, so these normally match nothing — they
 // only matter when a correction landed through a path that did not refresh the
-// day yet (the fingerprint check catches it on the next search).
+// day yet (the fingerprint check catches it on the next search). Supplied
+// facts (DEV-185) are exempt: they are not evidence, so an ignored-block span
+// that happens to cover a fact's confirmation time must not hide it.
 const MEMORY_RECORD_CORRECTION_FILTERS = `
-      AND NOT EXISTS (
-        SELECT 1
-        FROM timeline_block_reviews review
-        WHERE review.review_state = 'ignored'
-          AND memory_records.start_ms >= json_extract(review.original_block_json, '$.startTime')
-          AND memory_records.start_ms < json_extract(review.original_block_json, '$.endTime')
-      )
-      AND NOT EXISTS (
-        SELECT 1
-        FROM evidence_exclusions exclusion
-        WHERE exclusion.kind = 'app'
-          AND (exclusion.bundle_id = memory_records.app_bundle_id OR exclusion.app_name = memory_records.app_name)
-          AND memory_records.start_ms >= exclusion.span_start_ms
-          AND memory_records.start_ms < exclusion.span_end_ms
-      )`
+      AND (memory_records.record_kind = 'supplied_fact' OR (
+        NOT EXISTS (
+          SELECT 1
+          FROM timeline_block_reviews review
+          WHERE review.review_state = 'ignored'
+            AND memory_records.start_ms >= json_extract(review.original_block_json, '$.startTime')
+            AND memory_records.start_ms < json_extract(review.original_block_json, '$.endTime')
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM evidence_exclusions exclusion
+          WHERE exclusion.kind = 'app'
+            AND (exclusion.bundle_id = memory_records.app_bundle_id OR exclusion.app_name = memory_records.app_name)
+            AND memory_records.start_ms >= exclusion.span_start_ms
+            AND memory_records.start_ms < exclusion.span_end_ms
+        )
+      ))`
 
 interface MemoryMomentRow {
   id: number
-  record_kind: 'session' | 'meeting' | 'artifact'
+  record_kind: 'session' | 'meeting' | 'artifact' | 'supplied_fact'
   memory_type: SearchSourceType
   app_bundle_id: string | null
   app_name: string | null
@@ -847,7 +857,8 @@ function mapMemoryMomentRow(row: MemoryMomentRow): SessionSearchResult {
     : (row.primary_name ?? row.title ?? row.statement)
   const appName = row.record_kind === 'session'
     ? resolveDisplayName(row.app_bundle_id ?? '', row.app_name ?? 'Unknown app')
-    : row.record_kind === 'meeting' ? 'Meeting' : 'File'
+    : row.record_kind === 'meeting' ? 'Meeting'
+      : row.record_kind === 'supplied_fact' ? 'You told Daylens' : 'File'
   return {
     type: 'session',
     id: row.id,
@@ -1014,6 +1025,92 @@ export function searchEntityMoments(
     LIMIT ?
   `).all(...entityIds, fromMs, toMs, limit) as MemoryMomentRow[]
   return rows.map(mapMemoryMomentRow)
+}
+
+/** Distance ceiling for by-meaning hits (cosine distance = 1 − similarity).
+ *  Beyond this the neighbour is noise, not a memory — better an honest empty
+ *  section than a confident irrelevant one. */
+export const SEMANTIC_MAX_DISTANCE = 0.75
+
+/**
+ * Semantic ("found by meaning") retrieval over embedded memory records
+ * (DEV-180). The caller embeds the query locally and hands over the vector;
+ * this runs a sqlite-vec k-NN over the vec0 index, then joins through the
+ * memory_record_vectors bookkeeping — a vec0 row whose bookkeeping row died
+ * with a day re-projection is invisible here, which is what makes deletion
+ * and correction propagation free. The same belt-and-braces correction
+ * filters as the exact readers apply on top, so a late-landing exclusion is
+ * honored at query time even before the day re-embeds.
+ *
+ * Requires the sqlite-vec extension to be loaded on this connection and the
+ * vec0 table to exist (semanticIndex owns both); returns [] otherwise.
+ */
+export function searchSemanticMoments(
+  db: Database.Database,
+  queryVector: Float32Array,
+  engine: { model: string; version: number },
+  opts: SearchOptions = {},
+): SessionSearchResult[] {
+  if (!memorySearchAvailable(db)) return []
+  const vecReady = db.prepare(
+    `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_semantic_vec'`,
+  ).get() != null
+  if (!vecReady) return []
+  const { fromMs, toMs, limit } = searchBounds(opts)
+  // Over-fetch neighbours: date bounds, correction filters, and the model
+  // check trim the candidate set after the k-NN.
+  const k = Math.min(Math.max(limit * 4, 16), 256)
+  const queryBlob = Buffer.from(queryVector.buffer, queryVector.byteOffset, queryVector.byteLength)
+  const rows = db.prepare(`
+    SELECT
+      memory_records.rowid AS id,
+      memory_records.record_kind,
+      memory_records.memory_type,
+      memory_records.app_bundle_id,
+      memory_records.app_name,
+      memory_records.title,
+      memory_records.statement,
+      entities.canonical_name AS primary_name,
+      memory_records.start_ms,
+      memory_records.end_ms,
+      memory_records.date,
+      NULL AS excerpt,
+      hits.distance AS distance
+    FROM (
+      SELECT rowid, distance FROM memory_semantic_vec
+      WHERE embedding MATCH ? AND k = ?
+    ) hits
+    JOIN memory_record_vectors vectors ON vectors.vec_rowid = hits.rowid
+    JOIN memory_records ON memory_records.id = vectors.record_id
+    LEFT JOIN entities ON entities.id = memory_records.primary_entity_id
+    WHERE vectors.model = ?
+      AND vectors.model_version = ?
+      AND hits.distance <= ?
+      AND memory_records.deleted_at IS NULL
+      -- High-sensitivity memory is excluded from semantic retrieval even if a
+      -- record was embedded before it was marked high; the indexer also never
+      -- embeds it in the first place.
+      AND memory_records.sensitivity != 'high'
+      AND memory_records.start_ms >= ?
+      AND memory_records.start_ms < ?
+      ${MEMORY_RECORD_CORRECTION_FILTERS}
+    ORDER BY hits.distance ASC
+    LIMIT ?
+  `).all(
+    queryBlob,
+    k,
+    engine.model,
+    engine.version,
+    SEMANTIC_MAX_DISTANCE,
+    fromMs,
+    toMs,
+    limit,
+  ) as Array<MemoryMomentRow & { distance: number }>
+  return rows.map((row) => ({
+    ...mapMemoryMomentRow(row),
+    foundBy: 'meaning' as const,
+    similarity: Math.max(0, Math.min(1, 1 - row.distance)),
+  }))
 }
 
 /** Most recent indexed moment for any of the entity ids — used to point an

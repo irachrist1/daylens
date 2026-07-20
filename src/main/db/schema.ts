@@ -951,7 +951,7 @@ CREATE INDEX IF NOT EXISTS idx_file_disclosures_thread ON file_disclosures (thre
 -- they can never serialize into a remote payload (tests/syncAllowlist.test.ts).
 CREATE TABLE IF NOT EXISTS memory_records (
   id                TEXT PRIMARY KEY,
-  record_kind       TEXT NOT NULL CHECK(record_kind IN ('session', 'meeting', 'artifact')),
+  record_kind       TEXT NOT NULL CHECK(record_kind IN ('session', 'meeting', 'artifact', 'supplied_fact')),
   memory_type       TEXT NOT NULL CHECK(memory_type IN ('observed', 'connected', 'supplied', 'inferred')),
   statement         TEXT NOT NULL,
   exact_text        TEXT NOT NULL DEFAULT '',
@@ -994,4 +994,100 @@ CREATE TABLE IF NOT EXISTS memory_index_days (
   indexed_at   INTEGER NOT NULL,
   record_count INTEGER NOT NULL DEFAULT 0
 );
+
+-- ─── Semantic-search vector bookkeeping (memory-and-entities.md §Local
+-- semantic search, DEV-180) ──────────────────────────────────────────────────
+-- One row per embedded memory record. The float vectors themselves live in the
+-- sqlite-vec vec0 virtual table (memory_semantic_vec, created at runtime by the
+-- semantic index when the extension loads — virtual tables cannot be created
+-- here because the extension may be absent). This table is the authority on
+-- which embeddings are valid: vec_rowid is AUTOINCREMENT so a vec0 rowid is
+-- never reused, and record_id cascades with memory_records — when a day
+-- re-projects (correction, deletion, MEMORY_INDEX_VERSION bump) the records
+-- are deleted and their embeddings die with them in the same transaction.
+-- vec0 rows whose bookkeeping row is gone are invisible to every query (the
+-- join is the filter) and are garbage-collected by the background indexer.
+-- LOCAL-ONLY: no sync-allowlist keys; embeddings never leave the device
+-- (tests/syncAllowlist.test.ts).
+CREATE TABLE IF NOT EXISTS memory_record_vectors (
+  vec_rowid     INTEGER PRIMARY KEY AUTOINCREMENT,
+  record_id     TEXT NOT NULL UNIQUE REFERENCES memory_records(id) ON DELETE CASCADE,
+  date          TEXT NOT NULL,
+  model         TEXT NOT NULL,
+  model_version INTEGER NOT NULL,
+  dims          INTEGER NOT NULL,
+  created_at    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_memory_record_vectors_date ON memory_record_vectors (date);
+
+-- ─── Supplied memory (memory-and-entities.md §Conversational memory, DEV-185) ─
+-- Facts the person explicitly confirmed or entered by hand — the only memory
+-- that exists WITHOUT evidence (spec §Memory record). Each active fact mirrors
+-- into memory_records under its own id (record_kind='supplied_fact',
+-- memory_type='supplied') so exact search, semantic search, and context
+-- packets retrieve it through the shared query boundary; the mirror row dies
+-- in the same transaction as the fact, so a deleted fact leaves retrieval
+-- immediately and a day re-projection never resurrects it (the day rebuild
+-- skips supplied rows). thread_id records which chat confirmed the fact;
+-- deleting that thread clears the reference but keeps the fact — the
+-- confirmation (source + confirmed_at + context) explains why it remains.
+-- LOCAL-ONLY: no sync-allowlist keys; supplied memory never serializes into a
+-- remote payload (tests/syncAllowlist.test.ts).
+CREATE TABLE IF NOT EXISTS supplied_memory_facts (
+  id           TEXT PRIMARY KEY,
+  statement    TEXT NOT NULL,
+  scope        TEXT NOT NULL DEFAULT 'general',
+  source       TEXT NOT NULL DEFAULT 'chat' CHECK(source IN ('chat', 'hand', 'migrated')),
+  context      TEXT,
+  thread_id    INTEGER,
+  sensitivity  TEXT NOT NULL DEFAULT 'standard' CHECK(sensitivity IN ('standard', 'personal', 'high')),
+  confirmed_at INTEGER NOT NULL,
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_supplied_memory_facts_scope ON supplied_memory_facts (scope, confirmed_at DESC);
+
+-- Declined memory proposals (spec §Conversational memory): a rejected proposal
+-- is stored so it is not re-proposed without new evidence. The row carries the
+-- proposed fact's sensitivity, can be deleted like any memory, and its text is
+-- purged (statement and match key blanked) when the supporting chat thread is
+-- deleted. LOCAL-ONLY: no sync-allowlist keys (tests/syncAllowlist.test.ts).
+CREATE TABLE IF NOT EXISTS memory_proposal_rejections (
+  id            TEXT PRIMARY KEY,
+  statement     TEXT NOT NULL,
+  statement_key TEXT NOT NULL,
+  sensitivity   TEXT NOT NULL DEFAULT 'standard' CHECK(sensitivity IN ('standard', 'personal', 'high')),
+  thread_id     INTEGER,
+  rejected_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_memory_proposal_rejections_key ON memory_proposal_rejections (statement_key);
+
+-- ─── Context packets (agent-runtime-and-context.md §Context packet, DEV-181) ─
+-- One recorded, deterministic disclosure bundle per AI exchange — the
+-- generalization of the file_disclosures ledger to every content kind. The
+-- full packet (items with identity/version/source-type/reason, disclosure
+-- record, content fingerprint) is stored as JSON BEFORE the request leaves the
+-- local boundary; message_id binds it to the persisted assistant message
+-- afterwards, so "what did the model see for this answer" is one lookup.
+-- LOCAL-ONLY: no sync-allowlist keys; packets never leave the device
+-- (tests/syncAllowlist.test.ts).
+CREATE TABLE IF NOT EXISTS context_packets (
+  id                  TEXT PRIMARY KEY,
+  purpose             TEXT NOT NULL CHECK(purpose IN ('answer', 'interpret')),
+  exchange_kind       TEXT NOT NULL CHECK(exchange_kind IN ('chat', 'day_analysis')),
+  thread_id           INTEGER,
+  message_id          INTEGER,
+  scope_key           TEXT,
+  question            TEXT NOT NULL,
+  destination         TEXT NOT NULL,
+  left_device         INTEGER NOT NULL DEFAULT 1,
+  policy_version      INTEGER NOT NULL,
+  item_count          INTEGER NOT NULL,
+  content_fingerprint TEXT NOT NULL,
+  packet_json         TEXT NOT NULL,
+  created_at          INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_context_packets_message ON context_packets (message_id);
+CREATE INDEX IF NOT EXISTS idx_context_packets_thread ON context_packets (thread_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_context_packets_scope ON context_packets (exchange_kind, scope_key, created_at DESC);
 `

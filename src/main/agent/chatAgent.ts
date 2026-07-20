@@ -25,6 +25,7 @@ import { buildDaylensTools } from './daylensTools'
 import { buildSystemTools, type FileAccessAnswer } from './systemTools'
 import type { FileDisclosureRow } from '../services/fileAccess'
 import { buildInteractionTools, createArtifact, type AgentQuestion, type InteractionDeps } from './interactionTools'
+import { buildMemoryTools } from './memoryTools'
 import { connectMcpTools, type McpServerConfig } from './mcpTools'
 import { buildAgentSystemPrompt } from './systemPrompt'
 import { renderTimeChunkAnswer, type TimeChunkResult } from './timeChunkAnswer'
@@ -98,6 +99,7 @@ function statusForTool(tool: string, input: unknown): string {
     case 'list_dir': return 'Listing a folder'
     case 'create_artifact': return 'Building your file'
     case 'ask_user': return 'Asking you'
+    case 'propose_memory': return 'Asking to remember'
     default: return tool.startsWith('mcp_') ? 'Checking a connected source' : 'Working'
   }
 }
@@ -180,6 +182,15 @@ export async function runChatAgentTurn(
         },
       }),
       ...buildInteractionTools(interactionDeps),
+      // The confirmed-memory proposal card (DEV-185): a durable personal fact
+      // pauses the turn through the same askUser machinery as file access;
+      // only an explicit confirmation (or a typed correction) persists.
+      ...buildMemoryTools({
+        db: deps.db,
+        askUser: deps.askUser,
+        threadId: deps.threadId ?? null,
+        signal: deps.signal,
+      }),
       ...mcp.tools,
     }
 
