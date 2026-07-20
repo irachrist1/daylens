@@ -13,6 +13,7 @@ import {
   getDistractionByHour,
   getDistractionByDomain,
   getDaysTracked,
+  deleteDaySnapshotRow,
   type WebsiteVisitRecord,
 } from '../db/queries'
 import { isWorkIntentRole } from '@shared/types'
@@ -1775,6 +1776,9 @@ export function writeIgnoredBlockReviewBackstop(
 ): void {
   const { date, blockId, evidenceKey, originalBlockJson } = input
   const now = Date.now()
+  // A deletion the Timeline honors must reach the period wraps too — drop the
+  // day's frozen snapshot so week/month/year facts rebuild from what remains.
+  deleteDaySnapshotRow(db, date)
   const rows = db.prepare(`
     SELECT
       id,
@@ -1848,6 +1852,10 @@ export function writeTimelineBlockReview(
   const evidenceKey = reviewEvidenceKeyForBlock(block)
   const existing = findReviewRowForBlock(db, dateStr, block).row
   const now = Date.now()
+  // Corrections change every totalling surface, period wraps included: the
+  // day's frozen snapshot is a cache of the pre-correction facts, so drop it
+  // and let the next wrap read refreeze from the corrected timeline.
+  deleteDaySnapshotRow(db, dateStr)
   const existingCorrection = existing ? parseReviewJson(existing.correction_json) : {}
   const nextCorrection: Record<string, unknown> = { ...existingCorrection }
 
@@ -4474,6 +4482,9 @@ function invalidateTimelineDay(db: Database.Database, dateStr: string): void {
 // what remains on the next read.
 export function invalidateTimelineDayBlocks(db: Database.Database, dateStr: string): void {
   invalidateTimelineDay(db, dateStr)
+  // The day's underlying evidence changed (purge, split, exclusion, journal
+  // replay) — the frozen snapshot that feeds period wraps is stale with it.
+  deleteDaySnapshotRow(db, dateStr)
 }
 
 type CarriedAiLabel = { label: string; narrative: string | null; confidence: number }
