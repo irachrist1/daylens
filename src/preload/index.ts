@@ -143,6 +143,20 @@ export type DaylensSearchResult =
       date: string
       excerpt: string
     }
+  // DEV-178: a durable entity matched by canonical name or alias — projects,
+  // clients, people, meetings, apps, files. `date` is the day the entity was
+  // last part of (where a click lands); empty when never observed.
+  | {
+      type: 'entity'
+      id: string
+      name: string
+      entityType: string
+      matchedAlias: string | null
+      startTime: number
+      endTime: number
+      date: string
+      excerpt: string
+    }
 
 // S1: natural-language search response — ranked results plus the interpreted
 // intent + the terms that produced them (the "why it matched" signal).

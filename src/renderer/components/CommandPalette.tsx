@@ -12,6 +12,7 @@ import {
   Search,
   Settings as SettingsIcon,
   Sparkles,
+  Tag,
   Timer,
 } from 'lucide-react'
 import { ipc } from '../lib/ipc'
@@ -82,6 +83,7 @@ function sourceIcon(kind: SearchSourceKind): ReactNode {
     case 'app': return <AppWindow size={15} strokeWidth={1.8} aria-hidden="true" />
     case 'block': return <Box size={15} strokeWidth={1.8} aria-hidden="true" />
     case 'file': return <FileText size={15} strokeWidth={1.8} aria-hidden="true" />
+    case 'entity': return <Tag size={15} strokeWidth={1.8} aria-hidden="true" />
   }
 }
 
@@ -205,6 +207,9 @@ export default function CommandPalette({ isOpen, platform, onClose, onOpenWrappe
   const handleResultClick = useCallback((result: DaylensSearchResult) => {
     if (result.type === 'artifact') { void ipc.ai.openArtifact(result.id); return }
     if (result.type === 'browser' && result.url) { ipc.shell.openExternal(result.url); return }
+    // An entity opens the day it was last part of; a never-observed entity
+    // opens Settings, where the entity memory lives.
+    if (result.type === 'entity' && !result.date) { navigate('/settings'); return }
     navigate(`/timeline?date=${encodeURIComponent(result.date)}`)
   }, [navigate])
 
@@ -372,7 +377,7 @@ export default function CommandPalette({ isOpen, platform, onClose, onOpenWrappe
         <div ref={listRef} style={{ overflowY: 'auto', padding: '6px 8px 8px' }}>
           {items.length === 0 ? (
             <div style={{ padding: '22px 12px', fontSize: 13, color: 'var(--color-text-tertiary)', lineHeight: 1.5 }}>
-              {searchError ? `Search failed: ${searchError}` : query.trim() ? 'No matches. Try a window title, a domain, or a view name.' : 'Type to search your history or run a command.'}
+              {searchError ? `Search failed: ${searchError}` : query.trim() ? 'No matches. Try a window title, a domain, a project, client, or meeting name — or a view name.' : 'Type to search your history or run a command.'}
             </div>
           ) : (
             items.map((item, idx) => {
@@ -409,9 +414,11 @@ export default function CommandPalette({ isOpen, platform, onClose, onOpenWrappe
                             <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                               {searchResultTitle(item.result)}
                             </span>
-                            <span style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap', flexShrink: 0 }}>
-                              {formatSearchTimestamp(item.result.startTime)}
-                            </span>
+                            {item.result.startTime > 0 && (
+                              <span style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                                {formatSearchTimestamp(item.result.startTime)}
+                              </span>
+                            )}
                           </span>
                           <span style={{ display: 'block', fontSize: 12, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
                             {searchResultSubtitle(item.result)}

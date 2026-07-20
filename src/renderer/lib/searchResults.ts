@@ -4,7 +4,7 @@ import type { DaylensSearchResult } from '../../preload/index'
 // (literal FTS vs natural-language), row metadata, and de-dup/rank — kept out of
 // the component so they can be unit-tested and reused.
 
-export type SearchSourceKind = 'web' | 'app' | 'block' | 'file'
+export type SearchSourceKind = 'web' | 'app' | 'block' | 'file' | 'entity'
 
 /**
  * Short / literal queries (1–3 words, no question mark) run instant local FTS.
@@ -18,12 +18,26 @@ export function isNaturalQuery(query: string): boolean {
   return trimmed.split(/\s+/).filter(Boolean).length >= 4
 }
 
+const ENTITY_TYPE_LABELS: Record<string, string> = {
+  application: 'Application',
+  page: 'Page',
+  file: 'File',
+  person: 'Person',
+  meeting: 'Meeting',
+  repository: 'Repository',
+  project: 'Project',
+  client: 'Client',
+  timeline_block: 'Timeline block',
+  ai_thread: 'AI thread',
+}
+
 export function searchResultSourceKind(result: DaylensSearchResult): SearchSourceKind {
   switch (result.type) {
     case 'session': return 'app'
     case 'block': return 'block'
     case 'browser': return 'web'
     case 'artifact': return 'file'
+    case 'entity': return 'entity'
   }
 }
 
@@ -33,6 +47,7 @@ export function searchResultTitle(result: DaylensSearchResult): string {
     case 'block': return result.label
     case 'browser': return result.pageTitle || result.url || result.domain
     case 'artifact': return result.title
+    case 'entity': return result.name
   }
 }
 
@@ -42,6 +57,10 @@ export function searchResultSubtitle(result: DaylensSearchResult): string {
     case 'block': return 'Timeline block'
     case 'browser': return result.domain
     case 'artifact': return result.filePath ? 'Generated file' : 'AI artifact'
+    case 'entity': {
+      const label = ENTITY_TYPE_LABELS[result.entityType] ?? result.entityType
+      return result.matchedAlias ? `${label} · also known as “${result.matchedAlias}”` : label
+    }
   }
 }
 
