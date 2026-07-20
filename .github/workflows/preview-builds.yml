@@ -11,11 +11,13 @@ on:
 permissions:
   contents: read
 
-# Cancel superseded runs for the same ref (e.g. repeated dispatches on a
-# branch); never cancel main pushes.
+# Queue-latest per ref: cancel superseded runs everywhere, including main.
+# A superseded main build is safe to cancel — the newest commit's run covers
+# it — and without this, batch-merging several PRs fires one full build per
+# merge commit simultaneously.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  cancel-in-progress: true
 
 jobs:
   build-preview:

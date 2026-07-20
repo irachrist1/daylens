@@ -1,30 +1,26 @@
 name: Verify Windows Runtime
 
+# Windows minutes bill at 2x, so this full packaging + smoke run stays off
+# PRs entirely. The Linux verify (1x billing) still runs on PRs and catches
+# most packaging breakage; Windows coverage comes from merges to main, the
+# nightly schedule below, and manual dispatch.
 on:
   push:
     branches:
       - main
-  pull_request:
-    # Full packaging + smoke is expensive; on PRs only run when
-    # packaging-relevant inputs change. Pushes to main and manual
-    # dispatches always run unconditionally.
-    paths:
-      - "electron-builder.config.js"
-      - "forge.config.ts"
-      - "build/**"
-      - "scripts/**"
-      - "src/main/**"
-      - "src/native/**"
-      - "vite.*.config.ts"
-      - "package.json"
-      - "package-lock.json"
-      - ".github/workflows/verify-windows-runtime.yml"
+  schedule:
+    # Nightly safety net at a quiet hour (03:47 UTC), staggered 30 min
+    # apart from the macOS verify to avoid a self-inflicted burst.
+    - cron: '47 3 * * *'
   workflow_dispatch:
 
-# Cancel superseded runs on PRs and feature branches; never cancel main pushes.
+# Queue-latest per ref: cancel superseded runs everywhere, including main.
+# A superseded main build is safe to cancel — the newest commit's run covers
+# it — and without this, batch-merging several PRs fires one expensive build
+# per merge commit simultaneously.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  cancel-in-progress: true
 
 jobs:
   verify-windows-runtime:

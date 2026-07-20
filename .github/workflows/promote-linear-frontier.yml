@@ -2,7 +2,9 @@ name: Promote Linear Frontier
 
 on:
   schedule:
-    - cron: '*/10 * * * *'
+    # Daily at a quiet hour. This ran every 10 minutes and failed every run
+    # (missing LINEAR_API_KEY), burning ~144 billed runs a day for nothing.
+    - cron: '23 5 * * *'
   workflow_dispatch:
     inputs:
       issue:
@@ -38,7 +40,7 @@ jobs:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |
           if [ -z "$LINEAR_API_KEY" ]; then
-            echo "::error::Missing repository secret LINEAR_API_KEY"
+            echo "::error::Repository secret LINEAR_API_KEY is not set. Add it under Settings > Secrets and variables > Actions, or disable this workflow. Every step below requires it."
             exit 1
           fi
       - name: Promote newly unblocked issues

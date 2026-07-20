@@ -21,10 +21,14 @@ on:
       - ".github/workflows/verify-linux-runtime.yml"
   workflow_dispatch:
 
-# Cancel superseded runs on PRs and feature branches; never cancel main pushes.
+# Queue-latest per ref: cancel superseded runs everywhere, including main.
+# A superseded main build is safe to cancel — the newest commit's run covers
+# it — and without this, batch-merging several PRs fires one full build per
+# merge commit simultaneously. PR runs use refs/pull/N/merge, so they never
+# share a group with main.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  cancel-in-progress: true
 
 jobs:
   verify-linux-runtime:
