@@ -27,7 +27,9 @@ import {
   getCorrectedSessionsForRange as getSessionsForRange,
   getIgnoredBlockSpansForRange,
   getCorrectedDomainIntervals,
+  getCorrectedPageFactsForRange,
   getCorrectedWebsiteSummariesForRange,
+  browserPageCoverageNotes,
 } from './activityFacts'
 import { localDateString } from '../lib/localDate'
 import { computeFocusScoreV2 } from '../lib/focusScore'
@@ -231,6 +233,10 @@ export interface GetAppUsageResult {
    *  left open/playing in the background while other work was in the foreground —
    *  so the phrase step discloses that rather than implying pure active watching. */
   fromWebsiteVisits?: boolean
+  /** Present when the matched app is a browser whose page-level detail covers
+   *  materially less time than the app itself — the answer must quote it
+   *  instead of treating the thin page list as the day. */
+  coverageNotes?: string[]
 }
 
 interface ArtifactHit {
@@ -993,6 +999,19 @@ export function execGetAppUsage(params: GetAppUsageParams, db: Database.Database
     ? []
     : listRecentSessionWindowTitles(db, fromMs, toMs, identitySelector)
 
+  // For browsers, say plainly when page-level detail explains materially less
+  // time than the app total — the same note list_page_visits carries — so the
+  // two tools tell one story instead of trading contradictory figures.
+  let coverageNotes: string[] | undefined
+  if (matched.some((app) => app.category === 'browsing')) {
+    const matchedIds = new Set([...matchedCanonicalIds, ...matchedBundleIds])
+    const notes = browserPageCoverageNotes(
+      getCorrectedPageFactsForRange(db, fromMs, toMs).coverage
+        .filter((entry) => matchedIds.has(entry.canonicalBrowserId)),
+    )
+    if (notes.length > 0) coverageNotes = notes
+  }
+
   return {
     appName: matched[0]?.appName ?? params.appName,
     bundleId,
@@ -1002,6 +1021,7 @@ export function execGetAppUsage(params: GetAppUsageParams, db: Database.Database
     endDate: params.endDate ?? toDateStr(toMs),
     dailyBreakdown,
     recentWindowTitles: recentTitles,
+    ...(coverageNotes ? { coverageNotes } : {}),
   }
 }
 

@@ -9,7 +9,13 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import ExcelJS from 'exceljs'
+import type Database from 'better-sqlite3'
 import type { AIMessageArtifact } from '@shared/types'
+import {
+  collectWeeklyExportData,
+  weeklyExportFilename,
+  writeWeeklyWorkbook,
+} from '../services/weeklyExport'
 
 export interface AgentQuestion {
   question: string
@@ -105,7 +111,7 @@ export function buildInteractionTools(deps: InteractionDeps) {
     }),
 
     create_artifact: tool({
-      description: 'Create a real downloadable file for the user. Use "xlsx" when they say Excel, "csv" for CSV, "markdown" for a document/report. For xlsx/csv pass columns + rows (every claim in them must come from tool results this conversation). For markdown pass content. Returns the saved file; mention it naturally in your answer — the UI renders the download.',
+      description: 'Create a real downloadable file for the user. Use "xlsx" when they say Excel, "csv" for CSV, "markdown" for a document/report. For xlsx/csv pass columns + rows (every claim in them must come from tool results this conversation). For markdown pass content. Returns the saved file; mention it naturally in your answer — the UI renders the download. For a WEEKLY export/timesheet workbook, do NOT compose rows here — call export_week_excel, which computes the numbers itself from the same facts as the Timeline.',
       inputSchema: z.object({
         title: z.string().min(1).max(80).describe('Human title, e.g. "YouTube July 2026"'),
         format: z.enum(['xlsx', 'csv', 'markdown']),
@@ -114,6 +120,56 @@ export function buildInteractionTools(deps: InteractionDeps) {
         content: z.string().max(200_000).optional().describe('Markdown body (markdown format only)'),
       }),
       execute: async (input) => createArtifact(deps, input),
+    }),
+  }
+}
+
+/** The deterministic week-export tool. Unlike create_artifact, the model never
+ *  supplies numbers: the workbook is computed from the same corrected day
+ *  payloads the Timeline renders, so the file, the chat answer, and the
+ *  Timeline can only agree. */
+export function buildExportTools(db: Database.Database, deps: InteractionDeps) {
+  return {
+    export_week_excel: tool({
+      description: 'Build the real weekly Excel export: a styled workbook with a per-day week summary (active time, top apps, top sites, honest gaps), a totals row, and a by-app sheet whose numbers are computed from the same corrected facts as the Timeline — never from values you type. Use this for every "export my week / timesheet Excel" request. Returns the saved file plus the computed totals so your answer can quote the same numbers.',
+      inputSchema: z.object({
+        weekStartDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD')
+          .describe('Any date inside the target week (local, YYYY-MM-DD); it is snapped to that week\'s Monday'),
+      }),
+      execute: async ({ weekStartDate }) => {
+        if (deps.signal?.aborted) throw new Error('aborted')
+        const data = collectWeeklyExportData(db, weekStartDate)
+        await fs.mkdir(deps.artifactDir, { recursive: true })
+        const filename = weeklyExportFilename(data.weekStart)
+        const filePath = path.join(deps.artifactDir, filename)
+        await writeWeeklyWorkbook(data, filePath)
+        const artifact: AIMessageArtifact = {
+          id: randomUUID(),
+          kind: 'export',
+          format: 'xlsx',
+          title: `Daylens week ${data.weekStart} to ${data.weekEnd}`,
+          path: filePath,
+          openTarget: { kind: 'local_path', value: filePath },
+          createdAt: Date.now(),
+        }
+        deps.onArtifact(artifact)
+        return {
+          found: true,
+          savedTo: filePath,
+          filename,
+          weekStart: data.weekStart,
+          weekEnd: data.weekEnd,
+          totalSeconds: data.totalSeconds,
+          days: data.days.map((day) => ({
+            date: day.date,
+            weekday: day.weekday,
+            activeSeconds: day.activeSeconds,
+            topApps: day.topApps.map((app) => app.appName),
+          })),
+          topApps: data.apps.slice(0, 8),
+          note: 'Workbook computed from the same corrected facts as Timeline/Apps — quote these totals verbatim.',
+        }
+      },
     }),
   }
 }

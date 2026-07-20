@@ -17,7 +17,7 @@ import { buildDaylensTools } from '../src/main/agent/daylensTools.ts'
 import { buildSystemTools } from '../src/main/agent/systemTools.ts'
 import { addFileAccessGrant } from '../src/main/services/fileAccess.ts'
 import { mcpChildEnv } from '../src/main/agent/mcpTools.ts'
-import { buildInteractionTools } from '../src/main/agent/interactionTools.ts'
+import { buildExportTools, buildInteractionTools } from '../src/main/agent/interactionTools.ts'
 import type { AIMessageArtifact } from '../src/shared/types.ts'
 
 function setupDb(): Database.Database {
@@ -32,11 +32,22 @@ function localMs(year: number, month: number, day: number, hour: number, minute 
 
 test('list_page_visits aggregates repeat visits to the same page and matches domainContains', async () => {
   const db = setupDb()
+  // Page time is a breakdown of the browser's own foreground time — visits
+  // without an owning foreground browser session contribute no active time,
+  // so the fixture needs Chrome frontmost while the visits ran.
+  const insertSession = db.prepare(`
+    INSERT INTO app_sessions (bundle_id, app_name, start_time, end_time, duration_sec,
+      category, is_focused, window_title, raw_app_name, canonical_app_id, app_instance_id,
+      capture_source, capture_version)
+    VALUES ('com.google.Chrome', 'Google Chrome', ?, ?, ?, 'browsing', 0, NULL, 'Google Chrome', 'chrome', 'com.google.Chrome', 'test', 1)
+  `)
+  insertSession.run(localMs(2026, 6, 10, 9, 0), localMs(2026, 6, 10, 9, 5), 300)
+  insertSession.run(localMs(2026, 6, 10, 9, 30), localMs(2026, 6, 10, 9, 33), 180)
   const insertVisit = db.prepare(`
     INSERT INTO website_visits (
       domain, page_title, url, visit_time, visit_time_us, duration_sec,
-      browser_bundle_id, source
-    ) VALUES (?, ?, ?, ?, ?, ?, 'com.google.Chrome', 'history')
+      browser_bundle_id, canonical_browser_id, source
+    ) VALUES (?, ?, ?, ?, ?, ?, 'com.google.Chrome', 'chrome', 'history')
   `)
   const visitTimeA = localMs(2026, 6, 10, 9, 0)
   const visitTimeB = localMs(2026, 6, 10, 9, 30)
@@ -477,6 +488,36 @@ test('create_artifact writes a real non-empty xlsx file', async () => {
   assert.equal(sheet!.getRow(1).getCell(1).value, 'Title')
   assert.equal(artifacts.length, 1)
   assert.equal(artifacts[0].format, 'xlsx')
+})
+
+test('export_week_excel computes the workbook itself and registers the artifact', async () => {
+  const db = setupDb()
+  db.prepare(`
+    INSERT INTO app_sessions (bundle_id, app_name, start_time, end_time, duration_sec,
+      category, is_focused, window_title, raw_app_name, canonical_app_id, app_instance_id,
+      capture_source, capture_version)
+    VALUES ('com.todesktop.230313mzl4w4u92', 'Cursor', ?, ?, ?, 'development', 1, NULL, 'Cursor', 'cursor', 'com.todesktop.230313mzl4w4u92', 'test', 1)
+  `).run(localMs(2026, 6, 8, 9), localMs(2026, 6, 8, 13), 4 * 3600)
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'daylens-agent-tools-'))
+  const { deps, artifacts } = makeInteractionDeps(tmpDir)
+  const tools = buildExportTools(db, deps)
+
+  // Any date inside the week works — it snaps to the Monday.
+  const result = await (tools.export_week_excel as any).execute({ weekStartDate: '2026-06-10' }, {} as any)
+
+  assert.equal(result.found, true)
+  assert.equal(result.weekStart, '2026-06-08')
+  assert.equal(result.filename, 'daylens-week-2026-06-08.xlsx')
+  assert.ok(result.totalSeconds > 0, 'the tool must return computed totals, not blanks')
+  assert.ok(fs.existsSync(result.savedTo))
+  const workbook = new ExcelJS.Workbook()
+  await workbook.xlsx.readFile(result.savedTo)
+  assert.ok(workbook.getWorksheet('Week summary'))
+  assert.ok(workbook.getWorksheet('By app'))
+  assert.equal(artifacts.length, 1)
+  assert.equal(artifacts[0].format, 'xlsx')
+  db.close()
 })
 
 test('create_artifact rejects a markdown request with no content', async () => {

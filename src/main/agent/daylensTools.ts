@@ -11,6 +11,8 @@ import { executeTool, execSearchSessionsWithMeaning } from '../services/aiTools'
 import { getMomentEvidence } from '../lib/momentEvidence'
 import { getWebsiteVisitsForRange } from '../db/queries'
 import {
+  browserPageCoverageNotes,
+  getCorrectedPageFactsForRange,
   getCorrectedSessionsForRange,
   getIgnoredBlockSpansForRange,
 } from '../services/activityFacts'
@@ -279,7 +281,7 @@ export function buildDaylensTools(db: Database.Database) {
     }),
 
     list_page_visits: tool({
-      description: 'Website visits over a date range, aggregated per page: title, URL, domain, total time, visit count, first/last seen. Filter by domain (e.g. "youtube.com") or title words. Use for "all YouTube videos this month", podcasts, and export data. Time is observed foreground seconds, NOT the media\'s own length — Daylens does not capture video durations or playback state.',
+      description: 'Website visits over a date range, aggregated per page: title, URL, domain, total time, visit count, first/last seen. Filter by domain (e.g. "youtube.com") or title words. Use for "all YouTube videos this month", podcasts, and export data. Time is reconciled foreground seconds — the same ledger the Apps screen totals — NOT the media\'s own length. When coverageNotes is present, page detail explains less time than the browser verifiably had; quote the note instead of presenting the page list as complete.',
       inputSchema: z.object({
         startDate: DATE,
         endDate: DATE,
@@ -296,43 +298,41 @@ export function buildDaylensTools(db: Database.Database) {
         if ((toMs - fromMs) / DAY_MS > MAX_VISIT_RANGE_DAYS) {
           return { found: false, reason: `Range too wide — ask for at most ${MAX_VISIT_RANGE_DAYS} days at a time.` }
         }
-        const rows = getWebsiteVisitsForRange(db, fromMs, toMs)
+        // One source of truth: the same reconciled + corrected page ledger the
+        // Apps view and domain totals read, never raw duration_sec sums.
+        const facts = getCorrectedPageFactsForRange(db, fromMs, toMs)
+        const coverageNotes = browserPageCoverageNotes(facts.coverage)
         const domainNeedle = domainContains?.toLowerCase() ?? null
         const titleNeedle = titleContains?.toLowerCase() ?? null
-        const byPage = new Map<string, AggregatedPage>()
-        for (const row of rows) {
-          if (domainNeedle && !row.domain.toLowerCase().includes(domainNeedle)) continue
-          if (titleNeedle && !(row.pageTitle ?? '').toLowerCase().includes(titleNeedle)) continue
-          const key = `${row.domain} ${row.pageTitle ?? row.url ?? ''}`
-          const existing = byPage.get(key)
-          if (existing) {
-            existing.totalSeconds += row.durationSec
-            existing.visitCount += 1
-            existing.firstSeen = Math.min(existing.firstSeen, row.visitTime)
-            existing.lastSeen = Math.max(existing.lastSeen, row.visitTime)
-            if (!existing.url && row.url) existing.url = row.url
-          } else {
-            byPage.set(key, {
-              pageTitle: row.pageTitle ?? null,
-              domain: row.domain,
-              url: row.url ?? null,
-              totalSeconds: row.durationSec,
-              visitCount: 1,
-              firstSeen: row.visitTime,
-              lastSeen: row.visitTime,
-            })
-          }
+        const matching: AggregatedPage[] = []
+        for (const page of facts.pages) {
+          if (domainNeedle && !page.domain.toLowerCase().includes(domainNeedle)) continue
+          if (titleNeedle && !(page.pageTitle ?? '').toLowerCase().includes(titleNeedle)) continue
+          matching.push({
+            pageTitle: page.pageTitle,
+            domain: page.domain,
+            url: page.url,
+            totalSeconds: page.totalSeconds,
+            visitCount: page.visitCount,
+            firstSeen: page.firstSeen,
+            lastSeen: page.lastSeen,
+          })
         }
-        const pages = [...byPage.values()]
-          .sort((left, right) => right.totalSeconds - left.totalSeconds)
-          .slice(0, limit ?? 500)
+        const pages = matching.slice(0, limit ?? 500)
         if (pages.length === 0) {
           return {
             found: false,
             reason: `No captured visits match${domainNeedle ? ` domain~"${domainContains}"` : ''}${titleNeedle ? ` title~"${titleContains}"` : ''} between ${startDate} and ${endDate}.`,
+            ...(coverageNotes.length > 0 ? { coverageNotes } : {}),
           }
         }
-        return guarded({ found: true, pageCount: byPage.size, truncatedTo: pages.length, pages })
+        return guarded({
+          found: true,
+          pageCount: matching.length,
+          truncatedTo: pages.length,
+          pages,
+          ...(coverageNotes.length > 0 ? { coverageNotes } : {}),
+        })
       },
     }),
 

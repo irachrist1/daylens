@@ -99,7 +99,55 @@ const HOST_CATEGORIES: ReadonlyArray<[string, AppCategory]> = [
   ['scholar.google.com', 'research'],
   ['arxiv.org', 'research'],
   ['jstor.org', 'research'],
+
+  // Education / courses — studying reads as research, not plain browsing.
+  ['coursera.org', 'research'],
+  ['udemy.com', 'research'],
+  ['edx.org', 'research'],
+  ['khanacademy.org', 'research'],
+  ['datacamp.com', 'research'],
+  ['pluralsight.com', 'research'],
+  ['codecademy.com', 'research'],
+  ['freecodecamp.org', 'research'],
+  ['brilliant.org', 'research'],
+  ['deeplearning.ai', 'research'],
+  ['udacity.com', 'research'],
+  ['futurelearn.com', 'research'],
+  ['skillshare.com', 'research'],
+  ['instructure.com', 'research'],
+  ['blackboard.com', 'research'],
+  ['moodle.org', 'research'],
 ]
+
+// Hosts where minutes without keyboard/mouse input are normal engaged
+// behavior: course platforms (video lectures, timed exams) and long-form
+// reading/documentation. These get a bounded passive-presence hold — unlike
+// entertainment/meetings, whose hold is open-ended because playback or a live
+// call proves presence on its own.
+const PASSIVE_READING_HOSTS: readonly string[] = [
+  'coursera.org', 'udemy.com', 'edx.org', 'khanacademy.org', 'datacamp.com',
+  'pluralsight.com', 'codecademy.com', 'freecodecamp.org', 'brilliant.org',
+  'deeplearning.ai', 'udacity.com', 'futurelearn.com', 'skillshare.com',
+  'instructure.com', 'blackboard.com', 'moodle.org',
+  'developer.mozilla.org', 'readthedocs.io', 'wikipedia.org', 'arxiv.org',
+  'scholar.google.com', 'jstor.org', 'medium.com', 'substack.com',
+]
+
+export type PassiveHoldKind = 'media' | 'reading'
+
+/** How a site holds a no-input session open: 'media' (watching/attending —
+ *  open-ended), 'reading' (studying/reading — held up to an explicit cap), or
+ *  null (ordinary idle handling applies). */
+export function passiveHoldKindForDomain(host: string | null | undefined): PassiveHoldKind | null {
+  const normalized = normalizeHost(host)
+  if (!normalized) return null
+  const category = categoryForDomain(normalized)
+  if (category === 'entertainment' || category === 'meetings') return 'media'
+  for (const candidate of PASSIVE_READING_HOSTS) {
+    if (normalized === candidate || normalized.endsWith(`.${candidate}`)) return 'reading'
+  }
+  return null
+}
 
 function normalizeHost(host: string | null | undefined): string | null {
   if (!host) return null

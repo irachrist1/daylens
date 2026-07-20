@@ -24,7 +24,7 @@ import { languageModelFor } from './providerModel'
 import { buildDaylensTools } from './daylensTools'
 import { buildSystemTools, type FileAccessAnswer } from './systemTools'
 import type { FileDisclosureRow } from '../services/fileAccess'
-import { buildInteractionTools, createArtifact, type AgentQuestion, type InteractionDeps } from './interactionTools'
+import { buildExportTools, buildInteractionTools, createArtifact, type AgentQuestion, type InteractionDeps } from './interactionTools'
 import { buildMemoryTools } from './memoryTools'
 import { connectMcpTools, type McpServerConfig } from './mcpTools'
 import {
@@ -230,6 +230,7 @@ export async function runChatAgentTurn(
         },
       }),
       ...buildInteractionTools(interactionDeps),
+      ...buildExportTools(deps.db, interactionDeps),
       // The confirmed-memory proposal card (DEV-185): a durable personal fact
       // pauses the turn through the same askUser machinery as file access;
       // only an explicit confirmation (or a typed correction) persists.

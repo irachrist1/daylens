@@ -44,14 +44,15 @@ test('site time clips to the browser foreground — never more than the browser 
   insertSession(db, 'company.thebrowser.dia', 'Dia', localMs(10), localMs(11))
   insertSession(db, 'dev.warp.Warp-Stable', 'Warp', localMs(11), localMs(12), 'development')
 
-  // Fully inside Dia's foreground hour: counts as-is.
+  // Inside Dia's foreground hour; as the last known page it also fills the
+  // browser's foreground time until the Meet navigation at 10:30.
   insertVisit(db, 'x.com', localMs(10), 1200)
   // A Meet tab that keeps accruing history duration while Warp is in front:
   // only the 10:30–11:00 slice inside Dia counts, the rest was a background tab.
   insertVisit(db, 'meet.google.com', localMs(10, 30), 5400)
 
   const sites = new Map(getWebsiteSummariesForRange(db, localMs(10), localMs(12)).map((site) => [site.domain, site.totalSeconds]))
-  assert.equal(sites.get('x.com'), 1200)
+  assert.equal(sites.get('x.com'), 1800)
   assert.equal(sites.get('meet.google.com'), 1800, 'background-tab minutes behind another focused app must not count')
 
   const browserSeconds = 3600
@@ -121,14 +122,16 @@ test('overlapping visits of one domain count each second once', () => {
   const db = makeDb()
   insertSession(db, 'company.thebrowser.dia', 'Dia', localMs(10), localMs(11))
 
-  // Two capture sources record the same stretch on one domain.
+  // Two history rows record the same stretch on one domain. Their slices stay
+  // disjoint (never 600+600 over the same minutes), and the later row — the
+  // last recorded navigation — fills the browser's remaining foreground time.
   insertVisit(db, 'x.com', localMs(10, 5), 600)
   insertVisit(db, 'x.com', localMs(10, 10), 600)
 
   const sites = getWebsiteSummariesForRange(db, localMs(10), localMs(11))
   const x = sites.find((site) => site.domain === 'x.com')
   assert.ok(x)
-  assert.equal(x.totalSeconds, 900, '10:05–10:20 unioned, not 600+600 summed')
+  assert.equal(x.totalSeconds, 3300, '10:05–11:00 partitioned once, never double-counted')
   assert.equal(x.visitCount, 2)
   db.close()
 })

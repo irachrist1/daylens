@@ -78,6 +78,14 @@ test('publishes tool activity and only the grounded final answer', async () => {
 test('creates a requested spreadsheet when the model gathered rows but skipped the artifact call', async () => {
   const db = createProductionTestDatabase()
   const visitTime = new Date(2026, 6, 6, 9).getTime()
+  // Page time reconciles against the browser's own foreground time, so the
+  // visit needs its owning browser session to count.
+  db.prepare(`
+    INSERT INTO app_sessions (
+      bundle_id, app_name, start_time, end_time, duration_sec,
+      category, is_focused, capture_source, capture_version
+    ) VALUES ('browser', 'Browser', ?, ?, 120, 'browsing', 0, 'test', 1)
+  `).run(visitTime, visitTime + 120_000)
   db.prepare(`
     INSERT INTO website_visits (
       domain, page_title, url, visit_time, visit_time_us, duration_sec,
