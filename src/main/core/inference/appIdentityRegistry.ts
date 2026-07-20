@@ -124,7 +124,11 @@ export function upsertAppIdentityObservation(
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(app_instance_id) DO UPDATE SET
       raw_app_name = excluded.raw_app_name,
-      canonical_app_id = excluded.canonical_app_id,
+      -- A later observation may not know the canonical id (catalog miss, or a
+      -- path-keyed poll read whose bundle resolution failed this time). The
+      -- stored link — catalog-resolved or stamped by the twin-dedupe
+      -- migration — outlives any single observation.
+      canonical_app_id = COALESCE(excluded.canonical_app_id, app_identities.canonical_app_id),
       display_name = excluded.display_name,
       default_category = excluded.default_category,
       last_seen_at = excluded.last_seen_at,

@@ -39,7 +39,7 @@ import { looksLikePassivePresenceSession } from '../lib/passivePresence'
 import { capture, captureException, captureRateLimited, captureTrackingPauseTransition } from './analytics'
 import { resolveLinuxDesktopIdentity } from './linuxDesktop'
 import { flushActiveBrowserContext, recordActiveBrowserContextSample } from './browserContext'
-import { resolveBrowserApplication } from './browserRegistry'
+import { macBundleIdentifierForExecutablePath, resolveBrowserApplication } from './browserRegistry'
 import { getRecentWindowsPrivateWindowSignal } from './windowsFocusCapture'
 import { getSettings } from './settings'
 import { decideAppCapture, trackingControlsStateFromSettings } from '@shared/trackingControls'
@@ -1032,8 +1032,37 @@ function resolveWindowIdentity(
   const appName = isWindowsUwp
     ? windowsUwpDisplayName(uwpPackage, normalizedWindowsAppName || exeName)
     : (normalizedWindowsAppName || exeName || uwpPackage || 'Unknown app')
-  const bundleId = win.bundleId || (isWindowsUwp ? uwpPackage : (win.path || uwpPackage || appName))
+  // On macOS the two capture backends must mint ONE identity for the same
+  // install: focus events report the real CFBundleIdentifier while the
+  // active-window poll may only know the executable path. Resolve the path to
+  // the bundle's own identifier before falling back to the raw path, so
+  // Traycer is `com.traycer.app` from either backend instead of splitting into
+  // a path-keyed twin (issue #22).
+  const macBundleId = platform === 'darwin' && !win.bundleId && win.path
+    ? resolveMacExecutableBundleId(win.path)
+    : null
+  const bundleId = win.bundleId
+    || macBundleId
+    || (isWindowsUwp ? uwpPackage : (win.path || uwpPackage || appName))
   return { ...win, bundleId, appName }
+}
+
+// Harness-aware indirection: scripted FSM tests resolve deterministically via
+// the seam (or not at all when the harness omits it — the Info.plist of a
+// fixture path must never depend on the machine running the suite).
+function resolveMacExecutableBundleId(executablePath: string): string | null {
+  if (fsmTestHarness) return fsmTestHarness.resolveMacBundleId?.(executablePath) ?? null
+  return macBundleIdentifierForExecutablePath(executablePath)
+}
+
+// The focus-events backend carries the bundle id in the window's `path` field
+// (see recentMacFocusEventWindow). Identity metadata must only record real
+// filesystem paths — a bundle id overwriting the stored executablePath would
+// erase the very mapping the twin dedupe relies on.
+function executablePathForMetadata(value: string | null | undefined): string | null {
+  const trimmed = value?.trim()
+  if (!trimmed) return null
+  return trimmed.startsWith('/') || /^[A-Za-z]:[\\/]/.test(trimmed) ? trimmed : null
 }
 
 function windowsAwareBasename(filePath: string, platform: NodeJS.Platform): string {
@@ -1656,6 +1685,10 @@ interface TrackingFsmTestHarness {
   idleSeconds: () => number
   activeWindow: () => ActiveWinResult | null
   platform?: NodeJS.Platform
+  /** macOS executable path → CFBundleIdentifier, standing in for the
+   *  Info.plist read so identity unification is scriptable off-macOS.
+   *  Omitted → the harness resolves nothing (legacy path-keyed behavior). */
+  resolveMacBundleId?: (executablePath: string) => string | null
   recordFlush?: (info: {
     startTime: number
     endTime: number
@@ -2138,7 +2171,7 @@ async function poll(): Promise<void> {
         rawAppName: appName,
         appInstanceId: identity.appInstanceId,
         observedCategory: category,
-        executablePath: resolvedWin.path?.trim() || null,
+        executablePath: executablePathForMetadata(resolvedWin.path),
         uwpPackageFamily: resolvedWin.windows?.isUWPApp ? resolvedWin.windows.uwpPackage : null,
         activeWindowIconBase64: resolvedWin.icon?.trim() || null,
         activeWindowIconMime: 'image/png',
