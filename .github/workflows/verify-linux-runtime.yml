@@ -4,9 +4,27 @@ on:
   push:
     branches:
       - main
-      - master
   pull_request:
+    # Full packaging + smoke is expensive; on PRs only run when
+    # packaging-relevant inputs change. Pushes to main and manual
+    # dispatches always run unconditionally.
+    paths:
+      - "electron-builder.config.js"
+      - "forge.config.ts"
+      - "build/**"
+      - "scripts/**"
+      - "src/main/**"
+      - "src/native/**"
+      - "vite.*.config.ts"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/verify-linux-runtime.yml"
   workflow_dispatch:
+
+# Cancel superseded runs on PRs and feature branches; never cancel main pushes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   verify-linux-runtime:
@@ -33,11 +51,28 @@ jobs:
       - name: Install dependencies
         run: npm ci --ignore-scripts
 
+      - name: Cache Electron binary download
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/electron
+          key: electron-cache-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      - name: Cache native module builds
+        id: native-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.electron-gyp
+            node_modules/better-sqlite3/build/Release
+            node_modules/keytar/build/Release
+            node_modules/@paymoapp/active-window/build/Release
+          key: native-build-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
       - name: Rebuild native modules for Electron
+        if: steps.native-cache.outputs.cache-hit != 'true'
         run: npx electron-rebuild -f -w better-sqlite3,@paymoapp/active-window,keytar
 
-      - name: Typecheck
-        run: npm run typecheck
+      # Typecheck is platform-independent and runs once in ci.yml.
 
       - name: Build Vite bundles
         run: npm run build:all

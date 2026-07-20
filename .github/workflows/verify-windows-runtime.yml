@@ -4,9 +4,27 @@ on:
   push:
     branches:
       - main
-      - master
   pull_request:
+    # Full packaging + smoke is expensive; on PRs only run when
+    # packaging-relevant inputs change. Pushes to main and manual
+    # dispatches always run unconditionally.
+    paths:
+      - "electron-builder.config.js"
+      - "forge.config.ts"
+      - "build/**"
+      - "scripts/**"
+      - "src/main/**"
+      - "src/native/**"
+      - "vite.*.config.ts"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/verify-windows-runtime.yml"
   workflow_dispatch:
+
+# Cancel superseded runs on PRs and feature branches; never cancel main pushes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   verify-windows-runtime:
@@ -31,11 +49,28 @@ jobs:
       - name: Install dependencies
         run: npm ci --ignore-scripts
 
+      - name: Cache Electron binary download
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\electron\Cache
+          key: electron-cache-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      - name: Cache native module builds
+        id: native-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.electron-gyp
+            node_modules/better-sqlite3/build/Release
+            node_modules/keytar/build/Release
+            node_modules/@paymoapp/active-window/build/Release
+          key: native-build-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
       - name: Rebuild native modules for Electron
+        if: steps.native-cache.outputs.cache-hit != 'true'
         run: npx electron-rebuild -f -w better-sqlite3,@paymoapp/active-window,keytar
 
-      - name: Typecheck
-        run: npm run typecheck
+      # Typecheck is platform-independent and runs once in ci.yml.
 
       - name: Build Vite bundles and Windows capture helper
         run: npm run build:all
@@ -56,8 +91,17 @@ jobs:
           if (Test-Path $installDir) { Remove-Item -Recurse -Force $installDir }
           New-Item -ItemType Directory -Path $installDir | Out-Null
           Start-Process -FilePath $setup -ArgumentList '/S', "/D=$installDir" -Wait
-          $appExe = Get-ChildItem -Path $installDir -Filter Daylens.exe -Recurse | Select-Object -First 1
-          if (-not $appExe) { throw 'Daylens.exe not found after install' }
+          # NSIS silent installers respawn a second process, so -Wait can return
+          # before extraction finishes. Poll for the installed exe instead of
+          # trusting the installer's exit.
+          $appExe = $null
+          $deadline = (Get-Date).AddSeconds(90)
+          while (-not $appExe) {
+            $appExe = Get-ChildItem -Path $installDir -Filter Daylens.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($appExe -or (Get-Date) -ge $deadline) { break }
+            Start-Sleep -Seconds 3
+          }
+          if (-not $appExe) { throw 'Daylens.exe not found within 90s of installer exit' }
           $env:DAYLENS_SMOKE_TEST = '1'
           $env:DAYLENS_SMOKE_REPORT_PATH = Join-Path $env:RUNNER_TEMP 'daylens-windows-smoke.json'
           $env:DAYLENS_SMOKE_WINDOW_STATE_PATH = Join-Path $env:RUNNER_TEMP 'daylens-windows-window-state.json'
