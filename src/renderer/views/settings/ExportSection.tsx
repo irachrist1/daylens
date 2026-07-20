@@ -259,9 +259,10 @@ export function ExportSection() {
 
       <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', lineHeight: 1.6 }}>
         The export is generated entirely on this machine — no network, no AI model, no account
-        needed. It is one folder: a JSONL file per table, CSV and Markdown summaries, a README
-        documenting the format, and a manifest with a checksum and record count for every file, so
-        the folder is usable (and checkable) without Daylens.
+        needed. It is one folder, usable without Daylens: an index and a readable page per day, a
+        JSONL file per table with its declared schema shipped alongside, CSV and Markdown
+        summaries, a README documenting the format, and a manifest with a checksum and record
+        count for every file.
       </div>
     </div>
   )

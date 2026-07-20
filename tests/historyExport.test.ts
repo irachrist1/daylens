@@ -86,6 +86,18 @@ function seedFixture(db: Database.Database): void {
     VALUES ('ref-1', 'ent-1', 'app_session', '1', ?)
   `).run(now)
 
+  // A known correction and a timeline block, for the without-Daylens
+  // discoverability acceptance.
+  db.prepare(`
+    INSERT INTO correction_undo_log (id, date, kind, description, snapshot_json, created_at)
+    VALUES ('corr-1', '2026-07-01', 'block_label', 'Relabeled the morning block to Billing work', '{}', ?)
+  `).run(now)
+  const localDay = new Date(now - new Date(now).getTimezoneOffset() * 60_000).toISOString().slice(0, 10)
+  db.prepare(`
+    INSERT INTO timeline_blocks (id, date, start_time, end_time, block_kind, dominant_category, label_current, heuristic_version, computed_at)
+    VALUES ('blk-1', ?, ?, ?, 'work', 'productive', 'Billing work', 'test-v1', ?)
+  `).run(localDay, now, now + 3600_000, now)
+
   // Connector records (DEV-186 stack): live, provider-tombstoned, and
   // high-sensitivity — the export must carry the first, withhold the rest.
   db.prepare(`
@@ -160,11 +172,27 @@ test('round-trip: counts match the database, the manifest is honest, and verific
   const connectorEntry = manifest.files.find((f) => f.table === 'connector_records')!
   assert.equal(connectorEntry.rows, 1, 'only the live, standard-sensitivity connector record exports')
 
-  // Summaries + README exist and are covered by the manifest.
-  for (const file of ['summary/daily-time.csv', 'summary/entity-totals.csv', 'summary/overview.md', 'README.md']) {
+  // Summaries, README, index, and the shipped schema exist and are covered by
+  // the manifest (so tampering with any of them fails verification).
+  for (const file of ['summary/daily-time.csv', 'summary/entity-totals.csv', 'summary/overview.md', 'README.md', 'index.md', 'schema/tables.json']) {
     assert.ok(manifest.files.some((f) => f.file === file), `${file} is in the manifest`)
   }
   assert.match(fs.readFileSync(path.join(result.exportDir, 'summary', 'entity-totals.csv'), 'utf8'), /Daylens/)
+
+  // The shipped schema matches the live database's declared schema, table by
+  // table, column by column — the export's JSON validates against ITS OWN
+  // schema version, checkable without Daylens.
+  const shipped = JSON.parse(fs.readFileSync(path.join(result.exportDir, 'schema', 'tables.json'), 'utf8'))
+  assert.equal(shipped.schemaVersion, manifest.schemaVersion)
+  for (const entry of manifest.files.filter((f) => f.table)) {
+    const declared = shipped.tables[entry.table!]
+    assert.ok(declared, `${entry.table} is declared in the shipped schema`)
+    const live = db.prepare(`PRAGMA table_info(${entry.table})`).all() as Array<{ name: string; notnull: number }>
+    const liveNames = new Set(live.map((c) => c.name))
+    for (const column of declared.columns) {
+      assert.ok(liveNames.has(column.name), `${entry.table}.${column.name} exists in the live schema`)
+    }
+  }
 
   // The verifier proves completeness from disk alone.
   const verification = await verifyHistoryExport(result.exportDir)
@@ -356,13 +384,85 @@ test('failure honesty: a mid-stream failure names the incomplete section and rem
   assert.deepEqual(fs.readdirSync(dest), [], 'the partial export folder was removed')
 })
 
+test('without Daylens: a person can locate a known day, entity, and correction from the export alone', async () => {
+  const db = createProductionTestDatabase()
+  seedFixture(db)
+  const { result } = await exportFixture(db)
+
+  // The entry point tells you where everything lives.
+  const index = fs.readFileSync(path.join(result.exportDir, 'index.md'), 'utf8')
+  assert.match(index, /correction_undo_log\.jsonl/, 'index points at corrections')
+  assert.match(index, /entity-totals\.csv/, 'index points at the entity listing')
+  assert.match(index, /days\//, 'index links the dated day pages')
+
+  // A known day: a dated, readable file naming what happened.
+  const today = new Date(Date.now() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 10)
+  const dayPage = fs.readFileSync(path.join(result.exportDir, 'days', today.slice(0, 4), `${today}.md`), 'utf8')
+  assert.match(dayPage, /Editor/, 'the day page names the application used that day')
+  assert.match(dayPage, /Billing work/, 'the day page shows the timeline block label')
+  assert.ok(index.includes(`days/${today.slice(0, 4)}/${today}.md`), 'the index links that day')
+
+  // A known entity: findable by name in the human listing, then in the data.
+  assert.match(fs.readFileSync(path.join(result.exportDir, 'summary', 'entity-totals.csv'), 'utf8'), /Daylens/)
+  assert.match(fs.readFileSync(path.join(result.exportDir, 'data', 'entities.jsonl'), 'utf8'), /"canonical_name":"Daylens"/)
+
+  // A known correction: in exactly the file the index names.
+  const corrections = fs.readFileSync(path.join(result.exportDir, 'data', 'correction_undo_log.jsonl'), 'utf8')
+  assert.match(corrections, /Relabeled the morning block to Billing work/)
+})
+
+test('the exported JSON validates against the shipped schema, and verification catches a schema-violating row', async () => {
+  const db = createProductionTestDatabase()
+  seedFixture(db)
+  const { result } = await exportFixture(db)
+
+  // A row with a column the shipped schema does not declare fails verification
+  // (checksum aside — recompute nothing, just corrupt then check the message).
+  const file = path.join(result.exportDir, 'data', 'work_memory_facts.jsonl')
+  const original = fs.readFileSync(file, 'utf8').trimEnd().split('\n')
+  const forged = { ...JSON.parse(original[0]), smuggled_column: 1 }
+  fs.writeFileSync(file, [...original, JSON.stringify(forged)].join('\n') + '\n')
+  const verification = await verifyHistoryExport(result.exportDir)
+  assert.equal(verification.ok, false)
+  assert.ok(
+    verification.issues.some((issue) => issue.includes('unexpected column "smuggled_column"')),
+    `row-level schema validation reports the violation: ${verification.issues.join('; ')}`,
+  )
+})
+
+test('privacy boundary: no credential-shaped content anywhere in the export', async () => {
+  const db = createProductionTestDatabase()
+  seedFixture(db)
+  const { result } = await exportFixture(db, { includeHighSensitivity: true })
+  const everything = readAllExportedText(result.exportDir)
+
+  // Provider-specific credential shapes (from the shared credential corpus)
+  // must never appear — credentials live only in the OS secure store, which
+  // the engine cannot even import (see the module-boundary test below).
+  const credentialShapes: Array<[string, RegExp]> = [
+    ['openai_key', /sk-[A-Za-z0-9_-]{20,}/],
+    ['slack_token', /xox[abprs]-[A-Za-z0-9-]{10,}/],
+    ['google_oauth', /ya29\.[A-Za-z0-9_.-]+/],
+    ['github_pat', /gh[pousr]_[A-Za-z0-9]{30,}/],
+    ['aws_access_key', /\bAKIA[0-9A-Z]{16}\b/],
+    ['jwt', /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/],
+  ]
+  for (const [name, regex] of credentialShapes) {
+    assert.ok(!regex.test(everything), `export must contain no ${name}-shaped value`)
+  }
+
+  // And the manifest says out loud that credentials are excluded by design.
+  const manifest = readManifest(result.exportDir)
+  assert.ok(manifest.omissions.some((o) => o.category === 'credentials'))
+})
+
 test('privacy boundary: the export engine cannot reach the network', () => {
   const modulePath = path.join(
     path.dirname(fileURLToPath(import.meta.url)),
     '..', 'src', 'main', 'services', 'historyExport.ts',
   )
   const source = fs.readFileSync(modulePath, 'utf8')
-  for (const forbidden of ["'node:http'", "'node:https'", "'node:net'", "'node:dgram'", "'node:tls'", 'fetch(', 'XMLHttpRequest', "'electron'"]) {
-    assert.ok(!source.includes(forbidden), `historyExport.ts must not reference ${forbidden} — exports are local-only`)
+  for (const forbidden of ["'node:http'", "'node:https'", "'node:net'", "'node:dgram'", "'node:tls'", 'fetch(', 'XMLHttpRequest', "'electron'", 'secureStore', 'keytar', 'safeStorage']) {
+    assert.ok(!source.includes(forbidden), `historyExport.ts must not reference ${forbidden} — exports are local-only and can never see the credential store`)
   }
 })
