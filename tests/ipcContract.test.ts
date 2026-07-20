@@ -40,6 +40,7 @@ import { registerIntercomHandlers } from '../src/main/ipc/intercom.handlers.ts'
 import { registerNotificationHandlers } from '../src/main/ipc/notifications.handlers.ts'
 import { registerSearchHandlers } from '../src/main/ipc/search.handlers.ts'
 import { registerSyncHandlers } from '../src/main/ipc/sync.handlers.ts'
+import { registerConnectorHandlers } from '../src/main/ipc/connectors.handlers.ts'
 import { registerDistractionAlerterHandlers } from '../src/main/services/distractionAlerter.ts'
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -59,6 +60,7 @@ const REGISTER_FNS: Array<[string, () => void]> = [
   ['notifications', registerNotificationHandlers],
   ['search', registerSearchHandlers],
   ['sync', registerSyncHandlers],
+  ['connectors', registerConnectorHandlers],
   ['distractionAlerter', registerDistractionAlerterHandlers],
 ]
 
