@@ -791,6 +791,18 @@ export interface AIMessageFileDisclosure {
   disclosedAt: number
 }
 
+/** One packet-item citation in an agent answer (DEV-182): the claim's
+ *  superscript number and the recorded context-packet item it traces to. */
+export interface AIMessageCitation {
+  /** Display number, matching the superscript in the answer text. */
+  marker: number
+  /** Stable identity of the cited packet item (block:<id>, file:<path>, …). */
+  identity: string
+  kind: string
+  /** The disclosed statement the claim traces to. */
+  statement: string
+}
+
 export interface AIThreadMessageMetadata {
   /** Agent-turn evidence: which tools ran and what they returned. */
   agent?: {
@@ -798,6 +810,11 @@ export interface AIThreadMessageMetadata {
     stepCount: number
     groundingRetried: boolean
     fileDisclosures?: AIMessageFileDisclosure[]
+    /** The recorded context packet this answer was built from (DEV-182);
+     *  null when the packet ledger is unavailable. */
+    contextPacketId?: string | null
+    /** Verified packet citations in the answer, in display order. */
+    citations?: AIMessageCitation[]
   }
   answerKind?: AIAnswerKind | null
   suggestedFollowUps?: FollowUpSuggestion[]
