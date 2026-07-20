@@ -803,6 +803,93 @@ export interface AIMessageCitation {
   statement: string
 }
 
+// ─── Context packet inspection (DEV-183) ─────────────────────────────────────
+// The renderer-facing shape of "what the AI saw" for one exchange: the
+// recorded packet re-read from the local ledger, grouped per kind, with each
+// item checked against the evidence that backs it today. Read-only — the
+// inspector shows the record, it never edits it.
+
+/** Whether the evidence behind a disclosed item still exists right now.
+ *  The packet is a historical disclosure record: deleting evidence later
+ *  cannot un-send it, so the inspector keeps the item and says what changed.
+ *  - present: the backing record still exists.
+ *  - deleted: the backing record has since been deleted or is no longer part
+ *    of the current record (e.g. a recomputed timeline block).
+ *  - access_revoked: the file grant that allowed the excerpt was revoked.
+ *  - unverified: Daylens cannot check this identity form; stated, not hidden. */
+export type ContextPacketEvidenceState = 'present' | 'deleted' | 'access_revoked' | 'unverified'
+
+export interface ContextPacketInspectionItem {
+  /** Stable identity of the underlying thing (block:<id>, file:<path>, …). */
+  identity: string
+  kind: string
+  sourceType: string
+  /** The exact statement or excerpt that was disclosed. */
+  statement: string
+  version: string | null
+  /** Why this item was selected into the packet. */
+  reason: string
+  sensitivity: string
+  date: string | null
+  evidenceState: ContextPacketEvidenceState
+  /** Plain-language note when evidenceState is not 'present'. */
+  evidenceNote: string | null
+}
+
+/** One per-kind group. Every packet kind appears, empty or not, so the
+ *  inspector can state honestly that e.g. no file contents were sent. */
+export interface ContextPacketInspectionGroup {
+  kind: string
+  label: string
+  items: ContextPacketInspectionItem[]
+}
+
+export interface ContextPacketInspectionOmission {
+  kind: string
+  count: number
+  reason: string
+  /** Plain-language rendering of the omission. */
+  label: string
+}
+
+export interface ContextPacketInspection {
+  packetId: string
+  exchangeKind: 'chat' | 'day_analysis'
+  purpose: 'answer' | 'interpret'
+  threadId: number | null
+  messageId: number | null
+  question: string
+  dates: string[]
+  timezone: string
+  /** When the packet was recorded — always before the request left the device. */
+  createdAt: number
+  policyVersion: number
+  contentFingerprint: string
+  destination: string
+  leftDevice: boolean
+  itemCount: number
+  groups: ContextPacketInspectionGroup[]
+  conflicts: Array<{ identity: string; detail: string; resolvedBy: string }>
+  gaps: Array<{ date: string; detail: string; kind: string }>
+  permissions: Array<{ kind: string; scopeKind: string; path: string; state: string; allowHighSensitivity: boolean }>
+  omissions: ContextPacketInspectionOmission[]
+}
+
+/** One row in the packet browser: enough to recognize the exchange and open
+ *  the full inspection. */
+export interface ContextPacketListEntry {
+  packetId: string
+  exchangeKind: 'chat' | 'day_analysis'
+  threadId: number | null
+  messageId: number | null
+  question: string
+  destination: string
+  createdAt: number
+  itemCount: number
+  /** Item counts per kind, e.g. { day_fact: 12, file_excerpt: 1 }. */
+  counts: Record<string, number>
+}
+
 export interface AIThreadMessageMetadata {
   /** Agent-turn evidence: which tools ran and what they returned. */
   agent?: {
@@ -2430,6 +2517,11 @@ export const IPC = {
     GET: 'context-packets:get',
     GET_FOR_MESSAGE: 'context-packets:get-for-message',
     LIST: 'context-packets:list',
+    // DEV-183: the assembled read-only inspection behind "What the AI saw" —
+    // the recorded packet grouped per kind, with omissions in plain language
+    // and each item checked against the evidence backing it today.
+    INSPECT: 'context-packets:inspect',
+    LIST_ENTRIES: 'context-packets:list-entries',
   },
   SHELL: {
     OPEN_EXTERNAL: 'shell:open-external',

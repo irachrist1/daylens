@@ -31,6 +31,10 @@ import {
   listContextPackets,
   type ContextPacketExchangeKind,
 } from '../services/contextPacket'
+import {
+  inspectContextPacket,
+  listContextPacketEntries,
+} from '../services/contextPacketInspection'
 import { getCurrentSession } from '../services/tracking'
 import { materializeTimelineDayProjection } from '../core/query/projections'
 import { localDateString } from '../lib/localDate'
@@ -86,6 +90,22 @@ export function registerAIHandlers(): void {
     payload: { limit?: number; exchangeKind?: ContextPacketExchangeKind; scopeKey?: string } = {},
   ) => {
     return listContextPackets(getDb(), payload)
+  })
+
+  // DEV-183: the read-only inspection behind "What the AI saw" — the recorded
+  // packet grouped per kind, with plain-language omissions and each item
+  // checked against the evidence backing it today. Null when no packet was
+  // recorded for the reference; the renderer states that honestly.
+  ipcMain.handle(IPC.CONTEXT_PACKETS.INSPECT, (
+    _e,
+    payload: { packetId?: string | null; messageId?: number | null },
+  ) => {
+    return inspectContextPacket(getDb(), payload)
+  })
+
+  // DEV-183: light rows for the packet browser — question, time, item counts.
+  ipcMain.handle(IPC.CONTEXT_PACKETS.LIST_ENTRIES, (_e, payload: { limit?: number } = {}) => {
+    return listContextPacketEntries(getDb(), payload)
   })
 
   ipcMain.handle(IPC.AI.SEND_MESSAGE, async (event, payload: AIChatSendRequest) => {
