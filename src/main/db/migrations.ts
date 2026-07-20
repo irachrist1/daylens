@@ -307,6 +307,56 @@ export function ensureSearchSchema(db: Database.Database): void {
   `)
 }
 
+// Exact-retrieval FTS over memory_records.exact_text (DEV-178). Same
+// external-content pattern as the legacy FTS tables above; triggers keep the
+// index in sync with day reindexes (delete + reinsert per day) so a corrected
+// or deleted moment leaves the index in the same transaction that removes its
+// record.
+export function ensureMemorySearchSchema(db: Database.Database): void {
+  db.exec(`
+    CREATE VIEW IF NOT EXISTS memory_records_fts_content AS
+    SELECT
+      rowid AS rowid,
+      exact_text
+    FROM memory_records;
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS memory_records_fts USING fts5(
+      exact_text,
+      content='memory_records_fts_content',
+      content_rowid='rowid',
+      tokenize='unicode61'
+    );
+
+    CREATE TRIGGER IF NOT EXISTS memory_records_fts_ai
+    AFTER INSERT ON memory_records BEGIN
+      INSERT INTO memory_records_fts(rowid, exact_text)
+      VALUES (new.rowid, new.exact_text);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS memory_records_fts_bd
+    BEFORE DELETE ON memory_records BEGIN
+      INSERT INTO memory_records_fts(memory_records_fts, rowid, exact_text)
+      VALUES ('delete', old.rowid, old.exact_text);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS memory_records_fts_bu
+    BEFORE UPDATE OF exact_text ON memory_records BEGIN
+      INSERT INTO memory_records_fts(memory_records_fts, rowid, exact_text)
+      VALUES ('delete', old.rowid, old.exact_text);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS memory_records_fts_au
+    AFTER UPDATE OF exact_text ON memory_records BEGIN
+      INSERT INTO memory_records_fts(rowid, exact_text)
+      VALUES (new.rowid, new.exact_text);
+    END;
+  `)
+
+  db.exec(`
+    INSERT INTO memory_records_fts(memory_records_fts) VALUES ('rebuild');
+  `)
+}
+
 export function scrubStaleAppNarrativeMetricSummaries(db: Database.Database): number {
   // B4: older app-detail narratives cached prose like "2 hours 18 minutes
   // across 59 sessions" while the header rendered live canonical totals.
@@ -2539,6 +2589,56 @@ const migrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_file_disclosures_time ON file_disclosures (disclosed_at DESC);
         CREATE INDEX IF NOT EXISTS idx_file_disclosures_thread ON file_disclosures (thread_id, disclosed_at DESC);
       `)
+    },
+  },
+  {
+    version: 52,
+    description:
+      'Exact-retrieval memory records (memory-and-entities.md §Memory record, DEV-178): memory_records projected per day from corrected facts, entity tags for alias-aware retrieval, per-day index bookkeeping, and the memory_records_fts index replacing app_sessions_fts as the session search path. No backfill here — days index in the background and on demand; unindexed days keep serving through the legacy FTS path until then.',
+    up: () => {
+      const db = getDb()
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS memory_records (
+          id                TEXT PRIMARY KEY,
+          record_kind       TEXT NOT NULL CHECK(record_kind IN ('session', 'meeting', 'artifact')),
+          memory_type       TEXT NOT NULL CHECK(memory_type IN ('observed', 'connected', 'supplied', 'inferred')),
+          statement         TEXT NOT NULL,
+          exact_text        TEXT NOT NULL DEFAULT '',
+          semantic_text     TEXT,
+          date              TEXT NOT NULL,
+          start_ms          INTEGER NOT NULL,
+          end_ms            INTEGER NOT NULL,
+          app_bundle_id     TEXT,
+          app_name          TEXT,
+          title             TEXT,
+          primary_entity_id TEXT,
+          source_refs_json  TEXT NOT NULL DEFAULT '[]',
+          confidence        TEXT NOT NULL DEFAULT 'observed',
+          provenance        TEXT NOT NULL DEFAULT 'capture',
+          sensitivity       TEXT NOT NULL DEFAULT 'standard' CHECK(sensitivity IN ('standard', 'personal', 'high')),
+          embedding_model   TEXT,
+          embedding_version INTEGER,
+          created_at        INTEGER NOT NULL,
+          deleted_at        INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_memory_records_date ON memory_records (date);
+        CREATE INDEX IF NOT EXISTS idx_memory_records_kind_start ON memory_records (record_kind, start_ms DESC);
+
+        CREATE TABLE IF NOT EXISTS memory_record_entities (
+          record_id TEXT NOT NULL REFERENCES memory_records(id) ON DELETE CASCADE,
+          entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+          PRIMARY KEY (record_id, entity_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_memory_record_entities_entity ON memory_record_entities (entity_id);
+
+        CREATE TABLE IF NOT EXISTS memory_index_days (
+          date         TEXT PRIMARY KEY,
+          fingerprint  TEXT NOT NULL,
+          indexed_at   INTEGER NOT NULL,
+          record_count INTEGER NOT NULL DEFAULT 0
+        );
+      `)
+      ensureMemorySearchSchema(db)
     },
   },
 ]

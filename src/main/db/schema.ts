@@ -934,4 +934,62 @@ CREATE TABLE IF NOT EXISTS file_disclosures (
 );
 CREATE INDEX IF NOT EXISTS idx_file_disclosures_time ON file_disclosures (disclosed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_file_disclosures_thread ON file_disclosures (thread_id, disclosed_at DESC);
+
+-- ─── Exact-retrieval memory records (memory-and-entities.md §Memory record,
+-- DEV-178) ────────────────────────────────────────────────────────────────────
+-- One row per retrievable moment, projected per local day from the CORRECTED
+-- activity facts (never raw app_sessions), plus meeting entities and artifact
+-- mentions. exact_text is the index-time full-text; entity-named records keep
+-- it EMPTY and are found through entity resolution (canonical name + aliases)
+-- at query time so renames and alias removals apply without reindexing.
+-- semantic_text is the minimized representation DEV-180 will embed;
+-- embedding_model/embedding_version stay NULL until then. The FTS index over
+-- exact_text (memory_records_fts) is created by migration v52 alongside the
+-- other FTS tables. LOCAL-ONLY: none of these tables have sync-allowlist keys;
+-- they can never serialize into a remote payload (tests/syncAllowlist.test.ts).
+CREATE TABLE IF NOT EXISTS memory_records (
+  id                TEXT PRIMARY KEY,
+  record_kind       TEXT NOT NULL CHECK(record_kind IN ('session', 'meeting', 'artifact')),
+  memory_type       TEXT NOT NULL CHECK(memory_type IN ('observed', 'connected', 'supplied', 'inferred')),
+  statement         TEXT NOT NULL,
+  exact_text        TEXT NOT NULL DEFAULT '',
+  semantic_text     TEXT,
+  date              TEXT NOT NULL,
+  start_ms          INTEGER NOT NULL,
+  end_ms            INTEGER NOT NULL,
+  app_bundle_id     TEXT,
+  app_name          TEXT,
+  title             TEXT,
+  primary_entity_id TEXT,
+  source_refs_json  TEXT NOT NULL DEFAULT '[]',
+  confidence        TEXT NOT NULL DEFAULT 'observed',
+  provenance        TEXT NOT NULL DEFAULT 'capture',
+  sensitivity       TEXT NOT NULL DEFAULT 'standard' CHECK(sensitivity IN ('standard', 'personal', 'high')),
+  embedding_model   TEXT,
+  embedding_version INTEGER,
+  created_at        INTEGER NOT NULL,
+  deleted_at        INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_memory_records_date ON memory_records (date);
+CREATE INDEX IF NOT EXISTS idx_memory_records_kind_start ON memory_records (record_kind, start_ms DESC);
+
+-- Entity tags: which durable entities a record is about. Search resolves a
+-- query to entities through aliases, then finds tagged records by id — that is
+-- what makes "acme" find Acme Corp's days. Cascades keep tags consistent with
+-- both record reindexes and entity deletion.
+CREATE TABLE IF NOT EXISTS memory_record_entities (
+  record_id TEXT NOT NULL REFERENCES memory_records(id) ON DELETE CASCADE,
+  entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+  PRIMARY KEY (record_id, entity_id)
+);
+CREATE INDEX IF NOT EXISTS idx_memory_record_entities_entity ON memory_record_entities (entity_id);
+
+-- Per-day index bookkeeping: the fingerprint digests every input that can
+-- change a day's records, so reindexing is incremental and idempotent.
+CREATE TABLE IF NOT EXISTS memory_index_days (
+  date         TEXT PRIMARY KEY,
+  fingerprint  TEXT NOT NULL,
+  indexed_at   INTEGER NOT NULL,
+  record_count INTEGER NOT NULL DEFAULT 0
+);
 `
