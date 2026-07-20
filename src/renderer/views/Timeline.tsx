@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSPr
 import { useSearchParams } from 'react-router-dom'
 import { EyeOff, Trash2, X } from 'lucide-react'
 import { ANALYTICS_EVENT, blockCountBucket, trackedTimeBucket } from '@shared/analytics'
-import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, AttributionProject, CalendarRangeBlock, CalendarRangeDay, ClientRecord, CorrectionCommand, DayTimelinePayload, TimelineGapSegment, WorkContextBlock } from '@shared/types'
+import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, AttributionProject, CalendarRangeBlock, CalendarRangeDay, ClientRecord, CorrectionCommand, DayTimelinePayload, TimelineGapSegment, TimelineScheduledMeeting, WorkContextBlock } from '@shared/types'
 import { activityColorForCategory, leisureBlocksDimmed } from '@shared/activityColors'
 import { calendarCardHeights } from '../lib/timelineBlockLayout'
 import { blockActiveSeconds } from '@shared/blockDuration'
@@ -132,7 +132,7 @@ interface TrackBounds {
 }
 
 function trackBoundsFor(
-  days: Array<{ date: string; blocks: WorkContextBlock[] }>,
+  days: Array<{ date: string; blocks: WorkContextBlock[]; scheduledMeetings?: TimelineScheduledMeeting[] }>,
   nowMs: number | null,
 ): TrackBounds {
   let firstMin = Number.POSITIVE_INFINITY
@@ -142,6 +142,12 @@ function trackBoundsFor(
     for (const block of day.blocks) {
       firstMin = Math.min(firstMin, minutesIntoDay(block.startTime, dayStart))
       lastMin = Math.max(lastMin, minutesIntoDay(block.endTime, dayStart))
+    }
+    // Scheduled context stretches the visible hours too: an 8am calendar-only
+    // event must be on screen even when captured activity started at 10.
+    for (const meeting of day.scheduledMeetings ?? []) {
+      firstMin = Math.min(firstMin, minutesIntoDay(meeting.startMs, dayStart))
+      lastMin = Math.max(lastMin, minutesIntoDay(meeting.endMs, dayStart))
     }
     if (nowMs != null && nowMs >= dayStart && nowMs < dayStart + 24 * 60 * 60_000) {
       lastMin = Math.max(lastMin, minutesIntoDay(nowMs, dayStart))
@@ -399,6 +405,7 @@ function CalendarDayTrack({
   blocks,
   bounds,
   gapSegments = [],
+  scheduledMeetings = [],
   hourHeight,
   compact = false,
   selectedBlockId = null,
@@ -412,6 +419,11 @@ function CalendarDayTrack({
   blocks: WorkContextBlock[]
   bounds: TrackBounds
   gapSegments?: TimelineGapSegment[]
+  // DEV-189: scheduled calendar events. Calendar-only ones draw as a dashed
+  // outline — context, never a block, never time (timeline.md §Meetings: a
+  // calendar event alone is not proof the meeting occurred). Matched ones are
+  // already represented by their meeting block and draw nothing extra here.
+  scheduledMeetings?: TimelineScheduledMeeting[]
   hourHeight: number
   compact?: boolean
   selectedBlockId?: string | null
@@ -476,6 +488,43 @@ function CalendarDayTrack({
             <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap' }}>
               {gap.label} · {formatDuration(Math.max(60, Math.round((gap.endTime - gap.startTime) / 1000)))}
             </span>
+          </div>
+        )
+      })}
+
+      {/* Scheduled context (DEV-189): calendar-only events as quiet dashed
+          outlines under the real blocks. No fill, no interaction, no minutes —
+          the calendar said this was planned; the day has no evidence it
+          happened, and it must never read as activity. */}
+      {!compact && scheduledMeetings.filter((meeting) => meeting.attendance === 'calendar_only').map((meeting) => {
+        const top = topFor(meeting.startMs)
+        const ghostHeight = Math.max(20, topFor(meeting.endMs) - top)
+        return (
+          <div
+            key={`scheduled:${meeting.startMs}:${meeting.title}`}
+            title={`${meeting.title} — on your calendar; no observed activity supports that you attended`}
+            style={{
+              position: 'absolute',
+              top,
+              height: ghostHeight,
+              left: 4,
+              right: 8,
+              borderRadius: 10,
+              border: '1.5px dashed var(--color-border)',
+              padding: '3px 10px',
+              overflow: 'hidden',
+              pointerEvents: 'none',
+              zIndex: 1,
+            }}
+          >
+            <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {meeting.title}
+            </div>
+            {ghostHeight >= 40 && (
+              <div style={{ fontSize: 10.5, color: 'var(--color-text-tertiary)' }}>
+                Scheduled · no observed activity
+              </div>
+            )}
           </div>
         )
       })}
@@ -1576,6 +1625,13 @@ function BlockDetailInspector({
   // extracted to blockDetailRowTree.ts so it's unit-testable without a DOM.
   const { evidence, detours, detourSeconds } = buildDetailRowTree(block)
 
+  // DEV-189: the calendar event this block's captured meeting-app evidence
+  // supports, when one matched. The block's own time stays observed activity;
+  // the scheduled range is shown as context (timeline.md §Meetings).
+  const matchedMeeting = payload.scheduledMeetings?.find(
+    (meeting) => meeting.attendance === 'matched' && meeting.matchedBlockId === block.id,
+  ) ?? null
+
   // The block's type tag + how the time inside splits by category. Real facts,
   // compactly: "Focused work" · Development 2h 10m · AI tools 40m.
   const typeTag = blockTypeTag(block)
@@ -1792,6 +1848,29 @@ function BlockDetailInspector({
                   {activityCategoryLabel(category)} · {formatDuration(seconds)}
                 </span>
               ))}
+            </div>
+          )}
+
+          {/* DEV-189: an attended meeting — the block's captured evidence
+              matched a calendar event. Observed time stays the block's truth;
+              the scheduled range is context. A wrong match is corrected with
+              the existing tools (hide the block, exclude the meeting app's
+              evidence, or change the block's type) and re-resolves. */}
+          {matchedMeeting && (
+            <div style={{
+              display: 'grid',
+              gap: 3,
+              padding: '10px 12px',
+              borderRadius: 12,
+              border: '1px solid var(--color-border-ghost)',
+              marginBottom: 14,
+            }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-primary)' }}>
+                Attended meeting · {safeTimelineText(matchedMeeting.title)}
+              </div>
+              <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}>
+                Scheduled {formatClockTime(matchedMeeting.startMs)} – {formatClockTime(matchedMeeting.endMs)} · the time above is what was actually observed
+              </div>
             </div>
           )}
 
@@ -2361,7 +2440,7 @@ export default function Timeline() {
   // The day track runs from the first tracked event to the last (or "now" on
   // today) — hours with no activity are simply not part of the view.
   const dayBounds = useMemo(
-    () => trackBoundsFor(payload ? [{ date: payload.date, blocks: sortedBlocks }] : [], isToday ? nowMs : null),
+    () => trackBoundsFor(payload ? [{ date: payload.date, blocks: sortedBlocks, scheduledMeetings: payload.scheduledMeetings }] : [], isToday ? nowMs : null),
     [payload, sortedBlocks, isToday, nowMs],
   )
 
@@ -2857,6 +2936,7 @@ export default function Timeline() {
                         blocks={sortedBlocks}
                         bounds={dayBounds}
                         gapSegments={gapSegments}
+                        scheduledMeetings={payload.scheduledMeetings}
                         hourHeight={DAY_HOUR_HEIGHT}
                         selectedBlockId={selectedBlockId}
                         selectedSpanIds={selectedSpanIds}

@@ -10,12 +10,12 @@
 
 import type Database from 'better-sqlite3'
 import type {
-  CalendarSignal,
   DayEnrichment,
   FocusAppSignal,
   GitActivitySignal,
   MeetingNotesSignal, // notes connector
 } from '@shared/types'
+import { resolveDayMeetingReport, type DayMeetingReport } from './meetingResolution'
 import { formatHm } from '../../renderer/lib/dayWrapScenes'
 import { looksLikeRawArtifactLabel } from '../../renderer/lib/wrappedFacts'
 import { cleanSubject, stripPathsAndBranches } from './gitSignals'
@@ -111,28 +111,52 @@ function resolveShipped(git: GitActivitySignal | null): DayEnrichment['shipped']
   return { commitsByProject, highlights, pullRequests }
 }
 
-/** Turn stored calendar into the writer's `meetings` block, or null when empty. */
-function resolveMeetings(calendar: CalendarSignal | null): DayEnrichment['meetings'] {
-  if (!calendar || !Array.isArray(calendar.events) || calendar.events.length === 0) return null
-  const events = calendar.events.filter((e) => e && typeof e.durationMinutes === 'number')
-  if (events.length === 0) return null
-  const items = events
+/** Turn the DEV-189 day-level meeting resolution into the writer's `meetings`
+ *  block, or null when the day had no meeting signal from EITHER source.
+ *  Supersedes the calendar-only resolution (issue #3): a chaired meeting
+ *  known only from captured meeting-app evidence is a meeting here, a
+ *  calendar event with no supporting evidence is calendar-only context, and
+ *  the writer sees the buckets separately. */
+function resolveMeetings(report: DayMeetingReport | null): DayEnrichment['meetings'] {
+  if (!report || report.meetings.length === 0) return null
+  const items = report.meetings
     .slice()
-    .sort((a, b) => b.durationMinutes - a.durationMinutes)
+    .sort((a, b) => (b.scheduledMinutes ?? Math.round((b.observedSeconds ?? 0) / 60))
+      - (a.scheduledMinutes ?? Math.round((a.observedSeconds ?? 0) / 60)))
     .slice(0, MAX_MEETINGS)
-    .map((e) => {
-      // event-type inference: classify against the ORIGINAL event (title,
-      // attendeeCount, durationMinutes) before the title is sanitized for
-      // display — the classifier reads the same object the connector produced.
-      const { type, confidence } = inferEventType(e)
+    .map((meeting) => {
+      // event-type inference: classify from the scheduled facts (title,
+      // attendeeCount, durationMinutes) — the same signals the calendar
+      // source produced. Captured-only meetings have no title/attendee
+      // evidence to classify from and stay generic.
+      const { type, confidence } = meeting.scheduledMinutes != null
+        ? inferEventType({
+          title: meeting.title ?? '',
+          startClock: '',
+          durationMinutes: meeting.scheduledMinutes,
+          attendeeCount: meeting.attendeeCount,
+        })
+        : { type: 'generic' as const, confidence: 0 }
       return {
-        title: sanitizeMeetingTitle(e.title),
-        scheduled: formatHm(Math.max(0, e.durationMinutes) * 60),
+        title: sanitizeMeetingTitle(meeting.title),
+        scheduled: meeting.scheduledMinutes != null
+          ? formatHm(Math.max(0, meeting.scheduledMinutes) * 60)
+          : null,
+        observed: meeting.observedSeconds != null
+          ? formatHm(Math.max(0, meeting.observedSeconds))
+          : null,
+        attendance: meeting.attendance,
         type,
         confidence,
       }
     })
-  return { count: events.length, items }
+  return {
+    count: report.meetings.length,
+    items,
+    matched: report.matchedCount,
+    calendarOnly: report.calendarOnlyCount,
+    capturedOnly: report.capturedOnlyCount,
+  }
 }
 
 /** Turn stored focus signals into the barest writer block, or null. Only apps
@@ -230,7 +254,10 @@ export function resolveDayEnrichment(
     const focusEnabled = options.focusEnabled ?? focusEnabledFromSettings()
     const notesEnabled = options.notesEnabled ?? notesEnabledFromSettings()
     const shipped = resolveShipped(getExternalSignal<GitActivitySignal>(db, date, 'git')?.payload ?? null)
-    const meetings = resolveMeetings(getExternalSignal<CalendarSignal>(db, date, 'calendar')?.payload ?? null)
+    // Day-level meeting resolution (DEV-189 / issue #3): calendar signal +
+    // captured meeting-app evidence, three honest buckets — never calendar
+    // alone, so a captured meeting without a calendar event still exists.
+    const meetings = resolveMeetings(resolveDayMeetingReport(db, date))
     const focusSessions = resolveFocus(getExternalSignal<FocusAppSignal[]>(db, date, 'focus_app')?.payload ?? null, focusEnabled)
     // notes connector: resolved only when the off-switch is on.
     const meetingNotes = notesEnabled
