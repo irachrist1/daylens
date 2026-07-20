@@ -7,6 +7,7 @@ import assert from 'node:assert/strict'
 import type Database from 'better-sqlite3'
 import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { OPEN_GATE } from './support/connectorContractSuite.ts'
+import { FAKE_CONNECTOR_ID, FAKE_CONNECTOR_MANIFEST } from './support/fakeConnectorProvider.ts'
 import {
   ingestConnectorPage,
   type ConnectorIngestGate,
@@ -16,7 +17,6 @@ import type {
   ConnectorRecordEnvelope,
   ConnectorSyncPage,
 } from '../src/main/connectors/contract.ts'
-import { ICS_CALENDAR_MANIFEST } from '../src/main/connectors/icsCalendar.ts'
 import {
   getConnectorConnection,
   listConnectorRecords,
@@ -27,7 +27,8 @@ import { getExternalSignal } from '../src/main/services/externalSignals.ts'
 import { listEntities, addEntityEvidenceRef } from '../src/main/services/entities/entityRepository.ts'
 import type { CalendarSignal } from '../src/shared/types.ts'
 
-const T0 = new Date(2026, 6, 15, 10, 0, 0).getTime() // 2026-07-15 10:00 local
+const T0 = new Date(2026, 6, 15, 10, 0, 0).getTime()
+const DATE = '2026-07-15'
 
 function meetingEnvelope(overrides: {
   uid: string
@@ -40,18 +41,18 @@ function meetingEnvelope(overrides: {
   const date = `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, '0')}-${String(at.getDate()).padStart(2, '0')}`
   return {
     provenance: {
-      connectorId: 'ics_calendar',
-      accountLabel: 'work.ics',
+      connectorId: FAKE_CONNECTOR_ID,
+      accountLabel: 'fake-account',
       workspace: null,
       sourceRecordId: overrides.uid,
       retrievedAtMs: startMs,
       effectiveAtMs: startMs,
       sensitivity: 'standard',
-      permissionScope: 'file:read',
+      permissionScope: 'records:read',
     },
     entity: {
       kind: 'calendar_event',
-      sourceEventId: `ics:${overrides.uid}`,
+      sourceEventId: `fake:${overrides.uid}`,
       title: overrides.title,
       startMs,
       endMs: startMs + 30 * 60_000,
@@ -73,9 +74,9 @@ function page(records: ConnectorRecordEnvelope[], cursor: string, present?: stri
 
 function connectDb(db: Database.Database): void {
   saveConnectorConnection(db, {
-    connectorId: 'ics_calendar',
-    accountLabel: 'work.ics',
-    config: { filePath: '/home/person/work.ics' },
+    connectorId: FAKE_CONNECTOR_ID,
+    accountLabel: 'fake-account',
+    config: { accountLabel: 'fake-account' },
   })
 }
 
@@ -87,7 +88,7 @@ test('ingestion writes entities (meetings + people by connector id), evidence re
   const db = createProductionTestDatabase()
   try {
     connectDb(db)
-    const result = ingestConnectorPage(db, 'ics_calendar', page([
+    const result = ingestConnectorPage(db, FAKE_CONNECTOR_ID, page([
       meetingEnvelope({
         uid: 'uid-standup',
         title: 'Team standup',
@@ -111,18 +112,18 @@ test('ingestion writes entities (meetings + people by connector id), evidence re
 
     // Evidence refs carry the connector's source identity.
     const refs = db.prepare(`SELECT COUNT(*) AS c FROM entity_evidence_refs WHERE source_type = 'connector' AND source_id = ?`)
-      .get('ics_calendar:uid-standup') as { c: number }
+      .get(`${FAKE_CONNECTOR_ID}:uid-standup`) as { c: number }
     assert.equal(refs.c, 3) // meeting + two people
 
     // The record ledger row exists and the day signal landed.
-    assert.equal(listConnectorRecords(db, 'ics_calendar').length, 1)
-    const signal = getExternalSignal<CalendarSignal>(db, '2026-07-15', 'calendar')
+    assert.equal(listConnectorRecords(db, FAKE_CONNECTOR_ID).length, 1)
+    const signal = getExternalSignal<CalendarSignal>(db, DATE, 'calendar')
     assert.equal(signal?.payload.events.length, 1)
     assert.equal(signal?.payload.events[0].title, 'Team standup')
     assert.equal(signal?.payload.events[0].attendeeCount, 2)
 
     // The cursor committed together with the evidence.
-    assert.equal(getConnectorConnection(db, 'ics_calendar')?.sync_cursor, 'cursor-1')
+    assert.equal(getConnectorConnection(db, FAKE_CONNECTOR_ID)?.sync_cursor, 'cursor-1')
   } finally {
     db.close()
   }
@@ -135,13 +136,13 @@ test('re-ingesting the same records is idempotent — no duplicate entities, ref
     const records = [
       meetingEnvelope({ uid: 'uid-1', title: 'Design review', attendees: [{ connectorId: 'email:ana@example.com', displayName: 'Ana Silva' }] }),
     ]
-    ingestConnectorPage(db, 'ics_calendar', page(records, 'c1'), { gate: OPEN_GATE, nowMs: T0 })
-    ingestConnectorPage(db, 'ics_calendar', page(records, 'c2'), { gate: OPEN_GATE, nowMs: T0 })
+    ingestConnectorPage(db, FAKE_CONNECTOR_ID, page(records, 'c1'), { gate: OPEN_GATE, nowMs: T0 })
+    ingestConnectorPage(db, FAKE_CONNECTOR_ID, page(records, 'c2'), { gate: OPEN_GATE, nowMs: T0 })
 
     assert.deepEqual(entityNames(db, 'meeting'), ['Design review'])
     assert.deepEqual(entityNames(db, 'person'), ['Ana Silva'])
-    assert.equal(listConnectorRecords(db, 'ics_calendar').length, 1)
-    const signal = getExternalSignal<CalendarSignal>(db, '2026-07-15', 'calendar')
+    assert.equal(listConnectorRecords(db, FAKE_CONNECTOR_ID).length, 1)
+    const signal = getExternalSignal<CalendarSignal>(db, DATE, 'calendar')
     assert.equal(signal?.payload.events.length, 1)
   } finally {
     db.close()
@@ -155,20 +156,20 @@ test('the consent gate refuses the page whole — closed consent or a global off
     const noConsent: ConnectorIngestGate = { isConsentCurrent: () => false, connectedSourcesEnabled: () => true }
     const disabled: ConnectorIngestGate = { isConsentCurrent: () => true, connectedSourcesEnabled: () => false }
 
-    const blocked = ingestConnectorPage(db, 'ics_calendar', page([
+    const blocked = ingestConnectorPage(db, FAKE_CONNECTOR_ID, page([
       meetingEnvelope({ uid: 'uid-1', title: 'Secret sync' }),
     ], 'c1'), { gate: noConsent })
     assert.equal(blocked.status, 'blocked_consent')
 
-    const off = ingestConnectorPage(db, 'ics_calendar', page([
+    const off = ingestConnectorPage(db, FAKE_CONNECTOR_ID, page([
       meetingEnvelope({ uid: 'uid-1', title: 'Secret sync' }),
     ], 'c1'), { gate: disabled })
     assert.equal(off.status, 'blocked_disabled')
 
     assert.equal(listEntities(db, { type: 'meeting' }).length, 0)
-    assert.equal(listConnectorRecords(db, 'ics_calendar').length, 0)
-    assert.equal(getExternalSignal(db, '2026-07-15', 'calendar'), null)
-    assert.equal(getConnectorConnection(db, 'ics_calendar')?.sync_cursor, null)
+    assert.equal(listConnectorRecords(db, FAKE_CONNECTOR_ID).length, 0)
+    assert.equal(getExternalSignal(db, DATE, 'calendar'), null)
+    assert.equal(getConnectorConnection(db, FAKE_CONNECTOR_ID)?.sync_cursor, null)
   } finally {
     db.close()
   }
@@ -180,14 +181,14 @@ test('a malformed or credential-bearing record quarantines whole; the rest of th
     connectDb(db)
     const leaky = meetingEnvelope({ uid: 'uid-leak', title: 'Sync ya29.a0AbCdEfGhIjKlMnOpQrStUvWxYz1234' })
     const fine = meetingEnvelope({ uid: 'uid-fine', title: 'Planning' })
-    const result = ingestConnectorPage(db, 'ics_calendar', page([leaky, fine], 'c1'), { gate: OPEN_GATE, nowMs: T0 })
+    const result = ingestConnectorPage(db, FAKE_CONNECTOR_ID, page([leaky, fine], 'c1'), { gate: OPEN_GATE, nowMs: T0 })
     assert.equal(result.ingested, 1)
     assert.equal(result.quarantined, 1)
     assert.deepEqual(entityNames(db, 'meeting'), ['Planning'])
     // Not even partially normalized: no ledger row for the quarantined identity.
-    assert.equal(listConnectorRecords(db, 'ics_calendar').length, 1)
+    assert.equal(listConnectorRecords(db, FAKE_CONNECTOR_ID).length, 1)
     // And nothing credential-shaped anywhere in the stored day signal.
-    const signal = getExternalSignal<CalendarSignal>(db, '2026-07-15', 'calendar')
+    const signal = getExternalSignal<CalendarSignal>(db, DATE, 'calendar')
     assert.equal(signal?.payload.events.length, 1)
   } finally {
     db.close()
@@ -199,22 +200,22 @@ test('a failed sync never advances the cursor and schedules a bounded retry with
   try {
     connectDb(db)
     // Seed a committed cursor first.
-    ingestConnectorPage(db, 'ics_calendar', page([
+    ingestConnectorPage(db, FAKE_CONNECTOR_ID, page([
       meetingEnvelope({ uid: 'uid-1', title: 'Planning' }),
     ], 'cursor-committed'), { gate: OPEN_GATE, nowMs: T0 })
 
     const failing: ConnectorAdapter = {
-      manifest: ICS_CALENDAR_MANIFEST,
+      manifest: FAKE_CONNECTOR_MANIFEST,
       connect: async () => { throw new Error('unused') },
       sync: async () => {
         throw new Error('HTTP 429 from provider: retry with token ghp_abcdefghijklmnopqrstuvwxyz0123456789')
       },
       disconnect: async () => {},
     }
-    const result = await syncConnector(db, 'ics_calendar', { adapter: failing, gate: OPEN_GATE, nowMs: T0 })
+    const result = await syncConnector(db, FAKE_CONNECTOR_ID, { adapter: failing, gate: OPEN_GATE, nowMs: T0 })
     assert.equal(result.status, 'failed')
 
-    const row = getConnectorConnection(db, 'ics_calendar')!
+    const row = getConnectorConnection(db, FAKE_CONNECTOR_ID)!
     assert.equal(row.sync_cursor, 'cursor-committed') // untouched
     assert.equal(row.consecutive_failures, 1)
     assert.ok(row.next_retry_at != null && row.next_retry_at > T0)
@@ -230,7 +231,7 @@ test('provider deletions tombstone locally and remove derived data — independe
   const db = createProductionTestDatabase()
   try {
     connectDb(db)
-    ingestConnectorPage(db, 'ics_calendar', page([
+    ingestConnectorPage(db, FAKE_CONNECTOR_ID, page([
       meetingEnvelope({ uid: 'uid-keep', title: 'Kept meeting' }),
       meetingEnvelope({ uid: 'uid-gone', title: 'Deleted meeting' }),
       meetingEnvelope({ uid: 'uid-shared', title: 'Shared meeting' }),
@@ -239,10 +240,10 @@ test('provider deletions tombstone locally and remove derived data — independe
     // Give the "shared" meeting INDEPENDENT support (as if a transcript source
     // also saw it) — deletion must not take it.
     const shared = listEntities(db, { type: 'meeting' }).find((entity) => entity.name === 'Shared meeting')!
-    addEntityEvidenceRef(db, shared.id, { sourceType: 'external_signal', sourceId: '2026-07-15:notes' })
+    addEntityEvidenceRef(db, shared.id, { sourceType: 'external_signal', sourceId: `${DATE}:notes` })
 
     // Next full sync: uid-gone and uid-shared vanished from the source.
-    const result = ingestConnectorPage(db, 'ics_calendar', page([
+    const result = ingestConnectorPage(db, FAKE_CONNECTOR_ID, page([
       meetingEnvelope({ uid: 'uid-keep', title: 'Kept meeting' }),
     ], 'c2', ['uid-keep']), { gate: OPEN_GATE, nowMs: T0 + 1000 })
     assert.equal(result.tombstoned, 2)
@@ -253,12 +254,12 @@ test('provider deletions tombstone locally and remove derived data — independe
     assert.ok(names.includes('Shared meeting'), 'independent evidence keeps the entity alive')
 
     // The day signal lost exactly the unsupported events.
-    const signal = getExternalSignal<CalendarSignal>(db, '2026-07-15', 'calendar')
+    const signal = getExternalSignal<CalendarSignal>(db, DATE, 'calendar')
     const titles = signal?.payload.events.map((event) => event.title).sort()
     assert.deepEqual(titles, ['Kept meeting'])
 
     // Tombstones are explicit rows, not silent deletion.
-    const all = listConnectorRecords(db, 'ics_calendar', { includeTombstoned: true })
+    const all = listConnectorRecords(db, FAKE_CONNECTOR_ID, { includeTombstoned: true })
     assert.equal(all.length, 3)
     assert.equal(all.filter((row) => row.tombstoned_at != null).length, 2)
   } finally {

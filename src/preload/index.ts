@@ -30,7 +30,6 @@ import type {
   AIProviderMode,
   BrowserLinkResult,
   BillingAccessSnapshot,
-  ConnectorId,
   ConnectorListing,
   BillingUsageReport,
   IntercomIdentity,
@@ -509,20 +508,10 @@ const api = {
       ipcRenderer.invoke(IPC.FILE_ACCESS.LIST_DISCLOSURES, payload),
   },
   connectors: {
-    // DEV-186: Settings → Connections. The renderer only ever receives the
-    // ConnectorListing projection — never credentials, cursors, or paths.
+    // DEV-186: Settings → Connections listing. The renderer only ever
+    // receives the ConnectorListing projection — never credentials, cursors,
+    // or paths. Lifecycle IPC arrives with the first connectable provider.
     list: (): Promise<ConnectorListing[]> => ipcRenderer.invoke(IPC.CONNECTORS.LIST),
-    connect: (payload: { connectorId: ConnectorId; config?: Record<string, unknown> }): Promise<{
-      summary: { status: string; ingested: number; quarantined: number; tombstoned: number; error?: string }
-      connectors: ConnectorListing[]
-    }> => ipcRenderer.invoke(IPC.CONNECTORS.CONNECT, payload),
-    disconnect: (payload: { connectorId: ConnectorId; deleteData?: boolean }): Promise<{ connectors: ConnectorListing[] }> =>
-      ipcRenderer.invoke(IPC.CONNECTORS.DISCONNECT, payload),
-    syncNow: (payload: { connectorId: ConnectorId }): Promise<{
-      summary: { status: string; ingested: number; quarantined: number; tombstoned: number; error?: string }
-      connectors: ConnectorListing[]
-    }> => ipcRenderer.invoke(IPC.CONNECTORS.SYNC_NOW, payload),
-    pickIcsFile: (): Promise<string | null> => ipcRenderer.invoke(IPC.CONNECTORS.PICK_ICS_FILE),
   },
   contextPackets: {
     // DEV-181: the recorded, deterministic bundle behind an AI exchange.

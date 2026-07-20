@@ -3362,7 +3362,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       content = (
         <SectionPage
           title="Connections"
-          description="External sources that add what this machine can't see — meetings, commits, issues. Every connection is read-only, consent-gated, and fully disconnectable: delete a source's data and everything it alone supported goes with it."
+          description="External sources that will add what this machine can't see — meetings, commits, issues. Every connection is read-only, consent-gated, and fully disconnectable; each becomes connectable here as its adapter ships."
           maxWidth={760}
         >
           <ConnectionsSection />

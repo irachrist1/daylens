@@ -1447,14 +1447,15 @@ export interface MeetingNotesSignal {
 }
 
 // ─── Connectors (connectors.md, DEV-186) ────────────────────────────────────
-// The connected-sources foundation. Every provider registers a manifest; only
-// providers with a working adapter are `available` today. The renderer sees
-// ONLY this listing shape — credentials, cursors, and raw provider errors
-// never cross the IPC boundary (spec: "The interface does not display raw
-// tokens, internal cursors, or provider errors that reveal secrets").
+// The connected-sources foundation. Every provider registers a manifest; the
+// contract is proven by a fake provider in the test suite (the ticket's
+// deliverable) and real adapters arrive with DEV-188+, flipping `available`.
+// The renderer sees ONLY this listing shape — credentials, cursors, and raw
+// provider errors never cross the IPC boundary (spec: "The interface does not
+// display raw tokens, internal cursors, or provider errors that reveal
+// secrets").
 
 export type ConnectorId =
-  | 'ics_calendar'
   | 'google_calendar'
   | 'outlook_calendar'
   | 'github'
@@ -2458,11 +2459,9 @@ export const IPC = {
     LIST_DISCLOSURES: 'file-access:list-disclosures',
   },
   CONNECTORS: {
+    // Listing only in this slice — lifecycle IPC (connect/disconnect/sync)
+    // arrives with the first connectable provider.
     LIST: 'connectors:list',
-    CONNECT: 'connectors:connect',
-    DISCONNECT: 'connectors:disconnect',
-    SYNC_NOW: 'connectors:sync-now',
-    PICK_ICS_FILE: 'connectors:pick-ics-file',
   },
   CONTEXT_PACKETS: {
     GET: 'context-packets:get',

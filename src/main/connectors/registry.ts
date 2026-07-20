@@ -1,18 +1,18 @@
-// The connector registry (DEV-186). One place that knows every connector —
-// the working adapters AND the manifest-only entries for the providers the
-// Connections wave brings next (DEV-188/190/191/192/193). Settings lists all
-// of them: a manifest-only connector shows its real scopes and
-// what-it-brings copy today and gains a Connect button the day its adapter
-// lands, without the page changing shape.
+// The connector registry (DEV-186). One place that knows every connector the
+// Connections wave brings: Google Calendar, Outlook Calendar, GitHub, Linear,
+// Granola. This ticket ships the CONTRACT — proven end to end by the fake
+// provider in the test suite — so every entry is manifest-only
+// (`available: false`) until its adapter lands and calls
+// registerConnectorAdapter. Settings lists them today with their real
+// read-only scopes and what-it-brings copy; the page gains lifecycle
+// affordances the day a provider becomes connectable.
 
 import type { ConnectorId } from '@shared/types'
 import type { ConnectorAdapter, ConnectorManifest } from './contract'
-import { createIcsCalendarAdapter } from './icsCalendar'
 
 const HOUR = 60 * 60 * 1000
 
 // Upcoming direct adapters: exact planned read-only scopes, honest copy.
-// `available: false` — listed, not connectable, until their adapter ships.
 const UPCOMING_MANIFESTS: ConnectorManifest[] = [
   {
     id: 'google_calendar',
@@ -109,6 +109,8 @@ const UPCOMING_MANIFESTS: ConnectorManifest[] = [
 const adapters = new Map<ConnectorId, ConnectorAdapter>()
 const manifests = new Map<ConnectorId, ConnectorManifest>()
 
+/** A provider ticket calls this with its working adapter; the manifest flips
+ *  to the adapter's own (available: true) and Settings gains the connector. */
 export function registerConnectorAdapter(adapter: ConnectorAdapter): void {
   adapters.set(adapter.manifest.id, adapter)
   manifests.set(adapter.manifest.id, adapter.manifest)
@@ -116,7 +118,6 @@ export function registerConnectorAdapter(adapter: ConnectorAdapter): void {
 
 function ensureRegistered(): void {
   if (manifests.size > 0) return
-  registerConnectorAdapter(createIcsCalendarAdapter())
   for (const manifest of UPCOMING_MANIFESTS) {
     manifests.set(manifest.id, manifest)
   }

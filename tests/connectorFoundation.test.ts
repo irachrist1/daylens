@@ -1,17 +1,23 @@
-// Connector foundation (DEV-186): the registry knows the whole Connections
-// wave, every manifest passes contract validation, backoff stays bounded and
-// respects provider reset hints, the record gate quarantines malformed and
-// credential-bearing envelopes, and the store refuses credential-shaped
+// Connector foundation (DEV-186): the registry knows the whole upcoming
+// provider list, every manifest passes contract validation, backoff stays
+// bounded and respects provider reset hints, the record gate quarantines
+// malformed and credential-bearing envelopes, the evidence projection
+// satisfies the shared contract, and the store refuses credential-shaped
 // connection config.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   computeBackoffMs,
+  toConnectedEvidenceEnvelope,
   validateConnectorManifest,
   validateRecordEnvelope,
-  type ConnectorManifest,
   type ConnectorRecordEnvelope,
 } from '../src/main/connectors/contract.ts'
+import {
+  CONNECTED_SOURCE_EVIDENCE_KINDS,
+  isEvidenceConfidence,
+  isEvidenceSensitivity,
+} from '../src/main/core/evidence/envelope.ts'
 import {
   getConnectorAdapter,
   getConnectorManifest,
@@ -19,39 +25,28 @@ import {
 } from '../src/main/connectors/registry.ts'
 import { saveConnectorConnection } from '../src/main/connectors/store.ts'
 import { createProductionTestDatabase } from './support/testDatabase.ts'
+import { FAKE_CONNECTOR_ID, FAKE_CONNECTOR_MANIFEST } from './support/fakeConnectorProvider.ts'
 
-const WAVE: Array<{ id: string; available: boolean }> = [
-  { id: 'ics_calendar', available: true },
-  { id: 'google_calendar', available: false },
-  { id: 'outlook_calendar', available: false },
-  { id: 'github', available: false },
-  { id: 'linear', available: false },
-  { id: 'granola', available: false },
-]
+const UPCOMING = ['google_calendar', 'outlook_calendar', 'github', 'linear', 'granola'] as const
 
-test('the registry lists the whole Connections wave with valid, read-only manifests', () => {
+test('the registry lists the upcoming providers with valid, read-only, manifest-only entries', () => {
   const manifests = listConnectorManifests()
-  assert.equal(manifests.length, WAVE.length)
-  for (const expected of WAVE) {
-    const manifest = manifests.find((entry) => entry.id === expected.id)
-    assert.ok(manifest, `${expected.id} must be listed`)
-    assert.equal(manifest.available, expected.available, `${expected.id} availability`)
-    assert.deepEqual(validateConnectorManifest(manifest), [], `${expected.id} manifest must validate`)
+  assert.equal(manifests.length, UPCOMING.length)
+  for (const id of UPCOMING) {
+    const manifest = manifests.find((entry) => entry.id === id)
+    assert.ok(manifest, `${id} must be listed`)
+    assert.equal(manifest.available, false, `${id} is manifest-only until its adapter lands`)
+    assert.deepEqual(validateConnectorManifest(manifest), [], `${id} manifest must validate`)
     assert.equal(manifest.readOnly, true)
-    assert.ok(manifest.whatItBrings.length > 20, `${expected.id} needs real what-it-brings copy`)
-    assert.ok(manifest.scopes.every((scope) => scope.grants.length > 10), `${expected.id} scopes need plain-language copy`)
+    assert.ok(manifest.whatItBrings.length > 20, `${id} needs real what-it-brings copy`)
+    assert.ok(manifest.scopes.every((scope) => scope.grants.length > 10), `${id} scopes need plain-language copy`)
+    // No adapter ships for a manifest-only entry.
+    assert.equal(getConnectorAdapter(id), null)
   }
-  // Working adapters exist exactly for the available manifests.
-  for (const expected of WAVE) {
-    const adapter = getConnectorAdapter(expected.id as ConnectorManifest['id'])
-    assert.equal(adapter != null, expected.available, `${expected.id} adapter presence`)
-  }
-  // Available connectors sort first so Settings leads with what works today.
-  assert.equal(manifests[0].id, 'ics_calendar')
 })
 
 test('manifest validation rejects write scopes, missing copy, and unbounded sync', () => {
-  const base = getConnectorManifest('ics_calendar')!
+  const base = getConnectorManifest('google_calendar')!
   assert.ok(validateConnectorManifest({
     ...base,
     scopes: [{ scope: 'repo:write', grants: 'writes things' }],
@@ -59,6 +54,8 @@ test('manifest validation rejects write scopes, missing copy, and unbounded sync
   assert.ok(validateConnectorManifest({ ...base, scopes: [] }).length > 0)
   assert.ok(validateConnectorManifest({ ...base, whatItBrings: '' }).length > 0)
   assert.ok(validateConnectorManifest({ ...base, lookbackDays: 10_000 }).some((p) => p.includes('bounded')))
+  // The fake provider's manifest passes the same validation as real ones.
+  assert.deepEqual(validateConnectorManifest(FAKE_CONNECTOR_MANIFEST), [])
 })
 
 test('backoff grows exponentially, stays bounded, and honors provider reset hints', () => {
@@ -76,16 +73,16 @@ test('backoff grows exponentially, stays bounded, and honors provider reset hint
 function validEnvelope(): ConnectorRecordEnvelope {
   return {
     provenance: {
-      connectorId: 'ics_calendar',
-      accountLabel: 'work.ics',
+      connectorId: FAKE_CONNECTOR_ID,
+      accountLabel: 'fake-account',
       workspace: null,
-      sourceRecordId: 'uid-1',
+      sourceRecordId: 'rec-1',
       retrievedAtMs: Date.now(),
       effectiveAtMs: Date.now(),
       sensitivity: 'standard',
-      permissionScope: 'file:read',
+      permissionScope: 'records:read',
     },
-    entity: { kind: 'calendar_event', sourceEventId: 'ics:uid-1', title: 'Weekly sync' },
+    entity: { kind: 'calendar_event', sourceEventId: 'fake:rec-1', title: 'Weekly sync' },
   }
 }
 
@@ -106,15 +103,29 @@ test('the record gate quarantines malformed and credential-bearing envelopes who
   assert.ok(validateRecordEnvelope(leaky).some((problem) => problem.includes('credential')))
 
   // …but legitimately long OPAQUE identity fields are exempt: provider record
-  // ids (Outlook UIDs are 100+ hex chars) must not be false-positived.
+  // ids are often 100+ hex characters and must not be false-positived.
   const longUid = validEnvelope()
   longUid.entity = {
     kind: 'calendar_event',
-    sourceEventId: `ics:${'0123456789abcdef'.repeat(8)}`,
+    sourceEventId: `fake:${'0123456789abcdef'.repeat(8)}`,
     title: 'Design review',
   }
   longUid.provenance.sourceRecordId = '0123456789abcdef'.repeat(8)
   assert.deepEqual(validateRecordEnvelope(longUid), [])
+})
+
+test('normalized records project onto the shared evidence contract, deterministically', () => {
+  const record = validEnvelope()
+  const evidence = toConnectedEvidenceEnvelope(record, 'device-1')
+  assert.ok((CONNECTED_SOURCE_EVIDENCE_KINDS as readonly string[]).includes(evidence.kind))
+  assert.ok(isEvidenceSensitivity(evidence.sensitivity))
+  assert.ok(isEvidenceConfidence(evidence.confidence))
+  assert.equal(evidence.source.adapter, `connector:${FAKE_CONNECTOR_ID}`)
+  assert.equal(evidence.source.sourceRecordId, 'rec-1')
+  assert.equal(evidence.provenance.method, 'connector_sync')
+  assert.equal(evidence.provenance.permissionScope, 'records:read')
+  // Idempotency is visible in the identity: same record, same evidence id.
+  assert.equal(evidence.evidenceId, toConnectedEvidenceEnvelope(record, 'device-1').evidenceId)
 })
 
 test('the connection store refuses credential-shaped config values', () => {
@@ -127,9 +138,9 @@ test('the connection store refuses credential-shaped config values', () => {
     }), /credential/i)
     // A normal, credential-free config is accepted.
     const row = saveConnectorConnection(db, {
-      connectorId: 'ics_calendar',
-      accountLabel: 'work.ics',
-      config: { filePath: '/home/person/calendars/work.ics' },
+      connectorId: FAKE_CONNECTOR_ID,
+      accountLabel: 'fake-account',
+      config: { accountLabel: 'fake-account' },
     })
     assert.equal(row.status, 'connected')
   } finally {

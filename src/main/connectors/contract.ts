@@ -15,7 +15,12 @@
 
 import type { ConnectorAuthState, ConnectorId } from '@shared/types'
 import { containsCredential, findCredentialPattern } from '@shared/credentialPatterns'
+import { CAPTURE_POLICY_VERSION } from '@shared/captureConsent'
 import type { ConnectedEnvelope } from '../services/entities/entityAdoption'
+import type {
+  ConnectedSourceEvidenceKind,
+  EvidenceEnvelope,
+} from '../core/evidence/envelope'
 
 // ─── Manifest ────────────────────────────────────────────────────────────────
 
@@ -143,11 +148,22 @@ export interface ConnectorConnectResult {
   config: Record<string, unknown>
 }
 
+/** Connection health as an adapter can cheaply observe it (connectors.md:
+ *  `inspectConnection`). Plain-language summary only — never a provider body
+ *  that could carry secrets. */
+export interface ConnectorHealth {
+  state: 'ok' | 'needs_attention'
+  summary: string
+}
+
 export interface ConnectorAdapter {
   manifest: ConnectorManifest
   /** Validate the connect input and produce the persisted connection state.
    *  Must throw a plain-language Error when the input cannot work. */
   connect(input: ConnectorConnectInput): Promise<ConnectorConnectResult>
+  /** Cheap health probe: is the source still reachable/authorized? Optional —
+   *  connections without it report health from sync bookkeeping alone. */
+  inspect?(connection: ConnectorConnection): Promise<ConnectorHealth>
   /** Read one page of records since `cursor`. Never writes anything. */
   sync(request: ConnectorSyncRequest): Promise<ConnectorSyncPage>
   /** Provider-side cleanup on disconnect (revoke token, close broker
@@ -233,6 +249,54 @@ export function validateRecordEnvelope(record: ConnectorRecordEnvelope): string[
     }
   }
   return problems
+}
+
+// ─── Canonical evidence projection ───────────────────────────────────────────
+
+const CONNECTED_ENVELOPE_TO_EVIDENCE_KIND: Record<ConnectedEnvelope['kind'], ConnectedSourceEvidenceKind> = {
+  calendar_event: 'calendar_event',
+  meeting_record: 'meeting_record',
+  repository_activity: 'repository_activity',
+  document_reference: 'document_reference',
+  message_reference: 'message_reference',
+}
+
+/**
+ * Project a normalized connector record onto the canonical evidence contract
+ * (src/main/core/evidence/envelope.ts) — the application-wide shape every
+ * adapter's observations satisfy. The evidence id is DETERMINISTIC from the
+ * source-native identity, so re-syncing the same record yields the same
+ * evidence identity: idempotency is visible in the projection itself.
+ */
+export function toConnectedEvidenceEnvelope(
+  record: ConnectorRecordEnvelope,
+  deviceId: string,
+): EvidenceEnvelope {
+  const { provenance, entity } = record
+  const startMs = 'startMs' in entity ? entity.startMs ?? null : null
+  const endMs = 'endMs' in entity ? entity.endMs ?? null : null
+  return {
+    evidenceId: `cne:${provenance.connectorId}:${provenance.sourceRecordId}`,
+    kind: CONNECTED_ENVELOPE_TO_EVIDENCE_KIND[entity.kind],
+    source: {
+      adapter: `connector:${provenance.connectorId}`,
+      deviceId,
+      sourceRecordId: provenance.sourceRecordId,
+    },
+    observedAtMs: provenance.effectiveAtMs ?? provenance.retrievedAtMs,
+    monotonicNs: null,
+    interval: startMs != null ? { startMs, endMs } : null,
+    subjects: {},
+    sensitivity: provenance.sensitivity,
+    confidence: 'observed',
+    provenance: {
+      method: 'connector_sync',
+      permissionScope: provenance.permissionScope,
+      policyVersion: CAPTURE_POLICY_VERSION,
+    },
+    schemaVersion: 1,
+    payload: entity,
+  }
 }
 
 // ─── Backoff ─────────────────────────────────────────────────────────────────

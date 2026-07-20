@@ -16,7 +16,7 @@ import { ingestConnectorPage } from '../src/main/connectors/ingest.ts'
 import { disconnectConnector } from '../src/main/connectors/service.ts'
 import { purgeConnectorDerivedData } from '../src/main/connectors/purge.ts'
 import type { ConnectorRecordEnvelope, ConnectorAdapter } from '../src/main/connectors/contract.ts'
-import { ICS_CALENDAR_MANIFEST } from '../src/main/connectors/icsCalendar.ts'
+import { FAKE_CONNECTOR_ID, FAKE_CONNECTOR_MANIFEST } from './support/fakeConnectorProvider.ts'
 import {
   getConnectorConnection,
   listConnectorRecords,
@@ -32,18 +32,18 @@ const T0 = new Date(2026, 6, 15, 10, 0, 0).getTime()
 function envelope(uid: string, title: string, attendee?: { connectorId: string; displayName: string }): ConnectorRecordEnvelope {
   return {
     provenance: {
-      connectorId: 'ics_calendar',
-      accountLabel: 'work.ics',
+      connectorId: FAKE_CONNECTOR_ID,
+      accountLabel: 'fake-account',
       workspace: null,
       sourceRecordId: uid,
       retrievedAtMs: T0,
       effectiveAtMs: T0,
       sensitivity: 'standard',
-      permissionScope: 'file:read',
+      permissionScope: 'records:read',
     },
     entity: {
       kind: 'calendar_event',
-      sourceEventId: `ics:${uid}`,
+      sourceEventId: `fake:${uid}`,
       title,
       startMs: T0,
       attendees: attendee ? [attendee] : [],
@@ -54,11 +54,11 @@ function envelope(uid: string, title: string, attendee?: { connectorId: string; 
 
 function seed(db: Database.Database): void {
   saveConnectorConnection(db, {
-    connectorId: 'ics_calendar',
-    accountLabel: 'work.ics',
-    config: { filePath: '/home/person/work.ics' },
+    connectorId: FAKE_CONNECTOR_ID,
+    accountLabel: 'fake-account',
+    config: { accountLabel: 'fake-account' },
   })
-  ingestConnectorPage(db, 'ics_calendar', {
+  ingestConnectorPage(db, FAKE_CONNECTOR_ID, {
     records: [
       envelope('uid-1', 'Weekly planning', { connectorId: 'email:ana@example.com', displayName: 'Ana Silva' }),
       envelope('uid-2', 'Board review'),
@@ -78,8 +78,8 @@ function fakeSecretStore(): ConnectorSecretStore & { secrets: Map<string, string
 }
 
 const noopAdapter: ConnectorAdapter = {
-  manifest: ICS_CALENDAR_MANIFEST,
-  connect: async () => ({ accountLabel: 'work.ics', config: {} }),
+  manifest: FAKE_CONNECTOR_MANIFEST,
+  connect: async () => ({ accountLabel: 'fake-account', config: {} }),
   sync: async () => ({ records: [], nextCursor: null }),
   disconnect: async () => {},
 }
@@ -89,20 +89,20 @@ test('disconnect KEEPING data: sync stops, credentials clear, evidence stays', a
   try {
     seed(db)
     const store = fakeSecretStore()
-    store.secrets.set('connector-ics_calendar-token', 'xoxb-000000000000-fakefakefake')
+    store.secrets.set('connector-fake_provider-token', 'xoxb-000000000000-fakefakefake')
 
-    await disconnectConnector(db, 'ics_calendar', {
+    await disconnectConnector(db, FAKE_CONNECTOR_ID, {
       deleteData: false,
       secretStore: store,
       adapter: noopAdapter,
     })
 
-    assert.equal(getConnectorConnection(db, 'ics_calendar')?.status, 'disconnected')
+    assert.equal(getConnectorConnection(db, FAKE_CONNECTOR_ID)?.status, 'disconnected')
     assert.equal(store.secrets.size, 0, 'credentials are deleted on disconnect')
     // The imported evidence remains — the person chose to keep it.
     assert.equal(listEntities(db, { type: 'meeting' }).length, 2)
     assert.ok(getExternalSignal(db, '2026-07-15', 'calendar'))
-    assert.equal(listConnectorRecords(db, 'ics_calendar').length, 2)
+    assert.equal(listConnectorRecords(db, FAKE_CONNECTOR_ID).length, 2)
   } finally {
     db.close()
   }
@@ -117,7 +117,7 @@ test('disconnect DELETING data: every solely-supported derivative goes; independ
     const board = listEntities(db, { type: 'meeting' }).find((entity) => entity.name === 'Board review')!
     addEntityEvidenceRef(db, board.id, { sourceType: 'external_signal', sourceId: '2026-07-15:notes' })
 
-    await disconnectConnector(db, 'ics_calendar', {
+    await disconnectConnector(db, FAKE_CONNECTOR_ID, {
       deleteData: true,
       userDataPath,
       secretStore: fakeSecretStore(),
@@ -127,9 +127,9 @@ test('disconnect DELETING data: every solely-supported derivative goes; independ
     const meetings = listEntities(db, { type: 'meeting' }).map((entity) => entity.name)
     assert.deepEqual(meetings, ['Board review'], 'independently supported evidence survives')
     assert.equal(listEntities(db, { type: 'person' }).length, 0, 'people only this source knew are retired')
-    assert.equal(listConnectorRecords(db, 'ics_calendar', { includeTombstoned: true }).length, 0)
+    assert.equal(listConnectorRecords(db, FAKE_CONNECTOR_ID, { includeTombstoned: true }).length, 0)
     assert.equal(getExternalSignal(db, '2026-07-15', 'calendar'), null, 'the day-signal events are removed')
-    assert.equal(getConnectorConnection(db, 'ics_calendar')?.status, 'disconnected')
+    assert.equal(getConnectorConnection(db, FAKE_CONNECTOR_ID)?.status, 'disconnected')
 
     // The deletion is journaled for backup-restore replay.
     const entries = readDeletionJournal(userDataPath)
@@ -153,7 +153,7 @@ test('deletion-journal replay re-purges a restored backup — deleted connector 
     const liveDb = createProductionTestDatabase()
     try {
       seed(liveDb)
-      await disconnectConnector(liveDb, 'ics_calendar', {
+      await disconnectConnector(liveDb, FAKE_CONNECTOR_ID, {
         deleteData: true,
         userDataPath,
         secretStore: fakeSecretStore(),
@@ -169,7 +169,7 @@ test('deletion-journal replay re-purges a restored backup — deleted connector 
     assert.ok(result.replayed >= 1)
     assert.equal(listEntities(backupDb, { type: 'meeting' }).length, 0)
     assert.equal(listEntities(backupDb, { type: 'person' }).length, 0)
-    assert.equal(listConnectorRecords(backupDb, 'ics_calendar', { includeTombstoned: true }).length, 0)
+    assert.equal(listConnectorRecords(backupDb, FAKE_CONNECTOR_ID, { includeTombstoned: true }).length, 0)
     assert.equal(getExternalSignal(backupDb, '2026-07-15', 'calendar'), null)
 
     // Replay is idempotent: running it again changes nothing and fails nothing.
@@ -184,7 +184,7 @@ test('deletion-journal replay re-purges a restored backup — deleted connector 
 test('purge is a no-op on a database that never had the connector', () => {
   const db = createProductionTestDatabase()
   try {
-    const result = purgeConnectorDerivedData(db, 'ics_calendar')
+    const result = purgeConnectorDerivedData(db, FAKE_CONNECTOR_ID)
     assert.equal(result.recordsRemoved, 0)
   } finally {
     db.close()
