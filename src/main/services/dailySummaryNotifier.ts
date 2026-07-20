@@ -25,9 +25,13 @@ import {
   workRhythmWindows,
   canAttemptAiNarrative,
   recordAiNarrativeAttempt,
+  aiNarrativeAttemptsExhausted,
   type AiAttemptKind,
   type DailyNotifierState,
 } from '../lib/dailySummaryScheduler'
+import { factOnlyRecapLine } from '../lib/wrappedNarrative'
+import { buildDayWrapFacts } from '../../renderer/lib/dayWrapScenes'
+import { getWrapProviderState } from './aiOrchestration'
 
 const MAX_TRACKED_RECAP_DATES = 21
 
@@ -140,6 +144,21 @@ function secondsTrackedOn(date: string): number {
   return sessions.reduce((sum, s) => sum + s.durationSeconds, 0)
 }
 
+// The deterministic floor of the evening recap: a line made only of the day's
+// shared corrected facts (the same payload every other surface reads), or null
+// when the day is too thin to say anything honest. Fallback order when AI
+// can't write the recap: this fact-only line, then silence — never a guess.
+function deterministicRecapLine(dateStr: string): string | null {
+  try {
+    const today = localDateString(new Date())
+    const liveSession = dateStr === today ? getCurrentSession() : null
+    const payload = getTimelineDayPayload(getDb(), dateStr, liveSession)
+    return factOnlyRecapLine(buildDayWrapFacts(payload))
+  } catch {
+    return null
+  }
+}
+
 async function checkDailySummary(): Promise<void> {
   if (dailySummaryPreparing) return
 
@@ -161,11 +180,30 @@ async function checkDailySummary(): Promise<void> {
 
   dailySummaryPreparing = true
   try {
-    if (!withAiAttemptBudget('evening-wrap', today)) return
-    // No-credits rule: only fire when the body is real AI output (§7).
-    const teaser = await tryGetWrappedTeaser(today)
-    if (!teaser) return
-    notifyWithNavigation('Your evening wrap', teaser, buildEveningWrapRoute(today))
+    // With a connected provider, the recap is written from the current facts
+    // (attempt-budgeted); the fact-only line steps in only once no written
+    // recap can come today. Without one, the fact-only line IS the recap.
+    const providerConnected = await getWrapProviderState()
+      .then((s) => s.connected)
+      .catch(() => false)
+
+    if (providerConnected && withAiAttemptBudget('evening-wrap', today)) {
+      const teaser = await tryGetWrappedTeaser(today)
+      if (teaser) {
+        notifyWithNavigation('Your evening wrap', teaser, buildEveningWrapRoute(today))
+        writeState({ ...readState(), lastDailySummaryDate: today })
+        return
+      }
+    }
+
+    // No AI recap this round. If a retry could still produce one later in the
+    // window, hold the notification for it; otherwise end the day's window
+    // with the deterministic fact-only line (then silence when even that has
+    // nothing honest to say).
+    if (providerConnected && !aiNarrativeAttemptsExhausted(readState(), 'evening-wrap', today)) return
+    const line = deterministicRecapLine(today)
+    if (!line) return
+    notifyWithNavigation('Your evening wrap', line, buildEveningWrapRoute(today))
     writeState({ ...readState(), lastDailySummaryDate: today })
   } finally {
     dailySummaryPreparing = false
@@ -254,8 +292,10 @@ export async function fireTestDailySummaryNotification(
       return { ok: true, route }
     }
 
-    const teaser = await tryGetWrappedTeaser(today)
-    if (!teaser) return { ok: false, reason: 'no-ai-content' }
+    // Same fallback order as the real evening check: the written recap when a
+    // provider can produce one, else the deterministic fact-only line.
+    const teaser = (await tryGetWrappedTeaser(today)) ?? deterministicRecapLine(today)
+    if (!teaser) return { ok: false, reason: 'no-recap-content' }
     const route = buildEveningWrapRoute(today)
     notifyWithNavigation('Your evening wrap', teaser, route)
     return { ok: true, route }

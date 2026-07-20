@@ -11,9 +11,12 @@ import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { clearTestDb, setTestDb } from './support/database-stub.mjs'
 import { getWrappedNarrative } from '../src/main/services/wrappedNarrative.ts'
 import { resolveDayEnrichment } from '../src/main/services/enrichmentResolve.ts'
-import { computeFactsHash } from '../src/main/lib/wrappedNarrative.ts'
+import { buildFallbackNarrative, computeFactsHash, factOnlyRecapLine } from '../src/main/lib/wrappedNarrative.ts'
+import { buildDayFactTable, firstUngroundedNumericToken, groundingFormsForRuntime } from '../src/main/lib/wrapFactTable.ts'
+import { aiNarrativeAttemptsExhausted, recordAiNarrativeAttempt, AI_ATTEMPT_MAX_PER_DAY, AI_ATTEMPT_MIN_GAP_MS, type DailyNotifierState } from '../src/main/lib/dailySummaryScheduler.ts'
 import { putStoredWrappedNarrative, getStoredWrappedNarrative } from '../src/main/db/wrappedNarrativeStore.ts'
-import { buildDayWrapFacts } from '../src/renderer/lib/dayWrapScenes.ts'
+import { buildDayWrapFacts, formatHm } from '../src/renderer/lib/dayWrapScenes.ts'
+import { planDayWrapSlides, resolveSlideLine } from '../src/renderer/lib/wrapDeck.ts'
 import { DEFAULT_TIMELINE_BLOCK_REVIEW } from '../src/shared/timelineReview.ts'
 import type { AIWrappedNarrative, AppCategory, DayTimelinePayload, WorkContextBlock } from '../src/shared/types.ts'
 
@@ -180,5 +183,75 @@ test('an empty day serves the honest empty-day narrative, never invented content
   } finally {
     clearTestDb()
     db.close()
+  }
+})
+
+// ─── The fact-only fallback line (fallback order: fact-only, then silence) ───
+
+test('the fact-only recap line speaks only numbers the day fact table grounds', () => {
+  const payload = workingDayPayload()
+  const facts = buildDayWrapFacts(payload)
+  const line = factOnlyRecapLine(facts)
+  assert.ok(line, 'a real day has a fact-only line')
+  assert.ok(line!.includes(formatHm(facts.activeSeconds)), 'the line carries the shared corrected total')
+
+  const table = buildDayFactTable(facts, payload.blocks, facts.date, null)
+  const forms = groundingFormsForRuntime(table, '')
+  assert.equal(
+    firstUngroundedNumericToken(line!, forms),
+    null,
+    'every number in the notification line is a fact-table fact',
+  )
+})
+
+test('the fact-only recap line reflects a deletion: corrected facts in, corrected line out', () => {
+  const fullDay = buildDayWrapFacts(workingDayPayload())
+  const afterDeletion = buildDayWrapFacts(makeDayPayload([
+    makeBlock({ label: 'Auth refactor', start: localMs(9), durationSeconds: 150 * 60 }),
+  ]))
+  const lineBefore = factOnlyRecapLine(fullDay)
+  const lineAfter = factOnlyRecapLine(afterDeletion)
+  assert.ok(lineBefore && lineAfter)
+  assert.ok(lineBefore!.includes(formatHm(fullDay.activeSeconds)))
+  assert.ok(lineAfter!.includes(formatHm(afterDeletion.activeSeconds)))
+  assert.notEqual(lineBefore, lineAfter, 'deleted evidence changes the notification line with the day')
+})
+
+test('a day too thin to recap yields no line at all: silence over invention', () => {
+  assert.equal(factOnlyRecapLine(buildDayWrapFacts(makeDayPayload([]))), null)
+  const barely = buildDayWrapFacts(makeDayPayload([
+    makeBlock({ label: 'Email', start: localMs(9), durationSeconds: 3 * 60 }),
+  ]))
+  assert.equal(factOnlyRecapLine(barely), null, 'below the quality floor there is nothing honest to push')
+  // The 45-minute delivery gate (NOTIFY_MIN_SECONDS, tested with the
+  // scheduler) keeps the partial band from ever reaching this line builder.
+})
+
+test('the AI budget distinguishes waiting for a retry from being spent for the day', () => {
+  const t0 = Date.parse('2026-04-22T18:00:00')
+  let state: DailyNotifierState = {}
+  assert.equal(aiNarrativeAttemptsExhausted(state, 'evening-wrap', TEST_DATE), false)
+  state = recordAiNarrativeAttempt(state, 'evening-wrap', TEST_DATE, t0)
+  // One failed attempt: not exhausted — the recap window holds for a retry
+  // instead of firing the fact-only line early.
+  assert.equal(aiNarrativeAttemptsExhausted(state, 'evening-wrap', TEST_DATE), false)
+  for (let i = 1; i < AI_ATTEMPT_MAX_PER_DAY; i += 1) {
+    state = recordAiNarrativeAttempt(state, 'evening-wrap', TEST_DATE, t0 + i * AI_ATTEMPT_MIN_GAP_MS)
+  }
+  // Budget spent: now (and only now) the fact-only line ends the window.
+  assert.equal(aiNarrativeAttemptsExhausted(state, 'evening-wrap', TEST_DATE), true)
+})
+
+// ─── A no-provider wrap still renders complete deterministic scenes ──────────
+
+test('without a model, every planned scene renders its deterministic line', () => {
+  const payload = workingDayPayload()
+  const facts = buildDayWrapFacts(payload)
+  const narrative = buildFallbackNarrative(facts, 'hash')
+  assert.equal(narrative.source, 'fallback')
+  for (const spec of planDayWrapSlides(facts)) {
+    const line = resolveSlideLine(spec, narrative.lines)
+    assert.ok(line.trim().length > 0, `slide "${spec.id}" renders without a model`)
+    assert.equal(line, spec.fallbackLine, `slide "${spec.id}" shows its deterministic line`)
   }
 })

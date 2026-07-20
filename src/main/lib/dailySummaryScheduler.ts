@@ -82,6 +82,19 @@ export function canAttemptAiNarrative(
   return nowMs - entry.lastAtMs >= AI_ATTEMPT_MIN_GAP_MS
 }
 
+/** True once the day's AI budget for this kind is spent for good — as opposed
+ *  to merely waiting out the retry gap. This is the moment the evening recap
+ *  stops hoping for a written line and falls back to the deterministic
+ *  fact-only one (fallback order: fact-only line, then silence). */
+export function aiNarrativeAttemptsExhausted(
+  state: DailyNotifierState,
+  kind: AiAttemptKind,
+  date: string,
+): boolean {
+  const entry = state.aiAttempts?.[aiAttemptKey(kind, date)]
+  return (entry?.count ?? 0) >= AI_ATTEMPT_MAX_PER_DAY
+}
+
 /** Returns a new state with the attempt recorded and entries older than 48h
  *  pruned. Pruning is by attempt age, not by date key, because the morning
  *  checks legitimately track yesterday's date while the wrap tracks today's. */
