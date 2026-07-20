@@ -15,6 +15,7 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import { createProductionTestDatabase } from './support/testDatabase.ts'
+import { clearTestDb, setTestDb } from './support/database-stub.mjs'
 import {
   getTimelineDayPayload,
   invalidateTimelineDayBlocks,
@@ -23,7 +24,9 @@ import {
 } from '../src/main/services/workBlocks.ts'
 import { getAppSummariesForTimelineDay } from '../src/main/services/appsFacts.ts'
 import { getDistractionProfile, getWindowTitleContext } from '../src/main/services/wrappedTools.ts'
+import { buildWrappedPeriodFacts } from '../src/main/services/wrappedPeriodNarrative.ts'
 import { buildDayWrapFacts } from '../src/renderer/lib/dayWrapScenes.ts'
+import { planDayWrapSlides } from '../src/renderer/lib/wrapDeck.ts'
 import { buildDaySnapshot } from '../src/main/lib/daySnapshot.ts'
 import { getDaySnapshotRow, upsertDaySnapshot } from '../src/main/db/queries.ts'
 
@@ -31,6 +34,11 @@ const TEST_DATE = '2026-04-22'
 
 function localMs(hour: number, minute = 0): number {
   return new Date(2026, 3, 22, hour, minute, 0, 0).getTime()
+}
+
+function localMsOnDate(dateStr: string, hour: number, minute = 0): number {
+  const [year, month, day] = dateStr.split('-').map(Number)
+  return new Date(year, month - 1, day, hour, minute, 0, 0).getTime()
 }
 
 function insertFocusEvent(
@@ -218,6 +226,89 @@ test('a correction drops the frozen day snapshot so period wraps refreeze from c
   // An evidence purge / journal replay path invalidates the same way.
   invalidateTimelineDayBlocks(db, TEST_DATE)
   assert.equal(getDaySnapshotRow(db, TEST_DATE), null, 'purge invalidation drops the snapshot too')
+  db.close()
+})
+
+// ─── Week / month / year totals reconcile with Timeline, before and after ────
+
+test('week, month, and year wrap totals reconcile exactly with the Timeline day totals — and a correction changes them after regeneration', () => {
+  const db = createProductionTestDatabase()
+  // Three active days inside one rolling week (the week window ends on its anchor).
+  const days = ['2026-04-21', '2026-04-22', '2026-04-23']
+  seedCanonicalStretch(db, 'com.mitchellh.ghostty', 'Ghostty', localMsOnDate(days[0], 9), localMsOnDate(days[0], 10, 30))
+  seedCanonicalStretch(db, 'com.mitchellh.ghostty', 'Ghostty', localMsOnDate(days[1], 9), localMsOnDate(days[1], 11))
+  seedCanonicalStretch(db, 'com.apple.Safari', 'Safari', localMsOnDate(days[1], 13), localMsOnDate(days[1], 13, 40))
+  seedCanonicalStretch(db, 'com.tinyspeck.slackmacgap', 'Slack', localMsOnDate(days[2], 15), localMsOnDate(days[2], 15, 45))
+
+  // The period facts service reads through the app database handle.
+  setTestDb(db)
+  try {
+    const timelineSum = () => days.reduce(
+      (sum, d) => sum + getTimelineDayPayload(db, d, null, { materialize: false }).totalSeconds, 0,
+    )
+    const appsSum = () => days.reduce(
+      (sum, d) => sum + getAppSummariesForTimelineDay(db, d, null).reduce((s, row) => s + row.totalSeconds, 0), 0,
+    )
+
+    const expected = timelineSum()
+    assert.ok(expected > 0)
+    assert.equal(appsSum(), expected, 'Apps and Timeline agree on the seeded days')
+    for (const period of ['week', 'month', 'year'] as const) {
+      const facts = buildWrappedPeriodFacts(period, '2026-04-23')
+      assert.equal(facts.totalSeconds, expected, `${period} wrap total reconciles exactly with Timeline and Apps`)
+    }
+
+    // Delete a block on one day (the production purge sequence: the ignored
+    // backstop plus the day invalidation): the regenerated period facts must
+    // reconcile with the corrected Timeline — not keep serving the frozen
+    // pre-correction totals (the frozen snapshot drops on the correction write).
+    const blockId = `ignored_${randomUUID().slice(0, 8)}`
+    writeIgnoredBlockReviewBackstop(db, {
+      date: days[1],
+      blockId,
+      evidenceKey: blockId,
+      originalBlockJson: JSON.stringify({ startTime: localMsOnDate(days[1], 13), endTime: localMsOnDate(days[1], 13, 40) }),
+    })
+    invalidateTimelineDayBlocks(db, days[1])
+    const corrected = timelineSum()
+    assert.ok(corrected < expected, 'the deleted stretch left the Timeline')
+    assert.equal(appsSum(), corrected, 'Apps still reconciles after the correction')
+    for (const period of ['week', 'month', 'year'] as const) {
+      const facts = buildWrappedPeriodFacts(period, '2026-04-23')
+      assert.equal(facts.totalSeconds, corrected, `${period} wrap total reflects the correction exactly`)
+    }
+  } finally {
+    clearTestDb()
+  }
+  db.close()
+})
+
+// ─── The visible deck is unchanged in this slice ──────────────────────────────
+
+test('the visible deck plan renders unchanged for a fixture day', () => {
+  const db = createProductionTestDatabase()
+  seedCanonicalStretch(db, 'com.mitchellh.ghostty', 'Ghostty', localMs(9), localMs(10, 45), 'Auth refactor')
+  seedCanonicalStretch(db, 'com.apple.Safari', 'Safari', localMs(11), localMs(11, 40), 'Docs')
+  seedCanonicalStretch(db, 'com.tinyspeck.slackmacgap', 'Slack', localMs(14), localMs(14, 25), 'Team')
+
+  const facts = buildDayWrapFacts(getTimelineDayPayload(db, TEST_DATE, null, { materialize: false }))
+  const slides = planDayWrapSlides(facts, { browser: false, connectors: null })
+  // The pinned deck shape for this fixture day: moving the facts onto the
+  // shared corrected seam changes NUMBERS' provenance, never the deck.
+  assert.deepEqual(slides.map((s) => ({ id: s.id, kind: s.kind })), [
+    { id: 'opening', kind: 'opening' },
+    { id: 'headline', kind: 'stat' },
+    { id: 'coverage', kind: 'coverage' },
+    { id: 'story-morning', kind: 'text' },
+    { id: 'story-midday', kind: 'text' },
+    { id: 'timesink', kind: 'stat' },
+    { id: 'wildcard', kind: 'stat' },
+    { id: 'focus', kind: 'stat' },
+    { id: 'apps', kind: 'bars' },
+    { id: 'question', kind: 'question' },
+    { id: 'reflection', kind: 'reflection' },
+    { id: 'finale', kind: 'finale' },
+  ])
   db.close()
 })
 
