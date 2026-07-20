@@ -233,6 +233,18 @@ function meetingRecords(
       existing.sourceRefs.push(`${row.source_type}:${row.source_id}`)
       continue
     }
+    // People connect through 'attended' relationships (spec: the entity graph
+    // connects people and meetings) — tagging them here is what lets a search
+    // for a person's name return the meetings they were part of.
+    const attendees = db.prepare(`
+      SELECT entity_id FROM entity_relationships
+      WHERE related_entity_id = ? AND kind = 'attended'
+    `).all(survivorId) as Array<{ entity_id: string }>
+    const entityIds = new Set([survivorId])
+    for (const attendee of attendees) {
+      const personId = activeEntityId(db, attendee.entity_id)
+      if (personId) entityIds.add(personId)
+    }
     byEntity.set(survivorId, {
       id: newRecordId(),
       kind: 'meeting',
@@ -247,7 +259,7 @@ function meetingRecords(
       title: null,
       primaryEntityId: survivorId,
       sourceRefs: [`${row.source_type}:${row.source_id}`],
-      entityIds: new Set([survivorId]),
+      entityIds,
     })
   }
   return [...byEntity.values()]

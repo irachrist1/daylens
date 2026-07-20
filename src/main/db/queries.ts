@@ -380,6 +380,8 @@ export interface SearchOptions {
   maxStartMs?: number
 }
 
+export type SearchSourceType = 'observed' | 'connected' | 'supplied' | 'inferred'
+
 export interface SessionSearchResult {
   type: 'session'
   id: number
@@ -389,6 +391,9 @@ export interface SessionSearchResult {
   endTime: number
   date: string
   excerpt: string
+  /** Memory type of the backing record (spec §Search interface: each result
+   *  shows its source type). Legacy-path rows are direct capture: observed. */
+  sourceType?: SearchSourceType
 }
 
 export interface BlockSearchResult {
@@ -822,6 +827,7 @@ const MEMORY_RECORD_CORRECTION_FILTERS = `
 interface MemoryMomentRow {
   id: number
   record_kind: 'session' | 'meeting' | 'artifact'
+  memory_type: SearchSourceType
   app_bundle_id: string | null
   app_name: string | null
   title: string | null
@@ -851,6 +857,7 @@ function mapMemoryMomentRow(row: MemoryMomentRow): SessionSearchResult {
     endTime: row.end_ms,
     date: row.date,
     excerpt: row.excerpt ?? displayTitle ?? row.statement,
+    sourceType: row.memory_type,
   }
 }
 
@@ -876,6 +883,7 @@ export function searchSessions(
     SELECT
       memory_records.rowid AS id,
       memory_records.record_kind,
+      memory_records.memory_type,
       memory_records.app_bundle_id,
       memory_records.app_name,
       memory_records.title,
@@ -956,6 +964,7 @@ export function searchSessions(
     endTime: row.end_time,
     date: localDateString(new Date(row.start_time)),
     excerpt: row.excerpt ?? row.window_title ?? row.app_name,
+    sourceType: 'observed',
   }))
 
   return [...memoryResults, ...legacyResults]
@@ -982,6 +991,7 @@ export function searchEntityMoments(
     SELECT
       memory_records.rowid AS id,
       memory_records.record_kind,
+      memory_records.memory_type,
       memory_records.app_bundle_id,
       memory_records.app_name,
       memory_records.title,

@@ -53,13 +53,22 @@ export function searchResultTitle(result: DaylensSearchResult): string {
 
 export function searchResultSubtitle(result: DaylensSearchResult): string {
   switch (result.type) {
-    case 'session': return result.appName
+    case 'session':
+      // Source type per the memory spec's search interface — but plain
+      // observed capture stays quiet (the product describes activity before
+      // telemetry). Connected/supplied/inferred provenance is worth a word.
+      return result.sourceType && result.sourceType !== 'observed'
+        ? `${result.appName} · ${result.sourceType}`
+        : result.appName
     case 'block': return 'Timeline block'
     case 'browser': return result.domain
     case 'artifact': return result.filePath ? 'Generated file' : 'AI artifact'
     case 'entity': {
       const label = ENTITY_TYPE_LABELS[result.entityType] ?? result.entityType
-      return result.matchedAlias ? `${label} · also known as “${result.matchedAlias}”` : label
+      const base = result.matchedAlias ? `${label} · also known as “${result.matchedAlias}”` : label
+      return result.sourceType && result.sourceType !== 'observed'
+        ? `${base} · ${result.sourceType}`
+        : base
     }
   }
 }

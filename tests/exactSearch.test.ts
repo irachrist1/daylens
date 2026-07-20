@@ -40,6 +40,9 @@ import {
   upsertEntity,
 } from '../src/main/services/entities/entityRepository.ts'
 import { applyEntityCorrection } from '../src/main/services/entities/entityCorrections.ts'
+import { adoptConnectedEnvelope } from '../src/main/services/entities/entityAdoption.ts'
+import { getCorrectedAppSummariesForRange } from '../src/main/services/activityFacts.ts'
+import { localDayBounds } from '../src/main/lib/localDate.ts'
 
 const DATE = '2026-04-22'
 
@@ -325,6 +328,74 @@ test('adopted artifacts index as entity-named file moments', () => {
   assert.ok(results.some((r) => r.type === 'entity' && r.id === 'art-plan'), 'the file entity matches')
   const moment = results.find((r) => r.type === 'session' && r.appName === 'File')
   assert.equal(moment?.type === 'session' ? moment.windowTitle : null, 'checkout-plan.md')
+})
+
+test('indexed durations reconcile with the corrected Apps totals (structured facts own the numbers)', () => {
+  const db = createProductionTestDatabase()
+  insertSession(db, 'Morning implementation pass', 9, 0, 45)
+  insertSession(db, 'Afternoon implementation pass', 14, 0, 30)
+  // The user deletes the morning block — the reconciliation must hold on the
+  // CORRECTED totals, not the raw capture.
+  db.prepare(`
+    INSERT INTO timeline_block_reviews (id, block_id, date, evidence_key, review_state, original_block_json, correction_json, created_at, updated_at)
+    VALUES ('rev-rec', 'blk-rec', ?, 'ek', 'ignored', ?, '{}', ?, ?)
+  `).run(DATE, JSON.stringify({ startTime: localMs(9), endTime: localMs(10) }), Date.now(), Date.now())
+
+  indexMemoryForDay(db, DATE)
+
+  const [fromMs, toMs] = localDayBounds(DATE)
+  const appsTotal = getCorrectedAppSummariesForRange(db, fromMs, toMs)
+    .find((summary) => summary.appName === 'Ghostty')?.totalSeconds ?? 0
+  const indexedTotal = (db.prepare(`
+    SELECT COALESCE(SUM((end_ms - start_ms) / 1000), 0) AS s
+    FROM memory_records
+    WHERE date = ? AND record_kind = 'session' AND app_name = 'Ghostty'
+  `).get(DATE) as { s: number }).s
+
+  assert.equal(appsTotal, 30 * 60, 'Apps counts only the kept afternoon block')
+  assert.equal(
+    indexedTotal,
+    appsTotal,
+    'search moments and Apps totals read the same corrected facts — durations reconcile exactly',
+  )
+})
+
+test('people resolve and their meetings answer (connected-source envelope); results carry source type', () => {
+  const db = createProductionTestDatabase()
+  // The Wave-2 synthetic connected-source envelope the spec's acceptance
+  // criteria name for entity types without a live connector.
+  const meeting = adoptConnectedEnvelope(db, {
+    kind: 'calendar_event',
+    sourceEventId: 'evt-quarterly-review',
+    title: 'Quarterly review with Acme',
+    startMs: localMs(11),
+    endMs: localMs(12),
+    attendees: [{ connectorId: 'cal:jamie@acme.test', displayName: 'Jamie Rivera' }],
+  })
+  assert.ok(meeting, 'the envelope minted a meeting entity')
+  indexMemoryForDay(db, DATE)
+
+  const results = searchExact(db, 'jamie rivera', { limit: 20 })
+  const person = results.find((r) => r.type === 'entity' && r.entityType === 'person')
+  assert.ok(person, 'the person resolves as an entity result')
+  assert.equal(person?.type === 'entity' ? person.sourceType : null, 'connected')
+  const momentRow = results.find((r) => r.type === 'session' && r.appName === 'Meeting')
+  assert.ok(momentRow, "searching a person finds the meetings they attended")
+  assert.equal(
+    momentRow?.type === 'session' ? momentRow.windowTitle : null,
+    'Quarterly review with Acme',
+  )
+  assert.equal(
+    momentRow?.type === 'session' ? momentRow.sourceType : null,
+    'connected',
+    'meeting moments carry their connected source type',
+  )
+
+  // Observed capture carries its source type too.
+  insertSession(db, 'Prep notes for the review', 10, 0, 30)
+  indexMemoryForDay(db, DATE)
+  const prep = searchSessions(db, 'prep notes', { limit: 5 })
+  assert.equal(prep[0]?.sourceType, 'observed')
 })
 
 test('searchEntityMoments respects date bounds and correction filters', () => {

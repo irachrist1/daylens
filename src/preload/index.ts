@@ -112,6 +112,9 @@ export type DaylensSearchResult =
       endTime: number
       date: string
       excerpt: string
+      // DEV-178: memory type of the backing record — observed capture,
+      // connected source (meetings), supplied, or inferred.
+      sourceType?: 'observed' | 'connected' | 'supplied' | 'inferred'
     }
   | {
       type: 'block'
@@ -152,6 +155,7 @@ export type DaylensSearchResult =
       name: string
       entityType: string
       matchedAlias: string | null
+      sourceType: 'observed' | 'connected' | 'supplied' | 'inferred'
       startTime: number
       endTime: number
       date: string

@@ -39,6 +39,8 @@ export interface EntitySearchResult {
   entityType: EntityType
   /** The alias that matched when it differs from the canonical name. */
   matchedAlias: string | null
+  /** Memory type of the entity (spec §Search interface: source type). */
+  sourceType: 'observed' | 'connected' | 'supplied' | 'inferred'
   startTime: number
   endTime: number
   /** Day the entity was last part of — where a click should land. */
@@ -151,6 +153,7 @@ function toEntityResult(
     name: match.entity.canonical_name,
     entityType: match.entity.entity_type,
     matchedAlias: match.matchedAlias,
+    sourceType: match.entity.origin,
     startTime: lastSeenMs,
     endTime: lastSeenMs,
     date: lastMoment?.date ?? (lastSeenMs > 0 ? localDateString(new Date(lastSeenMs)) : ''),
