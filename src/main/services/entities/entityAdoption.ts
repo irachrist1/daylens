@@ -39,6 +39,7 @@ import {
   resolveMeetingEntity,
   resolveMergeChain,
   resolvePersonEntity,
+  resolveProjectEntity,
   resolveRepositoryEntity,
   upsertEntity,
   normalizeEntityLabel,
@@ -287,6 +288,28 @@ export type ConnectedEnvelope =
     /** People involved OTHER than the account owner, by source-native login. */
     people?: Array<{ connectorId: string; displayName: string }>
   }
+  | {
+    kind: 'issue_activity'
+    provider: string
+    /** Workspace / organization identity label (a Linear org url key). */
+    workspace: string | null
+    /** Opaque source-native issue identity. */
+    sourceIssueId: string
+    /** Human issue identifier ("DAY-12"). */
+    identifier: string
+    title: string
+    /** Provider state name and state category ("In Progress" / "started"). */
+    state?: string | null
+    stateType?: string | null
+    team?: { key: string; name: string } | null
+    /** The provider project this issue belongs to, by source-native identity. */
+    project?: { sourceProjectId: string; name: string } | null
+    /** The cycle the issue sits in — evidence fields, not an entity. */
+    cycle?: { number: number; name?: string | null } | null
+    observedAt?: number
+    /** People involved OTHER than the account owner, by source-native id. */
+    people?: Array<{ connectorId: string; displayName: string }>
+  }
   | { kind: 'document_reference'; sourceDocumentId: string; title: string; observedAt?: number }
   | { kind: 'message_reference'; sourceMessageId: string; author?: { connectorId: string; displayName: string }; observedAt?: number }
 
@@ -333,6 +356,33 @@ export function adoptConnectedEnvelope(db: Database.Database, envelope: Connecte
         }
       }
       return repository
+    }
+    case 'issue_activity': {
+      // The issue's PROJECT is the durable entity, resolved by provider
+      // identity — a renamed project stays one thing; a same-named supplied
+      // project stays separate (suggestion, not silent equivalence). An issue
+      // without a project contributes no entity; its record still becomes
+      // searchable connected memory through the ledger projection.
+      const project = envelope.project
+        ? resolveProjectEntity(db, {
+          provider: envelope.provider,
+          sourceProjectId: envelope.project.sourceProjectId,
+          name: envelope.project.name,
+          origin: 'connected',
+          observedAt: envelope.observedAt,
+        })
+        : null
+      for (const person of envelope.people ?? []) {
+        const entity = resolvePersonEntity(db, {
+          connectorId: person.connectorId,
+          displayName: person.displayName,
+          observedAt: envelope.observedAt,
+        })
+        if (entity && project) {
+          addEntityRelationship(db, entity.id, project.id, 'contributed', { source: 'connected', confidence: 0.9 })
+        }
+      }
+      return project
     }
     case 'document_reference': {
       const entity = upsertEntity(db, {
@@ -424,6 +474,153 @@ export function unifyRepositoryEntityIdentity(
     source: 'connected',
   })
   return true
+}
+
+// ─── Meeting-note ↔ scheduled-meeting identity unification ──────────────────
+// connectors.md §Entity resolution + §Granola: a meeting-notes record (a
+// Granola note) attaches to the calendar meeting it documents ONLY with
+// corroboration beyond display-name similarity. The note's meeting entity
+// merges into the scheduled meeting's entity (the calendar identity survives;
+// the note becomes its occurrence evidence) when at least TWO of the three
+// signals agree — exact normalized title, start timing within tolerance, or a
+// shared attendee address. A title-only match stays two entities: visible in
+// the merge suggestions, decided by a person, never auto-merged. The merge is
+// the same reversible pointer flip Settings uses, and a user rename on the
+// note's entity blocks it entirely (corrections outrank inference).
+
+export interface MeetingNoteUnificationInput {
+  noteEntityId: string
+  title: string
+  startMs: number | null
+  /** Local date of the note's meeting — the day whose scheduled events are candidates. */
+  date: string
+  /** Participant addresses the note carries, for cross-source corroboration. */
+  participantEmails: string[]
+}
+
+const NOTE_MATCH_TOLERANCE_MS = 20 * 60 * 1000
+
+/** Both day-layer clock dialects: 24-hour "14:30" and 12-hour "2:30pm". */
+function clockToMs(date: string, clock: string): number | null {
+  const match = /^\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*$/i.exec(clock)
+  if (!match) return null
+  let hour = Number(match[1])
+  const minute = Number(match[2] ?? '0')
+  const meridiem = match[3]?.toLowerCase() ?? null
+  if (minute > 59) return null
+  if (meridiem) {
+    if (hour < 1 || hour > 12) return null
+    hour = (hour % 12) + (meridiem === 'pm' ? 12 : 0)
+  } else if (hour > 23) {
+    return null
+  }
+  const [year, month, day] = date.split('-').map(Number)
+  return new Date(year, month - 1, day, hour, minute, 0, 0).getTime()
+}
+
+interface ScheduledMeetingCandidate {
+  entityId: string
+  startMs: number | null
+  normalizedTitle: string
+  emails: Set<string>
+}
+
+function scheduledMeetingCandidates(db: Database.Database, date: string): ScheduledMeetingCandidate[] {
+  const candidates: ScheduledMeetingCandidate[] = []
+  if (hasTable(db, 'connector_records')) {
+    const rows = db.prepare(`
+      SELECT entity_id, envelope_json FROM connector_records
+      WHERE date = ? AND kind = 'calendar_event' AND tombstoned_at IS NULL
+    `).all(date) as Array<{ entity_id: string | null; envelope_json: string }>
+    for (const row of rows) {
+      if (!row.entity_id) continue
+      try {
+        const envelope = JSON.parse(row.envelope_json) as {
+          entity?: {
+            title?: unknown
+            startMs?: unknown
+            attendees?: Array<{ connectorId?: unknown }>
+          }
+        }
+        const title = typeof envelope.entity?.title === 'string' ? envelope.entity.title : null
+        if (!title) continue
+        const emails = new Set<string>()
+        for (const attendee of envelope.entity?.attendees ?? []) {
+          if (typeof attendee.connectorId !== 'string') continue
+          const address = attendee.connectorId.split(':').slice(1).join(':').toLowerCase()
+          if (address.includes('@')) emails.add(address)
+        }
+        candidates.push({
+          entityId: row.entity_id,
+          startMs: typeof envelope.entity?.startMs === 'number' ? envelope.entity.startMs : null,
+          normalizedTitle: normalizeEntityLabel(title),
+          emails,
+        })
+      } catch { /* one unreadable envelope never hides the rest */ }
+    }
+  }
+  // The local calendar probe's meeting entities encode (date, clock, title)
+  // in their identity key: event:calendar:<date>:<clock>:<title>.
+  const prefix = `event:calendar:${date}:`
+  const localRows = db.prepare(
+    `SELECT id, identity_key FROM entities WHERE entity_type = 'meeting' AND identity_key LIKE ?`,
+  ).all(`${prefix}%`) as Array<{ id: string; identity_key: string }>
+  for (const row of localRows) {
+    const rest = row.identity_key.slice(prefix.length)
+    const separator = rest.indexOf(':')
+    if (separator <= 0) continue
+    const clock = rest.slice(0, separator)
+    const title = rest.slice(separator + 1)
+    if (!title) continue
+    candidates.push({
+      entityId: row.id,
+      startMs: clockToMs(date, clock),
+      normalizedTitle: normalizeEntityLabel(title),
+      emails: new Set(),
+    })
+  }
+  return candidates
+}
+
+export function unifyMeetingNoteIdentity(
+  db: Database.Database,
+  input: MeetingNoteUnificationInput,
+): boolean {
+  const noteRow = db.prepare(`SELECT * FROM entities WHERE id = ?`).get(input.noteEntityId) as EntityRow | undefined
+  if (!noteRow) return false
+  const note = resolveMergeChain(db, noteRow)
+  if (note.status !== 'active') return false
+  if (note.name_source === 'user') return false
+
+  const noteTitle = normalizeEntityLabel(input.title)
+  const noteEmails = new Set(input.participantEmails.map((address) => address.toLowerCase()))
+
+  for (const candidate of scheduledMeetingCandidates(db, input.date)) {
+    if (candidate.entityId === note.id) continue
+    const candidateRow = db.prepare(`SELECT * FROM entities WHERE id = ?`).get(candidate.entityId) as EntityRow | undefined
+    if (!candidateRow) continue
+    const survivor = resolveMergeChain(db, candidateRow)
+    if (survivor.status !== 'active' || survivor.id === note.id) continue
+
+    const titleAgrees = noteTitle.length > 0 && candidate.normalizedTitle === noteTitle
+    const timingAgrees = input.startMs != null && candidate.startMs != null
+      && Math.abs(input.startMs - candidate.startMs) <= NOTE_MATCH_TOLERANCE_MS
+    const addressAgrees = noteEmails.size > 0
+      && [...candidate.emails].some((address) => noteEmails.has(address))
+    const agreements = Number(titleAgrees) + Number(timingAgrees) + Number(addressAgrees)
+    if (agreements < 2) continue
+
+    const now = Date.now()
+    db.prepare(`UPDATE entities SET status = 'merged', merged_into_id = ?, updated_at = ? WHERE id = ?`)
+      .run(survivor.id, now, note.id)
+    db.prepare(`UPDATE entities SET updated_at = ? WHERE id = ?`).run(now, survivor.id)
+    addEntityAlias(db, survivor.id, note.canonical_name, {
+      rawLabel: note.canonical_name,
+      source: 'connected',
+    })
+    return true
+  }
+  return false
 }
 
 // ─── The backfill entrypoint (called by migration v50 and re-runnable) ───────

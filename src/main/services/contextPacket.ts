@@ -290,7 +290,7 @@ const MAX_CONNECTED_FACTS_PER_DAY = 12
 function connectedActivityDayItems(db: Database.Database, date: string): ContextPacketItem[] {
   try {
     const rows = db.prepare(`
-      SELECT rowid AS id, statement, start_ms, end_ms
+      SELECT rowid AS id, statement, start_ms, end_ms, sensitivity
       FROM memory_records
       WHERE date = ? AND record_kind = 'connected_activity' AND deleted_at IS NULL
       ORDER BY start_ms ASC
@@ -300,6 +300,7 @@ function connectedActivityDayItems(db: Database.Database, date: string): Context
       statement: string
       start_ms: number
       end_ms: number
+      sensitivity: 'standard' | 'personal' | 'high'
     }>
     return rows.map((row) => ({
       identity: `session:${row.id}`,
@@ -308,7 +309,7 @@ function connectedActivityDayItems(db: Database.Database, date: string): Context
       statement: row.statement,
       version: null,
       reason: `Connected-source record on ${date}`,
-      sensitivity: 'standard' as const,
+      sensitivity: row.sensitivity,
       date,
       startMs: row.start_ms,
       endMs: row.end_ms,

@@ -126,6 +126,21 @@ export interface ConnectorGitDaySignal {
   pr?: { title: string; state: string }
 }
 
+/** Optional per-day meeting-notes projection so a notes source also lands in
+ *  the external_signals 'notes' day layer (MeetingNotesSignal) that the wrap
+ *  enrichment already reads. Minimized by construction: participant FIRST
+ *  NAMES only, short capped note lines, never a transcript. */
+export interface ConnectorNotesDaySignal {
+  date: string
+  title: string
+  /** Participant first names only — never emails, never surnames. */
+  participants: string[]
+  /** The person's recorded note lines / action items, capped and short. */
+  actionItems: string[]
+  /** 24-hour local start clock ("14:30") when the note has one. */
+  scheduledClock: string | null
+}
+
 /** One normalized record: provenance + the connected-source entity envelope
  *  the entity repository already accepts (the shape batch 7's fixtures use). */
 export interface ConnectorRecordEnvelope {
@@ -133,6 +148,7 @@ export interface ConnectorRecordEnvelope {
   entity: ConnectedEnvelope
   daySignal?: ConnectorDaySignalEvent
   gitSignal?: ConnectorGitDaySignal
+  notesSignal?: ConnectorNotesDaySignal
 }
 
 export interface ConnectorSyncPage {
@@ -229,6 +245,7 @@ export function validateConnectorManifest(manifest: ConnectorManifest): string[]
 // titles, names, labels — is scanned.
 const IDENTITY_KEYS = new Set([
   'sourceEventId', 'sourceRecordId', 'sourceDocumentId', 'sourceMessageId', 'connectorId',
+  'sourceIssueId', 'sourceProjectId',
 ])
 
 function collectStrings(value: unknown, out: string[], depth = 0): void {
@@ -266,6 +283,7 @@ export function validateRecordEnvelope(record: ConnectorRecordEnvelope): string[
   collectStrings(record?.entity, strings)
   if (record?.daySignal) collectStrings(record.daySignal, strings)
   if (record?.gitSignal) collectStrings(record.gitSignal, strings)
+  if (record?.notesSignal) collectStrings(record.notesSignal, strings)
   for (const text of strings) {
     if (containsCredential(text)) {
       problems.push(`credential-shaped content (${findCredentialPattern(text)}) — record quarantined`)
@@ -281,6 +299,7 @@ const CONNECTED_ENVELOPE_TO_EVIDENCE_KIND: Record<ConnectedEnvelope['kind'], Con
   calendar_event: 'calendar_event',
   meeting_record: 'meeting_record',
   repository_activity: 'repository_activity',
+  issue_activity: 'issue_activity',
   document_reference: 'document_reference',
   message_reference: 'message_reference',
 }

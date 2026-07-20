@@ -77,10 +77,10 @@ const UPCOMING_MANIFESTS: ConnectorManifest[] = [
     displayName: 'Linear',
     providerKind: 'issues',
     integration: 'direct',
-    authKind: 'oauth',
+    authKind: 'token',
     readOnly: true,
     scopes: [
-      { scope: 'read', grants: 'Reads workspaces, teams, projects, cycles, and issues. Read-only.' },
+      { scope: 'read', grants: 'Reads workspaces, teams, projects, cycles, and the issues you created or are assigned — titles, states, and times. Read-only: Daylens never creates, edits, or comments.' },
     ],
     whatItBrings:
       'The issues and projects your work maps to — status changes, cycles, and relationships — so time spent connects to the tickets it moved.',
@@ -94,11 +94,11 @@ const UPCOMING_MANIFESTS: ConnectorManifest[] = [
     id: 'granola',
     displayName: 'Granola',
     providerKind: 'meetings',
-    integration: 'direct',
-    authKind: 'token',
+    integration: 'local',
+    authKind: 'local_file',
     readOnly: true,
     scopes: [
-      { scope: 'notes:read', grants: 'Reads meeting identity, participants, and your notes and summaries where your account permits. Daylens never records meeting audio.' },
+      { scope: 'file:read', grants: 'Reads Granola\'s local notes cache on this Mac — meeting identity, participants, and your own note lines, minimized. Never transcripts, never audio, and nothing leaves this machine.' },
     ],
     whatItBrings:
       'What happened IN your meetings — participants, notes, and action items from Granola — attached to the meetings your calendar and day already know about.',

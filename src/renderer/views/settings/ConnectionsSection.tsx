@@ -65,6 +65,8 @@ function ConnectorCard({ listing, onChanged }: { listing: ConnectorListing; onCh
   const [clientId, setClientId] = useState('')
   const [clientSecret, setClientSecret] = useState('')
   const [repositories, setRepositories] = useState('')
+  const [apiKey, setApiKey] = useState('')
+  const [localPath, setLocalPath] = useState('')
 
   // GitHub and Outlook authorize with the device flow: only a client ID (no
   // secret) and a one-time code shown here. GitHub additionally lets the
@@ -105,8 +107,11 @@ function ConnectorCard({ listing, onChanged }: { listing: ConnectorListing; onCh
     if (clientId.trim()) config.clientId = clientId.trim()
     if (clientSecret.trim()) config.clientSecret = clientSecret.trim()
     if (choosesRepositories && repositories.trim()) config.repositories = repositories.trim()
+    if (listing.authKind === 'token' && apiKey.trim()) config.apiKey = apiKey.trim()
+    if (listing.authKind === 'local_file' && localPath.trim()) config.cachePath = localPath.trim()
     const summary = await ipc.connectors.connect(listing.id, config)
     setClientSecret('')
+    setApiKey('')
     return summarizeAction(summary)
   })
 
@@ -199,6 +204,33 @@ function ConnectorCard({ listing, onChanged }: { listing: ConnectorListing; onCh
               )}
             </div>
           )}
+          {listing.authKind === 'token' && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              <input
+                style={inputStyle}
+                type="password"
+                placeholder={listing.id === 'linear'
+                  ? 'Personal API key from linear.app/settings/api'
+                  : 'Personal API key'}
+                value={apiKey}
+                onChange={(event) => setApiKey(event.target.value)}
+                spellCheck={false}
+              />
+            </div>
+          )}
+          {listing.authKind === 'local_file' && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              <input
+                style={inputStyle}
+                placeholder={listing.id === 'granola'
+                  ? 'Cache path (optional — found automatically when Granola is installed)'
+                  : 'File path'}
+                value={localPath}
+                onChange={(event) => setLocalPath(event.target.value)}
+                spellCheck={false}
+              />
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <button style={buttonStyle} disabled={busy != null} onClick={connect}>
               {busy === 'connect' ? 'Connecting…' : needsReauth ? 'Reconnect' : 'Connect'}
@@ -210,6 +242,17 @@ function ConnectorCard({ listing, onChanged }: { listing: ConnectorListing; onCh
                     ? 'Shows a one-time code to enter at microsoft.com/devicelogin — exactly the read-only scopes listed above.'
                     : 'Shows a one-time code to enter on github.com — only the repositories you list are read.'
                   : 'Opens your browser to grant exactly the read-only scopes listed above — nothing more.'}
+              </span>
+            )}
+            {listing.authKind === 'token' && (
+              <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>
+                The key goes straight into your operating system&apos;s secure store — never the database, logs, or sync.
+                Revoke it any time where you created it.
+              </span>
+            )}
+            {listing.authKind === 'local_file' && (
+              <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>
+                Reads a local file on this machine. No account, no network — nothing leaves your Mac.
               </span>
             )}
           </div>
