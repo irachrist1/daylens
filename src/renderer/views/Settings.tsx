@@ -24,7 +24,7 @@ import { FileAccessSection } from './settings/FileAccessSection'
 import { track } from '../lib/analytics'
 import { setPendingChatSeed } from '../lib/aiSeed'
 import { showIntercom } from '../lib/intercom'
-import type { UpdaterStatusInfo } from '../../preload/index'
+import type { DaylensSemanticSearchStatus, UpdaterStatusInfo } from '../../preload/index'
 import ConnectAI from '../components/ConnectAI'
 import { formatUsdAmount } from '@shared/formatUsd'
 import { CHANGELOG, LATEST_CHANGELOG, formatChangelogDate, changelogIssueLabel, type ChangelogEntry } from '@shared/changelog'
@@ -2138,6 +2138,8 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
   const [clientFactDrafts, setClientFactDrafts] = useState<Record<string, string>>({})
   // A short audit of what memory remembered/edited/forgot (memory.md §3).
   const [memoryAudit, setMemoryAudit] = useState<MemoryAuditEntry[] | null>(null)
+  // DEV-180: local semantic-search status shown in the Memory section.
+  const [semanticStatus, setSemanticStatus] = useState<DaylensSemanticSearchStatus | null>(null)
   const [mcpConfig, setMcpConfig] = useState<{ command: string; args: string[]; env: Record<string, string>; isPackaged: boolean; dbPath: string } | null>(null)
   const [mcpSnippetCopied, setMcpSnippetCopied] = useState(false)
   const [mcpAdvancedOpen, setMcpAdvancedOpen] = useState(false)
@@ -2268,6 +2270,18 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
     })
     return () => { cancelled = true }
   }, [activeSection, workMemoryProfile])
+
+  // DEV-180: local search-by-meaning status (model on disk, embedding progress).
+  useEffect(() => {
+    if (activeSection !== 'memory' || semanticStatus !== null) return
+    let cancelled = false
+    void ipc.search.semanticStatus().then((status) => {
+      if (!cancelled) setSemanticStatus(status)
+    }).catch(() => {
+      // The card simply stays hidden; search itself already degrades honestly.
+    })
+    return () => { cancelled = true }
+  }, [activeSection, semanticStatus])
 
   useEffect(() => {
     if (!selectedAiProvider || !['ai', 'billing'].includes(activeSection)) return
@@ -3134,6 +3148,37 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
               </div>
             )}
             </div>
+            )}
+
+            {semanticStatus && (
+              <div style={{ marginTop: 14, padding: '14px 18px', borderRadius: 14, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-low)', display: 'grid', gap: 5 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 620, color: 'var(--color-text-primary)' }}>
+                  Search by meaning
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', lineHeight: 1.55 }}>
+                  {semanticStatus.available ? (
+                    <>
+                      Vague searches like “that pricing doc from Tuesday” match what a moment was about, not just its exact words.
+                      {' '}Powered by a small language model on this device ({semanticStatus.modelId.split('/').pop()},{' '}
+                      {semanticStatus.modelBytes > 0 ? `${Math.max(1, Math.round(semanticStatus.modelBytes / (1024 * 1024)))} MB, ` : ''}downloaded with Daylens).
+                      {' '}Everything is embedded and searched locally — nothing leaves your machine.
+                      {semanticStatus.pendingRecords > 0
+                        ? ` Indexing in the background: ${semanticStatus.pendingRecords.toLocaleString()} moment${semanticStatus.pendingRecords === 1 ? '' : 's'} to go.`
+                        : semanticStatus.embeddedRecords > 0
+                          ? ` ${semanticStatus.embeddedRecords.toLocaleString()} moment${semanticStatus.embeddedRecords === 1 ? '' : 's'} indexed.`
+                          : ''}
+                    </>
+                  ) : (
+                    <>
+                      Not available right now
+                      {semanticStatus.reason === 'model-missing'
+                        ? ' — the local model file is missing. Reinstalling Daylens restores it.'
+                        : ' on this device.'}
+                      {' '}Exact search works as always; nothing about your data changes.
+                    </>
+                  )}
+                </div>
+              </div>
             )}
           </div>
         </SectionPage>

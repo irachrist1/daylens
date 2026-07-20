@@ -37,9 +37,11 @@ export interface CommandPaletteProps {
   onOpenPeriodWrapped: (period: WrappedPeriod) => void
 }
 
-// Section order, top to bottom (FB1 §Target behavior).
+// Section order, top to bottom (FB1 §Target behavior). "Similar meaning"
+// (DEV-180) always ranks below the exact search results for the same query.
 const GROUP_ORDER = [
   'Search results',
+  'Similar meaning',
   'Actions for this message',
   'Chat',
   'Navigate',
@@ -138,6 +140,9 @@ export default function CommandPalette({ isOpen, platform, onClose, onOpenWrappe
   const [highlightIdx, setHighlightIdx] = useState(0)
   const [activeFocus, setActiveFocus] = useState<FocusSession | null>(null)
   const [results, setResults] = useState<DaylensSearchResult[]>([])
+  // DEV-180: by-meaning hits from the local semantic index. Kept separate so
+  // they render under their own honest label, always below exact results.
+  const [semanticResults, setSemanticResults] = useState<DaylensSearchResult[]>([])
   const [searchLoading, setSearchLoading] = useState(false)
   const [searchError, setSearchError] = useState<string | null>(null)
   const [intent, setIntent] = useState<string | null>(null)
@@ -151,6 +156,7 @@ export default function CommandPalette({ isOpen, platform, onClose, onOpenWrappe
     setQuery('')
     setHighlightIdx(0)
     setResults([])
+    setSemanticResults([])
     setIntent(null)
     setMatchTerms([])
     setSearchError(null)
@@ -164,7 +170,7 @@ export default function CommandPalette({ isOpen, platform, onClose, onOpenWrappe
     if (!isOpen) return
     const trimmed = query.trim()
     if (trimmed.length < 2) {
-      setResults([]); setSearchLoading(false); setSearchError(null); setIntent(null); setMatchTerms([])
+      setResults([]); setSemanticResults([]); setSearchLoading(false); setSearchError(null); setIntent(null); setMatchTerms([])
       return
     }
     const natural = isNaturalQuery(trimmed)
@@ -188,6 +194,11 @@ export default function CommandPalette({ isOpen, platform, onClose, onOpenWrappe
       run
         .catch((error) => { if (!cancelled) { setResults([]); setSearchError(error instanceof Error ? error.message : String(error)) } })
         .finally(() => { if (!cancelled) setSearchLoading(false) })
+      // DEV-180: the by-meaning path runs alongside, never blocking the exact
+      // results. Empty whenever the local model is unavailable.
+      ipc.search.semantic(trimmed, { limit: 8 })
+        .then((rows) => { if (!cancelled) setSemanticResults(rows) })
+        .catch(() => { if (!cancelled) setSemanticResults([]) })
     }, natural ? 420 : 160)
     return () => { cancelled = true; window.clearTimeout(handle) }
   }, [query, isOpen])
@@ -268,6 +279,21 @@ export default function CommandPalette({ isOpen, platform, onClose, onOpenWrappe
     perform: () => handleResultClick(result),
   })), [results, handleResultClick])
 
+  // DEV-180: by-meaning rows, honestly labeled and deduped against the exact
+  // hits (an exact match always wins its "similar meaning" twin).
+  const semanticItems: PaletteItem[] = useMemo(() => {
+    const exactKeys = new Set(results.map((result) => `${result.type}:${result.id}:${result.startTime}`))
+    return semanticResults
+      .filter((result) => !exactKeys.has(`${result.type}:${result.id}:${result.startTime}`))
+      .map((result) => ({
+        id: `semantic:${result.type}:${result.id}:${result.startTime}`,
+        group: 'Similar meaning' as const,
+        label: searchResultTitle(result),
+        result,
+        perform: () => handleResultClick(result),
+      }))
+  }, [semanticResults, results, handleResultClick])
+
   const items: PaletteItem[] = useMemo(() => {
     const q = query.trim()
     const commandPool = [...contextItems, ...staticActions]
@@ -278,7 +304,7 @@ export default function CommandPalette({ isOpen, platform, onClose, onOpenWrappe
           .filter((entry) => entry.score > 0)
           .sort((a, b) => b.score - a.score)
           .map((entry) => entry.item)
-    const merged = [...searchItems, ...commands]
+    const merged = [...searchItems, ...semanticItems, ...commands]
     // Keep groups contiguous in the declared order; preserve within-group order.
     return merged
       .map((item, index) => ({ item, index }))
@@ -287,7 +313,7 @@ export default function CommandPalette({ isOpen, platform, onClose, onOpenWrappe
         return groupDelta !== 0 ? groupDelta : a.index - b.index
       })
       .map((entry) => entry.item)
-  }, [contextItems, staticActions, searchItems, query])
+  }, [contextItems, staticActions, searchItems, semanticItems, query])
 
   useEffect(() => {
     if (highlightIdx >= items.length) setHighlightIdx(0)

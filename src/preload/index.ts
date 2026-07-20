@@ -115,6 +115,10 @@ export type DaylensSearchResult =
       // DEV-178: memory type of the backing record — observed capture,
       // connected source (meetings), supplied, or inferred.
       sourceType?: 'observed' | 'connected' | 'supplied' | 'inferred'
+      // DEV-180: set when the hit was found by local semantic search rather
+      // than an exact word match ("Similar meaning" in the palette).
+      foundBy?: 'meaning'
+      similarity?: number
     }
   | {
       type: 'block'
@@ -169,6 +173,22 @@ export interface DaylensNaturalSearchResult {
   intent: string | null
   terms: string[]
   usedProvider: boolean
+}
+
+// DEV-180: local semantic-search status for the Settings surface — which
+// engine and model run on this device, whether the artifact is present, and
+// how far the background embedding has gotten.
+export interface DaylensSemanticSearchStatus {
+  available: boolean
+  reason: 'ready' | 'model-missing' | 'runtime-missing' | 'load-failed' | 'vector-store-unavailable'
+  detail: string | null
+  engine: string
+  modelId: string
+  modelRevision: string
+  modelPresent: boolean
+  modelBytes: number
+  embeddedRecords: number
+  pendingRecords: number
 }
 
 // Typed IPC surface exposed to the renderer — NO Node/electron APIs leak through
@@ -321,6 +341,12 @@ const api = {
       ipcRenderer.invoke('search:artifacts', { query, opts }),
     natural: (query: string, opts?: SearchOptions): Promise<DaylensNaturalSearchResult> =>
       ipcRenderer.invoke('search:natural', { query, opts }),
+    // DEV-180: by-meaning results — always session-shaped moments with
+    // foundBy: 'meaning'; [] when the local model is unavailable.
+    semantic: (query: string, opts?: SearchOptions): Promise<Extract<DaylensSearchResult, { type: 'session' }>[]> =>
+      ipcRenderer.invoke('search:semantic', { query, opts }),
+    semanticStatus: (): Promise<DaylensSemanticSearchStatus> =>
+      ipcRenderer.invoke('search:semanticStatus'),
   },
   settings: {
     get: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.SETTINGS.GET),

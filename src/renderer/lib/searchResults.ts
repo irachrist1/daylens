@@ -53,13 +53,17 @@ export function searchResultTitle(result: DaylensSearchResult): string {
 
 export function searchResultSubtitle(result: DaylensSearchResult): string {
   switch (result.type) {
-    case 'session':
+    case 'session': {
       // Source type per the memory spec's search interface — but plain
       // observed capture stays quiet (the product describes activity before
       // telemetry). Connected/supplied/inferred provenance is worth a word.
-      return result.sourceType && result.sourceType !== 'observed'
+      const base = result.sourceType && result.sourceType !== 'observed'
         ? `${result.appName} · ${result.sourceType}`
         : result.appName
+      // DEV-180: a by-meaning hit says so — it matched what the moment was
+      // about, not the words the person typed.
+      return result.foundBy === 'meaning' ? `${base} · similar meaning` : base
+    }
     case 'block': return 'Timeline block'
     case 'browser': return result.domain
     case 'artifact': return result.filePath ? 'Generated file' : 'AI artifact'
