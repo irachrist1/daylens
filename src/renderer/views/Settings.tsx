@@ -3612,7 +3612,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
             />
             <SettingsRow
               title="Morning brief"
-              description="Short morning recap of yesterday and the day ahead."
+              description="One honest line about what yesterday actually was."
               control={<Toggle checked={settings.morningNudgeEnabled ?? true} onChange={(value) => void persist({ morningNudgeEnabled: value })} />}
             />
             <SettingsRow

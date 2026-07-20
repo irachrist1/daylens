@@ -22,7 +22,6 @@ import { deliverNotification } from './notificationDelivery'
 import {
   decideDailySummary,
   decideYesterdayRecap,
-  decideCarryoverNudge,
   workRhythmWindows,
   canAttemptAiNarrative,
   recordAiNarrativeAttempt,
@@ -89,13 +88,19 @@ function writeState(state: DailyNotifierState): void {
 // it came from the provider — never the deterministic fallback. When it returns
 // null (no provider, no credits, or the call failed) the notifier does NOT fire:
 // no canned brief, no static teaser.
+//
+// onStale 'regenerate': a brief is generated from the facts as they stand at
+// delivery time, never served from a stale cache. A stored wrap whose facts
+// hash still matches the day is reused (it IS the current facts); one that
+// drifted is regenerated and persisted before the notification fires, so the
+// line on the lock screen is by construction the lead of the wrap it opens.
 async function getAiNarrative(dateStr: string): Promise<AIWrappedNarrative | null> {
   try {
     const today = localDateString(new Date())
     const liveSession = dateStr === today ? getCurrentSession() : null
     const payload = getTimelineDayPayload(getDb(), dateStr, liveSession)
     const narrative = await Promise.race([
-      getWrappedNarrative(payload, { triggerSource: 'system' }),
+      getWrappedNarrative(payload, { triggerSource: 'system', onStale: 'regenerate' }),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), AI_REPORT_TIMEOUT_MS)),
     ])
     if (!narrative || narrative.source !== 'ai' || !narrative.lead) return null
@@ -210,52 +215,6 @@ async function checkYesterdayRecap(): Promise<void> {
   }
 }
 
-// §4.2 — Carryover nudge. Fires after ~1–2h of work that morning, always. Greets
-// you, notes what it can see you doing this morning, and surfaces yesterday's
-// open thread to pick up. A clean start is a real answer.
-async function checkCarryoverNudge(): Promise<void> {
-  if (dailySummaryPreparing) return
-
-  const settings = getSettings()
-  const now = new Date()
-  const today = localDateString(now)
-  const yesterday = shiftLocalDateString(today, -1)
-  const state = readState()
-
-  const windows = workRhythmWindows(settings.workRhythm)
-  const decision = decideCarryoverNudge({
-    now,
-    state,
-    todaySecondsTracked: secondsTrackedOn(today),
-    morningNudgeEnabled: settings.morningNudgeEnabled ?? true,
-    todayDateString: today,
-    yesterdayDateString: yesterday,
-    carryoverEndHour: windows.carryoverEndHour,
-  })
-  if (!decision.fire) return
-
-  dailySummaryPreparing = true
-  try {
-    if (!withAiAttemptBudget('carryover-nudge', today)) return
-    const body = await buildCarryoverBody(today, yesterday)
-    if (!body) return // no provider / no credits → no brief (§7)
-    notifyWithNavigation('Good morning', body, buildEveningWrapRoute(today))
-    writeState({ ...readState(), lastCarryoverNudgeDate: today })
-  } finally {
-    dailySummaryPreparing = false
-  }
-}
-
-// What it sees this morning, AI-written. Daylens never predicts tomorrow or
-// surfaces an "open thread to pick up" (locked decision: carryover is gone every
-// cadence), so the body is an honest read on the morning, nothing more. Returns
-// null when no AI content is available, so the nudge stays silent rather than
-// fabricating a brief.
-async function buildCarryoverBody(today: string, _yesterday: string): Promise<string | null> {
-  const todayNarrative = await getAiNarrative(today)
-  return todayNarrative?.lead?.trim() ?? null
-}
-
 // Record that the user generated a recap for `date` (Generate Recap / Analyze
 // Day). Two jobs: (1) it suppresses the next morning's "yesterday's recap"
 // notification for that day (§4.1 firing rule); (2) it freezes the day's
@@ -320,7 +279,6 @@ export function startDailySummaryNotifier(window?: BrowserWindow | null): void {
     void (async () => {
       try {
         await checkYesterdayRecap()
-        await checkCarryoverNudge()
         await checkDailySummary()
       } catch (err) {
         console.warn('[daily-summary] notifier check failed:', err)
