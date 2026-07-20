@@ -36,6 +36,16 @@ export const CAPTURE_STATE_EVIDENCE_KINDS = [
   'capture_recovered',
 ] as const
 
+// What a display SHOWED, as opposed to what owned input focus. Only the
+// identity of a window occupying a display full-screen is ever observed —
+// never an enumeration of everything open. Time derived from this family is
+// presence evidence ("visible/playing") and must always be labeled as such,
+// never presented as input-focused foreground time.
+export const DISPLAY_VISIBILITY_EVIDENCE_KINDS = [
+  'display_visible_changed',
+  'display_visible_sampled',
+] as const
+
 export const CONNECTED_SOURCE_EVIDENCE_KINDS = [
   'calendar_event',
   'meeting_record',
@@ -50,6 +60,7 @@ export type ApplicationEvidenceKind = typeof APPLICATION_EVIDENCE_KINDS[number]
 export type BrowserEvidenceKind = typeof BROWSER_EVIDENCE_KINDS[number]
 export type MachineStateEvidenceKind = typeof MACHINE_STATE_EVIDENCE_KINDS[number]
 export type CaptureStateEvidenceKind = typeof CAPTURE_STATE_EVIDENCE_KINDS[number]
+export type DisplayVisibilityEvidenceKind = typeof DISPLAY_VISIBILITY_EVIDENCE_KINDS[number]
 export type ConnectedSourceEvidenceKind = typeof CONNECTED_SOURCE_EVIDENCE_KINDS[number]
 
 export type EvidenceKind =
@@ -57,6 +68,7 @@ export type EvidenceKind =
   | BrowserEvidenceKind
   | MachineStateEvidenceKind
   | CaptureStateEvidenceKind
+  | DisplayVisibilityEvidenceKind
   | ConnectedSourceEvidenceKind
 
 export interface EvidenceSource {
