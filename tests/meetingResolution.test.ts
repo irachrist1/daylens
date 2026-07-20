@@ -30,6 +30,9 @@ import {
 import { resolveDayEnrichment } from '../src/main/services/enrichmentResolve.ts'
 import { getTimelineDayPayload } from '../src/main/services/workBlocks.ts'
 import { getCalendarEvents } from '../src/main/services/wrappedTools.ts'
+import { applyCorrection, previewCorrection, undoCorrection } from '../src/main/services/correctionCommands.ts'
+import { putExternalSignal } from '../src/main/services/externalSignals.ts'
+import { indexMemoryForDay } from '../src/main/services/memoryIndex.ts'
 
 const TEST_DATE = '2026-04-22'
 
@@ -274,6 +277,138 @@ test('excluding the meeting app evidence removes a captured-only meeting (exclus
     `).run(TEST_DATE, localMs(11, 0), localMs(13, 0), Date.now())
 
     assert.equal(resolveDayMeetingReport(db, TEST_DATE), null, 'excluded evidence is gone from the report entirely')
+  } finally {
+    db.close()
+  }
+})
+
+// ─── Attendance marks: attended / skipped / moved / unrelated ────────────────
+// timeline.md §Meetings: "A person can mark a scheduled meeting as attended,
+// skipped, moved, or unrelated." The mark is a real correction command —
+// previewed, durable, undoable — and propagates to the day report, the wrap
+// enrichment, search, and the agent.
+
+test('marking a calendar-only meeting attended is explicit confirmation: matched everywhere, and undo restores it', () => {
+  const db = createProductionTestDatabase()
+  try {
+    // putExternalSignal (not a raw INSERT) so the meeting entity is minted —
+    // the same path the local calendar probe uses.
+    putExternalSignal(db, TEST_DATE, 'calendar', {
+      events: [{ title: 'Quarterly planning', startClock: '10:00', durationMinutes: 60, attendeeCount: 4 }],
+    } satisfies CalendarSignal)
+    indexMemoryForDay(db, TEST_DATE)
+    assert.equal(resolveDayMeetingReport(db, TEST_DATE)!.calendarOnlyCount, 1)
+    const scheduledStatement = (db.prepare(`SELECT statement FROM memory_records WHERE record_kind = 'meeting'`)
+      .get() as { statement: string }).statement
+    assert.match(scheduledStatement, /^Scheduled: /, 'before the mark, search says scheduled context')
+
+    const command = {
+      kind: 'mark-meeting' as const,
+      date: TEST_DATE,
+      meeting: { title: 'Quarterly planning', startMs: localMs(10, 0) },
+      status: 'attended' as const,
+    }
+    const preview = previewCorrection(db, command, null)
+    assert.match(preview.description, /Mark "Quarterly planning" as attended/)
+    assert.ok(preview.surfaces.some((note) => /No minutes are invented/.test(note)))
+    const applied = applyCorrection(db, command, null)
+
+    // The day report — and through it the wrap and the agent — flips to matched.
+    const marked = resolveDayMeetingReport(db, TEST_DATE)!
+    assert.equal(marked.matchedCount, 1)
+    assert.equal(marked.calendarOnlyCount, 0)
+    assert.equal(marked.meetings[0].marked, 'attended')
+    assert.equal(marked.meetings[0].observedSeconds, null, 'a mark never invents observed minutes')
+    const enrichment = resolveDayEnrichment(db, TEST_DATE, { focusEnabled: () => false, notesEnabled: false })!
+    assert.equal(enrichment.meetings!.matched, 1)
+
+    // Search propagation: explicit confirmation upgrades the memory record.
+    const upgraded = (db.prepare(`SELECT statement FROM memory_records WHERE record_kind = 'meeting'`)
+      .get() as { statement: string }).statement
+    assert.match(upgraded, /^Meeting: /, 'the confirmation reaches exact search')
+
+    // Undo restores the ledger AND the search statement.
+    const undone = undoCorrection(db, applied.correctionId)
+    assert.equal(undone.undone, true)
+    assert.equal(resolveDayMeetingReport(db, TEST_DATE)!.calendarOnlyCount, 1)
+    const restored = (db.prepare(`SELECT statement FROM memory_records WHERE record_kind = 'meeting'`)
+      .get() as { statement: string }).statement
+    assert.match(restored, /^Scheduled: /, 'undo removes the confirmation everywhere')
+  } finally {
+    db.close()
+  }
+})
+
+test('marking a matched meeting unrelated releases its evidence: calendar-only again, the call stands on its own', () => {
+  const db = createProductionTestDatabase()
+  try {
+    putExternalSignal(db, TEST_DATE, 'calendar', {
+      events: [{ title: 'Design review', startClock: '14:00', durationMinutes: 60, attendeeCount: 3 }],
+    } satisfies CalendarSignal)
+    insertZoom(db, 14, 0, 60)
+    assert.equal(resolveDayMeetingReport(db, TEST_DATE)!.matchedCount, 1)
+
+    applyCorrection(db, {
+      kind: 'mark-meeting',
+      date: TEST_DATE,
+      meeting: { title: 'Design review', startMs: localMs(14, 0) },
+      status: 'unrelated',
+    }, null)
+
+    const corrected = resolveDayMeetingReport(db, TEST_DATE)!
+    assert.equal(corrected.matchedCount, 0, 'the person says the Zoom time was not this meeting')
+    assert.equal(corrected.calendarOnlyCount, 1)
+    assert.equal(corrected.capturedOnlyCount, 1, 'the real call still exists, on its own')
+    assert.equal(corrected.meetings.find((m) => m.attendance === 'calendar_only')!.marked, 'unrelated')
+
+    // The Timeline payload carries the mark and drops the block annotation.
+    const payload = getTimelineDayPayload(db, TEST_DATE, null, { materialize: true })
+    const scheduled = payload.scheduledMeetings!.find((m) => m.title === 'Design review')!
+    assert.equal(scheduled.attendance, 'calendar_only')
+    assert.equal(scheduled.marked, 'unrelated')
+    assert.equal(scheduled.matchedBlockId, null)
+  } finally {
+    db.close()
+  }
+})
+
+test('a mark survives a calendar re-sync (reprojection cannot overwrite a correction)', () => {
+  const db = createProductionTestDatabase()
+  try {
+    putExternalSignal(db, TEST_DATE, 'calendar', {
+      events: [{ title: 'Standup', startClock: '09:30', durationMinutes: 15, attendeeCount: 5 }],
+    } satisfies CalendarSignal)
+    applyCorrection(db, {
+      kind: 'mark-meeting',
+      date: TEST_DATE,
+      meeting: { title: 'Standup', startMs: localMs(9, 30) },
+      status: 'skipped',
+    }, null)
+    // The connector re-syncs and rewrites the day signal (same event identity).
+    putExternalSignal(db, TEST_DATE, 'calendar', {
+      events: [{ title: 'Standup', startClock: '09:30', durationMinutes: 15, attendeeCount: 5 }],
+    } satisfies CalendarSignal)
+    const report = resolveDayMeetingReport(db, TEST_DATE)!
+    assert.equal(report.meetings[0].marked, 'skipped')
+    assert.equal(report.matchedCount, 0)
+  } finally {
+    db.close()
+  }
+})
+
+test('marking a meeting that is no longer on the day fails whole, with plain guidance', () => {
+  const db = createProductionTestDatabase()
+  try {
+    storeCalendar(db, [{ title: 'Standup', startClock: '09:30', durationMinutes: 15, attendeeCount: 5 }])
+    assert.throws(
+      () => applyCorrection(db, {
+        kind: 'mark-meeting',
+        date: TEST_DATE,
+        meeting: { title: 'Vanished', startMs: localMs(9, 30) },
+        status: 'attended',
+      }, null),
+      /not on this day anymore/,
+    )
   } finally {
     db.close()
   }

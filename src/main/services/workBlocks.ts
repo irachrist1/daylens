@@ -85,8 +85,10 @@ import { getSecondaryDisplayVisibleSpansForRange } from '../core/projections/dis
 import { getExternalSignal } from './externalSignals'
 import {
   capturedMeetingSpansFromBlocks,
+  getMeetingAttendanceMarks,
   matchDayMeetings,
   scheduledMeetingsFromSignal,
+  scheduledParticipantsForDay,
 } from './meetingResolution'
 
 /**
@@ -5742,7 +5744,10 @@ function resolveScheduledMeetingsForDay(
     const calendar = getExternalSignal<CalendarSignal>(db, dateStr, 'calendar')?.payload ?? null
     const scheduled = scheduledMeetingsFromSignal(dateStr, calendar)
     if (scheduled.length === 0) return undefined
-    const report = matchDayMeetings(scheduled, capturedMeetingSpansFromBlocks(blocks))
+    const report = matchDayMeetings(scheduled, capturedMeetingSpansFromBlocks(blocks), {
+      marks: getMeetingAttendanceMarks(db, dateStr),
+      participants: scheduledParticipantsForDay(db, dateStr),
+    })
     return report.meetings
       .filter((meeting) => meeting.attendance !== 'captured_only')
       .map((meeting) => ({
@@ -5750,7 +5755,9 @@ function resolveScheduledMeetingsForDay(
         startMs: meeting.scheduledStartMs!,
         endMs: meeting.scheduledEndMs!,
         attendeeCount: meeting.attendeeCount,
+        participants: meeting.participants,
         attendance: meeting.attendance === 'matched' ? 'matched' as const : 'calendar_only' as const,
+        marked: meeting.marked,
         matchedBlockId: meeting.matchedBlockId,
       }))
   } catch {

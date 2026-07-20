@@ -406,6 +406,7 @@ function CalendarDayTrack({
   bounds,
   gapSegments = [],
   scheduledMeetings = [],
+  onScheduledMeetingClick,
   hourHeight,
   compact = false,
   selectedBlockId = null,
@@ -419,11 +420,14 @@ function CalendarDayTrack({
   blocks: WorkContextBlock[]
   bounds: TrackBounds
   gapSegments?: TimelineGapSegment[]
-  // DEV-189: scheduled calendar events. Calendar-only ones draw as a dashed
-  // outline — context, never a block, never time (timeline.md §Meetings: a
-  // calendar event alone is not proof the meeting occurred). Matched ones are
-  // already represented by their meeting block and draw nothing extra here.
+  // DEV-189: scheduled calendar events. Ones without a supporting block draw
+  // as an outline — context, never a block, never time (timeline.md
+  // §Meetings: a calendar event alone is not proof the meeting occurred).
+  // Evidence-matched ones are already represented by their meeting block.
   scheduledMeetings?: TimelineScheduledMeeting[]
+  // Opens the attended/skipped/moved/unrelated mark menu for a scheduled
+  // event outline (day view only).
+  onScheduledMeetingClick?: (meeting: TimelineScheduledMeeting, event: ReactMouseEvent) => void
   hourHeight: number
   compact?: boolean
   selectedBlockId?: string | null
@@ -492,17 +496,32 @@ function CalendarDayTrack({
         )
       })}
 
-      {/* Scheduled context (DEV-189): calendar-only events as quiet dashed
-          outlines under the real blocks. No fill, no interaction, no minutes —
-          the calendar said this was planned; the day has no evidence it
-          happened, and it must never read as activity. */}
-      {!compact && scheduledMeetings.filter((meeting) => meeting.attendance === 'calendar_only').map((meeting) => {
+      {/* Scheduled context (DEV-189): scheduled events with no supporting
+          block, drawn as quiet outlines under the real blocks. No fill, no
+          minutes — a calendar entry is never activity. Dashed = calendar-only
+          (or explicitly marked skipped/moved/unrelated); solid = the person
+          confirmed attendance. Clicking opens the attended/skipped/moved/
+          unrelated mark menu (timeline.md §Meetings). */}
+      {!compact && scheduledMeetings.filter((meeting) => meeting.matchedBlockId == null).map((meeting) => {
         const top = topFor(meeting.startMs)
         const ghostHeight = Math.max(20, topFor(meeting.endMs) - top)
+        const confirmed = meeting.attendance === 'matched'
+        const stateLine = confirmed
+          ? 'Attended · you confirmed'
+          : meeting.marked === 'skipped'
+            ? 'Skipped · your mark'
+            : meeting.marked === 'moved'
+              ? 'Moved · your mark'
+              : meeting.marked === 'unrelated'
+                ? 'Unrelated · your mark'
+                : 'Scheduled · no observed activity'
         return (
           <div
             key={`scheduled:${meeting.startMs}:${meeting.title}`}
-            title={`${meeting.title} — on your calendar; no observed activity supports that you attended`}
+            title={confirmed
+              ? `${meeting.title} — you marked this attended`
+              : `${meeting.title} — on your calendar; no observed activity supports that you attended`}
+            onClick={onScheduledMeetingClick ? (event) => onScheduledMeetingClick(meeting, event) : undefined}
             style={{
               position: 'absolute',
               top,
@@ -510,10 +529,10 @@ function CalendarDayTrack({
               left: 4,
               right: 8,
               borderRadius: 10,
-              border: '1.5px dashed var(--color-border)',
+              border: confirmed ? '1.5px solid var(--color-border)' : '1.5px dashed var(--color-border)',
               padding: '3px 10px',
               overflow: 'hidden',
-              pointerEvents: 'none',
+              cursor: onScheduledMeetingClick ? 'pointer' : 'default',
               zIndex: 1,
             }}
           >
@@ -522,7 +541,7 @@ function CalendarDayTrack({
             </div>
             {ghostHeight >= 40 && (
               <div style={{ fontSize: 10.5, color: 'var(--color-text-tertiary)' }}>
-                Scheduled · no observed activity
+                {stateLine}
               </div>
             )}
           </div>
@@ -578,6 +597,103 @@ function CalendarDayTrack({
           <div style={{ borderTop: '2px solid #ef4444' }} />
         </div>
       )}
+    </div>
+  )
+}
+
+// The mark menu on a scheduled event outline (DEV-189, timeline.md
+// §Meetings: "A person can mark a scheduled meeting as attended, skipped,
+// moved, or unrelated"). Every choice flows through the corrections
+// machinery — previewed, durable, undoable.
+function ScheduledMeetingMenu({
+  x,
+  y,
+  meeting,
+  busy,
+  onMark,
+  onClose,
+}: {
+  x: number
+  y: number
+  meeting: TimelineScheduledMeeting
+  busy: boolean
+  onMark: (status: 'attended' | 'skipped' | 'moved' | 'unrelated' | null) => void
+  onClose: () => void
+}) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  const MENU_WIDTH = 220
+  const options: Array<{ status: 'attended' | 'skipped' | 'moved' | 'unrelated' | null; label: string }> = [
+    { status: 'attended', label: 'I attended this' },
+    { status: 'skipped', label: 'I skipped it' },
+    { status: 'moved', label: 'It moved' },
+    { status: 'unrelated', label: 'Not related to my day' },
+    ...(meeting.marked || meeting.attendance === 'matched' ? [{ status: null, label: 'Clear my mark' } as const] : []),
+  ]
+  const MENU_HEIGHT = options.length * 36 + 42
+  const left = Math.min(x, window.innerWidth - MENU_WIDTH - 8)
+  const top = Math.min(y, window.innerHeight - MENU_HEIGHT - 8)
+
+  const itemStyle: CSSProperties = {
+    display: 'block',
+    width: '100%',
+    textAlign: 'left',
+    border: 'none',
+    background: 'transparent',
+    borderRadius: 7,
+    padding: '7px 10px',
+    fontSize: 12.5,
+    fontWeight: 600,
+    color: 'var(--color-text-primary)',
+    cursor: busy ? 'default' : 'pointer',
+    opacity: busy ? 0.5 : 1,
+  }
+
+  return (
+    <div
+      data-timeline-inspector="true"
+      style={{ position: 'fixed', inset: 0, zIndex: 60 }}
+      onClick={onClose}
+      onContextMenu={(event) => { event.preventDefault(); onClose() }}
+    >
+      <div
+        role="menu"
+        style={{
+          position: 'fixed',
+          left,
+          top,
+          width: MENU_WIDTH,
+          borderRadius: 10,
+          border: '1px solid var(--color-border-ghost)',
+          background: 'var(--color-surface)',
+          boxShadow: '0 12px 36px rgba(0,0,0,0.24)',
+          padding: 5,
+          zIndex: 61,
+        }}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div style={{ padding: '6px 10px 4px', fontSize: 11, fontWeight: 700, color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {meeting.title}
+        </div>
+        {options.map((option) => (
+          <button
+            key={option.label}
+            type="button"
+            role="menuitem"
+            disabled={busy}
+            onClick={() => onMark(option.status)}
+            style={itemStyle}
+            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-high)' }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
     </div>
   )
 }
@@ -1602,12 +1718,16 @@ function BlockDetailInspector({
   block,
   payload,
   onClose,
+  onCorrection,
   maxHeightPx = DETAIL_PANEL_MAX_HEIGHT_DEFAULT,
   sticky = true,
 }: {
   block: WorkContextBlock
   payload: DayTimelinePayload
   onClose: () => void
+  // DEV-189: lets the matched-meeting card offer "I didn't attend" / "Not
+  // this meeting" — the mark-meeting correction through the same pipeline.
+  onCorrection?: (command: CorrectionCommand) => Promise<boolean>
   // The fixed cap on the whole panel. Content never grows the panel past this;
   // the evidence body scrolls inside instead.
   maxHeightPx?: number
@@ -1871,6 +1991,39 @@ function BlockDetailInspector({
               <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}>
                 Scheduled {formatClockTime(matchedMeeting.startMs)} – {formatClockTime(matchedMeeting.endMs)} · the time above is what was actually observed
               </div>
+              {matchedMeeting.participants.length > 0 && (
+                <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}>
+                  With {matchedMeeting.participants.join(', ')}
+                </div>
+              )}
+              {onCorrection && (
+                <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                  <button
+                    type="button"
+                    style={{ fontSize: 11, padding: '3px 10px', borderRadius: 999, border: '1px solid var(--color-border)', background: 'transparent', color: 'var(--color-text-secondary)', cursor: 'pointer' }}
+                    onClick={() => void onCorrection({
+                      kind: 'mark-meeting',
+                      date: payload.date,
+                      meeting: { title: matchedMeeting.title, startMs: matchedMeeting.startMs },
+                      status: 'skipped',
+                    })}
+                  >
+                    I didn&apos;t attend
+                  </button>
+                  <button
+                    type="button"
+                    style={{ fontSize: 11, padding: '3px 10px', borderRadius: 999, border: '1px solid var(--color-border)', background: 'transparent', color: 'var(--color-text-secondary)', cursor: 'pointer' }}
+                    onClick={() => void onCorrection({
+                      kind: 'mark-meeting',
+                      date: payload.date,
+                      meeting: { title: matchedMeeting.title, startMs: matchedMeeting.startMs },
+                      status: 'unrelated',
+                    })}
+                  >
+                    Not this meeting
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
@@ -2600,6 +2753,32 @@ export default function Timeline() {
     setContextMenu({ x: event.clientX, y: event.clientY, blockId: block.id })
   }
 
+  // DEV-189: the attended/skipped/moved/unrelated mark menu for a scheduled
+  // event outline. Marks flow through the same correction pipeline as every
+  // other correction — previewed, durable, undoable.
+  const [meetingMenu, setMeetingMenu] = useState<{ x: number; y: number; meeting: TimelineScheduledMeeting } | null>(null)
+  const [meetingMenuBusy, setMeetingMenuBusy] = useState(false)
+  const openScheduledMeetingMenu = (meeting: TimelineScheduledMeeting, event: ReactMouseEvent) => {
+    event.preventDefault()
+    event.stopPropagation()
+    setMeetingMenu({ x: event.clientX, y: event.clientY, meeting })
+  }
+  const markScheduledMeeting = async (status: 'attended' | 'skipped' | 'moved' | 'unrelated' | null) => {
+    if (!meetingMenu) return
+    setMeetingMenuBusy(true)
+    try {
+      await correction.request({
+        kind: 'mark-meeting',
+        date,
+        meeting: { title: meetingMenu.meeting.title, startMs: meetingMenu.meeting.startMs },
+        status,
+      })
+      setMeetingMenu(null)
+    } finally {
+      setMeetingMenuBusy(false)
+    }
+  }
+
   // The menu's target block and its immediate neighbours, for "Merge with
   // above/below" — a single-neighbour merge, not the shift-click range merge
   // that used to live on the read-only panel (spec: no edit controls there).
@@ -2937,6 +3116,7 @@ export default function Timeline() {
                         bounds={dayBounds}
                         gapSegments={gapSegments}
                         scheduledMeetings={payload.scheduledMeetings}
+                        onScheduledMeetingClick={openScheduledMeetingMenu}
                         hourHeight={DAY_HOUR_HEIGHT}
                         selectedBlockId={selectedBlockId}
                         selectedSpanIds={selectedSpanIds}
@@ -2945,6 +3125,16 @@ export default function Timeline() {
                         onBlockContextMenu={openBlockContextMenu}
                       />
                     </div>
+                    {meetingMenu && (
+                      <ScheduledMeetingMenu
+                        x={meetingMenu.x}
+                        y={meetingMenu.y}
+                        meeting={meetingMenu.meeting}
+                        busy={meetingMenuBusy}
+                        onMark={(status) => { void markScheduledMeeting(status) }}
+                        onClose={() => { if (!meetingMenuBusy) setMeetingMenu(null) }}
+                      />
+                    )}
                     {contextMenu && (
                       <BlockContextMenu
                         x={contextMenu.x}
@@ -3002,6 +3192,7 @@ export default function Timeline() {
                       <BlockDetailInspector
                         block={selectedBlock}
                         payload={payload}
+                        onCorrection={correction.request}
                         onClose={() => {
                           setSelectedBlockId(null)
                           setMergeRangeEndId(null)

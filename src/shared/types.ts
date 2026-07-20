@@ -78,6 +78,11 @@ export type CorrectionCommand =
   | { kind: 'exclude-block'; date: string; blockId: string }
   | { kind: 'exclude-evidence'; date: string; blockId: string; evidence: ExcludedEvidenceRef }
   | { kind: 'assign-client'; date: string; blockId: string; clientId: string | null; projectId?: string | null }
+  // DEV-189 (timeline.md §Meetings): mark a scheduled meeting as attended,
+  // skipped, moved, or unrelated. status null clears the mark. The meeting is
+  // addressed by its scheduled identity, not a block id — a calendar-only
+  // event has no block.
+  | { kind: 'mark-meeting'; date: string; meeting: { title: string; startMs: number }; status: 'attended' | 'skipped' | 'moved' | 'unrelated' | null }
 
 export interface CorrectionBlockDelta {
   blockId: string
@@ -391,15 +396,21 @@ export interface DayTimelinePayload {
 }
 
 /** One scheduled calendar event as the Timeline day view shows it (DEV-189).
- *  `attendance` is honest: 'matched' means captured meeting-app evidence
- *  supports it (and names the supporting block); 'calendar_only' means it is
- *  scheduled context with NO evidence the meeting happened. */
+ *  `attendance` is honest: 'matched' means captured meeting-app evidence OR
+ *  the person's explicit confirmation supports it (a block id is present only
+ *  for the evidence case); 'calendar_only' means it is scheduled context with
+ *  NO support that the meeting happened. `marked` carries the person's own
+ *  attended/skipped/moved/unrelated correction when one exists. */
 export interface TimelineScheduledMeeting {
   title: string
   startMs: number
   endMs: number
   attendeeCount: number | null
+  /** Attendee display names when the calendar source carries them. Evidence
+   *  surface only — never wrap copy. */
+  participants: string[]
   attendance: 'matched' | 'calendar_only'
+  marked: 'attended' | 'skipped' | 'moved' | 'unrelated' | null
   matchedBlockId: string | null
 }
 

@@ -37,6 +37,7 @@
 // Deterministic and pure-read: same stored signal + same corrected facts ⇒
 // same report. Nothing here collects, prompts, or throws.
 
+import { randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import type { AppSession, CalendarSignal, WorkContextBlock } from '@shared/types'
 import { localDayBounds } from '../lib/localDate'
@@ -45,6 +46,17 @@ import { getExternalSignal } from './externalSignals'
 
 export type MeetingAttendance = 'matched' | 'calendar_only' | 'captured_only'
 
+/** An explicit person-made mark on a scheduled meeting (timeline.md
+ *  §Meetings: "A person can mark a scheduled meeting as attended, skipped,
+ *  moved, or unrelated"). 'attended' is explicit confirmation — the spec's
+ *  third way a meeting becomes "you met". The other three all mean the
+ *  overlapping captured evidence (if any) is NOT this meeting. */
+export type MeetingAttendanceStatus = 'attended' | 'skipped' | 'moved' | 'unrelated'
+
+export function isMeetingAttendanceStatus(value: unknown): value is MeetingAttendanceStatus {
+  return value === 'attended' || value === 'skipped' || value === 'moved' || value === 'unrelated'
+}
+
 /** One scheduled calendar event, resolved to ms epochs on its local day. */
 export interface ScheduledDayMeeting {
   title: string
@@ -52,6 +64,9 @@ export interface ScheduledDayMeeting {
   endMs: number
   durationMinutes: number
   attendeeCount: number | null
+  /** Day-local identity (minutes-into-day + normalized title) — the key the
+   *  attendance-mark ledger and the participants lookup are addressed by. */
+  key: string
 }
 
 /** One contiguous stretch of meeting-app foreground evidence. */
@@ -66,6 +81,14 @@ export interface CapturedMeetingSpan {
 
 export interface ResolvedDayMeeting {
   attendance: MeetingAttendance
+  /** The person's explicit mark on this scheduled meeting, when one exists.
+   *  'attended' forces the matched bucket (explicit confirmation); the other
+   *  three force calendar_only — the evidence is not this meeting. */
+  marked: MeetingAttendanceStatus | null
+  /** Attendee display names from the calendar source, when it carries them
+   *  (the connectors do; the local probe only counts). Never leaves the
+   *  evidence surfaces — the wrap sees counts, not names. */
+  participants: string[]
   /** The calendar title when scheduled; the meeting app's honest label
    *  ("Zoom") when the meeting is known from captured evidence alone. */
   title: string | null
@@ -128,6 +151,13 @@ export function parseStartClockMinutes(clock: unknown): number | null {
   return hour * 60 + minute
 }
 
+/** The day-local identity of one scheduled event: minutes-into-day plus the
+ *  normalized title. Stable across re-syncs and across BOTH calendar sources'
+ *  clock dialects, so an attendance mark keeps addressing the same event. */
+export function scheduledEventKey(startMinutes: number, title: string): string {
+  return `${startMinutes}|${title.trim().toLowerCase()}`
+}
+
 /** The stored calendar day signal as ms-resolved scheduled meetings. */
 export function scheduledMeetingsFromSignal(
   date: string,
@@ -150,9 +180,90 @@ export function scheduledMeetingsFromSignal(
       endMs: startMs + durationMinutes * 60_000,
       durationMinutes,
       attendeeCount: typeof event.attendeeCount === 'number' ? event.attendeeCount : null,
+      key: scheduledEventKey(minutes, event.title),
     })
   }
   return out.sort((a, b) => a.startMs - b.startMs)
+}
+
+// ─── Attendance marks (the correction ledger) ────────────────────────────────
+
+/** Every attendance mark for the date, keyed by scheduled-event identity. */
+export function getMeetingAttendanceMarks(
+  db: Database.Database,
+  date: string,
+): Map<string, MeetingAttendanceStatus> {
+  const rows = db.prepare(
+    `SELECT event_key, status FROM meeting_attendance_marks WHERE date = ?`,
+  ).all(date) as Array<{ event_key: string; status: string }>
+  const marks = new Map<string, MeetingAttendanceStatus>()
+  for (const row of rows) {
+    if (isMeetingAttendanceStatus(row.status)) marks.set(row.event_key, row.status)
+  }
+  return marks
+}
+
+export function upsertMeetingAttendanceMark(
+  db: Database.Database,
+  input: { date: string; eventKey: string; status: MeetingAttendanceStatus; nowMs?: number },
+): void {
+  const nowMs = input.nowMs ?? Date.now()
+  db.prepare(`
+    INSERT INTO meeting_attendance_marks (id, date, event_key, status, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(date, event_key) DO UPDATE SET status = excluded.status, updated_at = excluded.updated_at
+  `).run(`mam_${randomUUID().replace(/-/g, '').slice(0, 18)}`, input.date, input.eventKey, input.status, nowMs, nowMs)
+}
+
+export function deleteMeetingAttendanceMark(
+  db: Database.Database,
+  input: { date: string; eventKey: string },
+): void {
+  db.prepare(`DELETE FROM meeting_attendance_marks WHERE date = ? AND event_key = ?`)
+    .run(input.date, input.eventKey)
+}
+
+// ─── Participants (calendar-source attendee names) ───────────────────────────
+
+/** Attendee display names per scheduled event, read from the calendar
+ *  connectors' record ledger (the local probe carries counts only, so a day
+ *  without connector records simply resolves to empty lists). Capped. */
+const MAX_PARTICIPANTS = 8
+
+export function scheduledParticipantsForDay(
+  db: Database.Database,
+  date: string,
+): Map<string, string[]> {
+  const out = new Map<string, string[]>()
+  let rows: Array<{ envelope_json: string }> = []
+  try {
+    rows = db.prepare(`
+      SELECT envelope_json FROM connector_records
+      WHERE date = ? AND tombstoned_at IS NULL
+        AND connector_id IN ('google_calendar', 'outlook_calendar')
+    `).all(date) as Array<{ envelope_json: string }>
+  } catch {
+    return out
+  }
+  for (const row of rows) {
+    try {
+      const envelope = JSON.parse(row.envelope_json) as {
+        daySignal?: { startClock?: unknown; title?: unknown }
+        entity?: { kind?: string; attendees?: Array<{ displayName?: unknown }> }
+      }
+      const clock = envelope.daySignal?.startClock
+      const title = envelope.daySignal?.title
+      if (typeof title !== 'string' || envelope.entity?.kind !== 'calendar_event') continue
+      const minutes = parseStartClockMinutes(clock)
+      if (minutes == null) continue
+      const names = (envelope.entity.attendees ?? [])
+        .map((attendee) => (typeof attendee.displayName === 'string' ? attendee.displayName.trim() : ''))
+        .filter(Boolean)
+        .slice(0, MAX_PARTICIPANTS)
+      if (names.length > 0) out.set(scheduledEventKey(minutes, title), names)
+    } catch { /* one unreadable envelope never hides the rest */ }
+  }
+  return out
 }
 
 // ─── Captured side ───────────────────────────────────────────────────────────
@@ -215,6 +326,48 @@ export function capturedMeetingSpansFromBlocks(blocks: readonly WorkContextBlock
   return spans.sort((a, b) => a.startMs - b.startMs)
 }
 
+/** The meeting entity a scheduled event minted, for propagating an explicit
+ *  attendance confirmation into the memory index (search says "Meeting:"
+ *  instead of "Scheduled:"). Source-native identity first (the connector
+ *  ledger row that carried the event), display-name match as the fallback
+ *  for locally-probed calendars. Null when no entity exists — the mark still
+ *  works everywhere else. */
+export function meetingEntityIdForScheduledEvent(
+  db: Database.Database,
+  date: string,
+  eventKey: string,
+): string | null {
+  try {
+    const rows = db.prepare(`
+      SELECT entity_id, envelope_json FROM connector_records
+      WHERE date = ? AND tombstoned_at IS NULL
+        AND connector_id IN ('google_calendar', 'outlook_calendar')
+    `).all(date) as Array<{ entity_id: string | null; envelope_json: string }>
+    for (const row of rows) {
+      if (!row.entity_id) continue
+      try {
+        const envelope = JSON.parse(row.envelope_json) as {
+          daySignal?: { startClock?: unknown; title?: unknown }
+        }
+        const minutes = parseStartClockMinutes(envelope.daySignal?.startClock)
+        const title = envelope.daySignal?.title
+        if (minutes == null || typeof title !== 'string') continue
+        if (scheduledEventKey(minutes, title) === eventKey) return row.entity_id
+      } catch { /* next row */ }
+    }
+  } catch { /* no connector ledger */ }
+  const title = eventKey.split('|').slice(1).join('|')
+  if (!title) return null
+  try {
+    const row = db.prepare(`
+      SELECT id FROM entities WHERE entity_type = 'meeting' AND LOWER(canonical_name) = ? LIMIT 1
+    `).get(title) as { id: string } | undefined
+    return row?.id ?? null
+  } catch {
+    return null
+  }
+}
+
 // ─── Matching ────────────────────────────────────────────────────────────────
 
 function overlapMs(aStartMs: number, aEndMs: number, bStartMs: number, bEndMs: number): number {
@@ -234,40 +387,67 @@ function overlapMs(aStartMs: number, aEndMs: number, bStartMs: number, bEndMs: n
 export function matchDayMeetings(
   scheduled: readonly ScheduledDayMeeting[],
   captured: readonly CapturedMeetingSpan[],
+  options: {
+    /** Explicit person-made marks by scheduled-event key. 'attended' forces
+     *  matched (explicit confirmation); skipped/moved/unrelated force
+     *  calendar_only and release the evidence for other interpretations. */
+    marks?: ReadonlyMap<string, MeetingAttendanceStatus>
+    /** Attendee display names by scheduled-event key (calendar source). */
+    participants?: ReadonlyMap<string, string[]>
+  } = {},
 ): DayMeetingReport {
   const meetings: ResolvedDayMeeting[] = []
   const claimedSpans = new Set<CapturedMeetingSpan>()
+  const marks = options.marks
+  const participantsOf = (event: ScheduledDayMeeting): string[] =>
+    options.participants?.get(event.key) ?? []
 
   for (const event of scheduled) {
+    const marked = marks?.get(event.key) ?? null
+    // skipped / moved / unrelated: the person says this meeting did not
+    // happen here — never match, and leave any overlapping evidence free to
+    // be its own captured-only meeting or support another event.
+    const mayMatch = marked == null || marked === 'attended'
     let best: CapturedMeetingSpan | null = null
     let bestOverlap = 0
-    for (const span of captured) {
-      const overlap = overlapMs(
-        event.startMs - MATCH_PAD_MS,
-        event.endMs + MATCH_PAD_MS,
-        span.startMs,
-        span.endMs,
-      )
-      if (overlap > bestOverlap) { best = span; bestOverlap = overlap }
+    if (mayMatch) {
+      for (const span of captured) {
+        const overlap = overlapMs(
+          event.startMs - MATCH_PAD_MS,
+          event.endMs + MATCH_PAD_MS,
+          span.startMs,
+          span.endMs,
+        )
+        if (overlap > bestOverlap) { best = span; bestOverlap = overlap }
+      }
     }
-    if (best && bestOverlap >= Math.min(MIN_MATCH_OVERLAP_MS, event.durationMinutes * 60_000)) {
-      claimedSpans.add(best)
+    const evidenceSupports = best != null
+      && bestOverlap >= Math.min(MIN_MATCH_OVERLAP_MS, event.durationMinutes * 60_000)
+    // "Device activity, call presence, … or explicit confirmation can
+    // support 'you met'" (timeline.md §Meetings): an 'attended' mark is the
+    // explicit-confirmation leg and matches even without captured overlap.
+    if (evidenceSupports || marked === 'attended') {
+      if (evidenceSupports) claimedSpans.add(best!)
       meetings.push({
         attendance: 'matched',
+        marked,
+        participants: participantsOf(event),
         title: event.title,
         scheduledStartMs: event.startMs,
         scheduledEndMs: event.endMs,
         scheduledMinutes: event.durationMinutes,
-        observedStartMs: best.startMs,
-        observedEndMs: best.endMs,
-        observedSeconds: best.activeSeconds,
+        observedStartMs: evidenceSupports ? best!.startMs : null,
+        observedEndMs: evidenceSupports ? best!.endMs : null,
+        observedSeconds: evidenceSupports ? best!.activeSeconds : null,
         attendeeCount: event.attendeeCount,
-        matchedBlockId: best.blockId,
-        appName: best.appName,
+        matchedBlockId: evidenceSupports ? best!.blockId : null,
+        appName: evidenceSupports ? best!.appName : null,
       })
     } else {
       meetings.push({
         attendance: 'calendar_only',
+        marked,
+        participants: participantsOf(event),
         title: event.title,
         scheduledStartMs: event.startMs,
         scheduledEndMs: event.endMs,
@@ -287,6 +467,8 @@ export function matchDayMeetings(
     if (span.activeSeconds < CAPTURED_ONLY_MIN_SECONDS) continue
     meetings.push({
       attendance: 'captured_only',
+      marked: null,
+      participants: [],
       title: span.appName || null,
       scheduledStartMs: null,
       scheduledEndMs: null,
@@ -344,6 +526,10 @@ export function resolveDayMeetingReport(
   }
 
   if (scheduled.length === 0 && captured.length === 0) return null
-  const report = matchDayMeetings(scheduled, captured)
+  let marks: Map<string, MeetingAttendanceStatus> | undefined
+  let participants: Map<string, string[]> | undefined
+  try { marks = getMeetingAttendanceMarks(db, date) } catch { /* pre-migration DB */ }
+  try { participants = scheduledParticipantsForDay(db, date) } catch { /* no ledger */ }
+  const report = matchDayMeetings(scheduled, captured, { marks, participants })
   return report.meetings.length > 0 ? report : null
 }

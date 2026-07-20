@@ -3020,6 +3020,26 @@ const migrations: Migration[] = [
       reconcileSuppliedMemoryRecords(db)
     },
   },
+  {
+    version: 61,
+    description:
+      'Meeting attendance marks (DEV-189, timeline.md §Meetings: "A person can mark a scheduled meeting as attended, skipped, moved, or unrelated"). The day-level meeting resolution (calendar-only / captured-only / matched buckets, issue #3) re-reads these on every projection, so a mark is durable correction data that survives restart, reprojection, and source refresh, and propagates to the Timeline day payload, the wrap enrichment, search (via the user_confirmation occurrence ref), and the agent meeting report. event_key is the scheduled event\'s day-local identity (minutes-into-day + normalized title) — stable across re-syncs. LOCAL-ONLY, no sync-allowlist keys.',
+    up: () => {
+      getDb().exec(`
+        CREATE TABLE IF NOT EXISTS meeting_attendance_marks (
+          id TEXT PRIMARY KEY,
+          date TEXT NOT NULL,
+          event_key TEXT NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('attended', 'skipped', 'moved', 'unrelated')),
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          UNIQUE (date, event_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_meeting_attendance_marks_date
+          ON meeting_attendance_marks (date);
+      `)
+    },
+  },
 ]
 
 export const LATEST_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0

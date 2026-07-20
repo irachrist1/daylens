@@ -433,6 +433,26 @@ CREATE TABLE IF NOT EXISTS evidence_exclusions (
 CREATE INDEX IF NOT EXISTS idx_evidence_exclusions_span
   ON evidence_exclusions (span_start_ms, span_end_ms);
 
+-- Meeting attendance marks (DEV-189, timeline.md §Meetings: "A person can
+-- mark a scheduled meeting as attended, skipped, moved, or unrelated").
+-- Durable correction data: the day-level meeting resolution re-reads these on
+-- every projection, so a mark survives restart, reprojection, and source
+-- refresh. event_key is the scheduled event's day-local identity
+-- (minutes-into-day + normalized title) — the same identity the calendar day
+-- signal carries, stable across re-syncs. LOCAL-ONLY: never synced.
+CREATE TABLE IF NOT EXISTS meeting_attendance_marks (
+  id TEXT PRIMARY KEY,
+  date TEXT NOT NULL,
+  event_key TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('attended', 'skipped', 'moved', 'unrelated')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE (date, event_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_meeting_attendance_marks_date
+  ON meeting_attendance_marks (date);
+
 -- Undo ledger for correction commands. Each applied correction snapshots the
 -- correction-ledger rows it may touch (reviews, boundary corrections, label
 -- overrides, evidence exclusions, work-session attribution); undo restores the
