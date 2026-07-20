@@ -353,6 +353,24 @@ function MessageListImpl({
                     </div>
                   )}
 
+                  {(message.agent?.citations?.length ?? 0) > 0 && (
+                    // Lightweight packet citations (DEV-182): each chip is one
+                    // recorded context-packet item the answer's superscripts
+                    // point at. The full packet inspector is DEV-183.
+                    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginTop: 12 }}>
+                      <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)', fontWeight: 600 }}>From your day record</span>
+                      {message.agent?.citations?.map((citation) => (
+                        <span
+                          key={`${message.id}:cite:${citation.marker}`}
+                          title={`${citation.statement}\n${citation.identity}\nRecorded in this answer's context packet`}
+                          style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-low)', color: 'var(--color-text-secondary)', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                        >
+                          {citation.marker} · {citation.statement}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
                   {(message.agent?.fileDisclosures?.length ?? 0) > 0 && (
                     <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginTop: 12 }}>
                       <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)', fontWeight: 600 }}>Files opened</span>
