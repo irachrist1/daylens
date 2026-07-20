@@ -348,6 +348,22 @@ interface TimelineBlockSegment {
 
 export type TimelineSegment = TimelineBlockSegment | TimelineGapSegment
 
+// An app that was full-screen-visible on a display while input focus lived
+// elsewhere (e.g. a course playing on monitor 2 while notes were typed on
+// monitor 1). presence is the honesty label: this is visible/playing time,
+// NOT input-focused foreground time — it never adds to totalSeconds, and any
+// surface that reports it must say what it is. Time where the same app also
+// owned focus is already subtracted, so a minute is never counted twice.
+export interface SecondaryDisplayVisibleSpan {
+  displayId: number
+  bundleId: string | null
+  appName: string | null
+  windowTitle: string | null
+  startTime: number
+  endTime: number
+  presence: 'visible'
+}
+
 export interface DayTimelinePayload {
   date: string
   sessions: AppSession[]
@@ -362,6 +378,9 @@ export interface DayTimelinePayload {
   focusPct: number
   appCount: number
   siteCount: number
+  // Additive: what secondary displays showed while focus was elsewhere.
+  // Absent on payloads that predate multi-display capture.
+  secondaryDisplay?: SecondaryDisplayVisibleSpan[]
 }
 
 export type HistoryDayPayload = DayTimelinePayload
@@ -2305,6 +2324,16 @@ export interface TrackingDiagnosticsPayload {
       safariHistoryAccess: SafariHistoryAccessStatus
     }
     captureHelperRunning?: boolean | null
+    // Per-display visibility stream health (macOS). Counts only — no app
+    // names, titles, or identities. 'visible' = a display currently shows a
+    // full-screen app; 'none' = the stream reports but nothing is full-screen;
+    // 'unavailable' = no samples (helper too old, not running, or not macOS).
+    displays?: {
+      status: 'visible' | 'none' | 'unavailable'
+      recentSamples: number
+      distinctDisplays: number
+      lastSampleAt: number | null
+    }
     // Events dropped before persistence (malformed payloads, unsupported
     // schema versions), keyed by adapter. Counts only — never event content.
     rejectedEvents?: Record<string, { total: number; byReason: Record<string, number> }>

@@ -1,6 +1,7 @@
 import {
   isEvidenceSensitivity,
   type CaptureStateEvidenceKind,
+  type DisplayVisibilityEvidenceKind,
   type EvidenceSensitivity,
   type MachineStateEvidenceKind,
 } from './envelope'
@@ -38,10 +39,19 @@ export const FOCUS_EVENT_TYPES = [
   'capture_recovered',
   'tab_changed',
   'tab_sampled',
+  'display_visible_changed',
+  'display_visible_sampled',
 ] as const
 
 export const FOCUS_EVENT_CONFIDENCES = ['observed', 'unknown'] as const
-export const MAC_FOCUS_EVENT_SOURCES = ['nsworkspace_event', 'apple_events_tab'] as const
+// cg_display_visibility is the per-display visibility sampler in the macOS
+// helper: for each attached display it reports only the identity of the
+// window that owns the display full-screen (CGWindowList, never an
+// enumeration of everything open). It observes what a display SHOWS, not
+// what owns input focus — its events are visibility evidence, and foreground
+// projections must never fold them into input-focused time.
+export const MAC_FOCUS_EVENT_SOURCES = ['nsworkspace_event', 'apple_events_tab', 'cg_display_visibility'] as const
+export const MAC_DISPLAY_VISIBILITY_SOURCE = 'cg_display_visibility' as const
 export const WINDOWS_FOCUS_EVENT_SOURCES = ['uia_foreground', 'uia_tab'] as const
 // Machine-derived idle and capture-health transitions come from Daylens
 // itself, not a platform helper.
@@ -69,6 +79,7 @@ const FOCUS_EVENT_CONFIDENCE_SET = new Set<string>(FOCUS_EVENT_CONFIDENCES)
 const MAC_FOCUS_EVENT_SOURCE_SET = new Set<string>(MAC_FOCUS_EVENT_SOURCES)
 const WINDOWS_FOCUS_EVENT_SOURCE_SET = new Set<string>(WINDOWS_FOCUS_EVENT_SOURCES)
 const TAB_EVENT_TYPES = new Set<FocusEventType>(['tab_changed', 'tab_sampled'])
+const DISPLAY_EVENT_TYPES = new Set<FocusEventType>(['display_visible_changed', 'display_visible_sampled'])
 const SUPERVISOR_EVENT_TYPES = new Set<FocusEventType>([
   'idle_started',
   'idle_ended',
@@ -102,6 +113,12 @@ export interface FocusEvent<TSource extends FocusEventSource = FocusEventSource>
   confidence: FocusEventConfidence
   platform: string
   schema_ver: number
+  // Which physical display a visibility observation belongs to
+  // (CGDirectDisplayID on macOS). Required on cg_display_visibility events,
+  // absent everywhere else — a foreground event has exactly one implicit
+  // display (the focused one) and stamping it would suggest a precision the
+  // adapters do not have.
+  display_id?: number | null
 }
 
 export function isFocusEventType(value: unknown): value is FocusEventType {
@@ -140,9 +157,12 @@ export function isCaptureStateFocusEventType(value: FocusEventType): boolean {
 export function sourceAcceptsFocusEventType(source: FocusEventSource, eventType: FocusEventType): boolean {
   if (source === 'apple_events_tab' || source === 'uia_tab') return TAB_EVENT_TYPES.has(eventType)
   if (source === SUPERVISOR_FOCUS_EVENT_SOURCE) return SUPERVISOR_EVENT_TYPES.has(eventType)
+  if (source === MAC_DISPLAY_VISIBILITY_SOURCE) return DISPLAY_EVENT_TYPES.has(eventType)
   // Foreground observers — native helpers and the poll sampler alike — own the
-  // application/window/machine-state family only.
-  return !TAB_EVENT_TYPES.has(eventType) && !SUPERVISOR_EVENT_TYPES.has(eventType)
+  // application/window/machine-state family only. Display visibility is its
+  // own family: a foreground source claiming a visibility fact (or the other
+  // way round) is a contract violation, not a tolerable overlap.
+  return !TAB_EVENT_TYPES.has(eventType) && !SUPERVISOR_EVENT_TYPES.has(eventType) && !DISPLAY_EVENT_TYPES.has(eventType)
 }
 
 // Supervisor events — idle transitions and capture health — explain missing
@@ -171,6 +191,7 @@ export interface FocusEventProvenance {
 const SOURCE_PROVENANCE: Record<FocusEventSource, FocusEventProvenance> = {
   nsworkspace_event: { method: 'nsworkspace_event', permissionScope: 'macos_foreground_observation' },
   apple_events_tab: { method: 'apple_events_tab', permissionScope: 'macos_apple_events_automation' },
+  cg_display_visibility: { method: 'cg_window_list', permissionScope: 'macos_onscreen_window_visibility' },
   uia_foreground: { method: 'uia_foreground', permissionScope: 'windows_uia_foreground' },
   uia_tab: { method: 'uia_tab', permissionScope: 'windows_uia_foreground' },
   capture_supervisor: { method: 'capture_supervisor', permissionScope: 'application_internal' },
@@ -202,6 +223,7 @@ export type FocusEventRejectionReason =
   | 'supervisor_content'
   | 'invalid_sensitivity'
   | 'page_content_violation'
+  | 'display_identity_violation'
 
 // Mirrors the storage CHECK constraints so an invalid event is rejected and
 // counted here instead of being silently skipped by the idempotent insert:
@@ -211,7 +233,8 @@ function violatesPageContentRules(event: FocusEventInsert): boolean {
   const hasPageContent = event.url !== null || event.page_title !== null
   if (event.confidence === 'unknown' && hasPageContent) return true
   if (
-    (event.source === 'nsworkspace_event' || event.source === 'uia_foreground' || event.source === POLL_FOCUS_EVENT_SOURCE)
+    (event.source === 'nsworkspace_event' || event.source === 'uia_foreground'
+      || event.source === POLL_FOCUS_EVENT_SOURCE || event.source === MAC_DISPLAY_VISIBILITY_SOURCE)
     && hasPageContent
   ) return true
   if (
@@ -232,8 +255,20 @@ export function validateFocusEventForInsert(event: FocusEventInsert): FocusEvent
   if (!sourceAcceptsFocusEventType(event.source, event.event_type)) return 'source_kind_mismatch'
   if (supervisorEventCarriesContent(event)) return 'supervisor_content'
   if (violatesPageContentRules(event)) return 'page_content_violation'
+  if (violatesDisplayIdentityRules(event)) return 'display_identity_violation'
   if (event.sensitivity !== undefined && !isEvidenceSensitivity(event.sensitivity)) return 'invalid_sensitivity'
   return null
+}
+
+// A visibility observation without a display is meaningless (which screen was
+// it?), and a foreground/tab/supervisor event carrying one would imply a
+// per-display precision those adapters do not have.
+function violatesDisplayIdentityRules(event: FocusEventInsert): boolean {
+  const displayId = event.display_id ?? null
+  if (event.source === MAC_DISPLAY_VISIBILITY_SOURCE) {
+    return displayId === null || !Number.isFinite(displayId)
+  }
+  return displayId !== null
 }
 
 // Storage keeps the raw helper vocabulary ('lock', 'space_changed', …); the
@@ -245,6 +280,7 @@ const FOCUS_EVENT_TYPE_TO_EVIDENCE_KIND: Partial<Record<
   | 'window_changed'
   | MachineStateEvidenceKind
   | CaptureStateEvidenceKind
+  | DisplayVisibilityEvidenceKind
 >> = {
   app_activated: 'app_activated',
   app_deactivated: 'app_deactivated',
@@ -262,6 +298,8 @@ const FOCUS_EVENT_TYPE_TO_EVIDENCE_KIND: Partial<Record<
   capture_resumed: 'capture_resumed',
   capture_failed: 'capture_failed',
   capture_recovered: 'capture_recovered',
+  display_visible_changed: 'display_visible_changed',
+  display_visible_sampled: 'display_visible_sampled',
 }
 
 export type FocusEvidenceKind = NonNullable<
