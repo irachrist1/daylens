@@ -31,8 +31,8 @@ import {
   getConnectorManifest,
   listConnectorManifests,
 } from '../src/main/connectors/registry.ts'
-import { listEntities } from '../src/main/services/entities/entityRepository.ts'
-import { getExternalSignal } from '../src/main/services/externalSignals.ts'
+import { listEntities, listSuggestedEntityMerges } from '../src/main/services/entities/entityRepository.ts'
+import { getExternalSignal, putExternalSignal } from '../src/main/services/externalSignals.ts'
 import { indexMemoryForDay } from '../src/main/services/memoryIndex.ts'
 import { searchExact } from '../src/main/services/exactSearch.ts'
 import type { ConnectorId, GitActivitySignal } from '../src/shared/types.ts'
@@ -347,6 +347,86 @@ test('synced coding work becomes connected memory: searchable, honestly labeled,
     assert.ok(repoEntry?.messages.includes('Fix retry backoff in the sync loop'))
     const mergeSignal = getExternalSignal<GitActivitySignal>(db, mergeDate, 'git')
     assert.ok(mergeSignal?.payload.prs.some((pr) => pr.title === 'Connector foundation extensions' && pr.state === 'merged'))
+  } finally {
+    db.close()
+  }
+})
+
+test('a locally observed repository and its GitHub identity become ONE entity — corroborated, never by name alone', async () => {
+  const db = createProductionTestDatabase()
+  const { adapter } = createHarness()
+  const commitDate = localDateDaysAgo(2)
+  try {
+    // The local git probe saw the same repo folder with the same commit that
+    // day; its adoption mints the provisional local-identity entity.
+    putExternalSignal(db, commitDate, 'git', {
+      repos: [{
+        repo: 'api',
+        commitCount: 1,
+        messages: ['Fix retry backoff in the sync loop'],
+        firstCommitClock: '10:15',
+        lastCommitClock: '10:15',
+      }],
+      totalCommits: 1,
+      prs: [],
+    })
+    const before = db.prepare(
+      `SELECT identity_key FROM entities WHERE entity_type = 'repository' AND status = 'active'`,
+    ).all() as Array<{ identity_key: string }>
+    assert.deepEqual(before.map((row) => row.identity_key), ['local:api'])
+
+    await connectConnector(db, GITHUB, CONNECT_CONFIG, { adapter, gate: OPEN_GATE })
+
+    const active = db.prepare(
+      `SELECT id, identity_key FROM entities WHERE entity_type = 'repository' AND status = 'active'`,
+    ).all() as Array<{ id: string; identity_key: string }>
+    assert.equal(active.length, 1, 'local-git and GitHub identity unified into one repository entity')
+    assert.equal(active[0].identity_key, 'provider:github/octo-lab/api', 'the survivor keeps PROVIDER identity')
+    const merged = db.prepare(
+      `SELECT merged_into_id FROM entities WHERE entity_type = 'repository' AND status = 'merged'`,
+    ).all() as Array<{ merged_into_id: string }>
+    assert.deepEqual(merged.map((row) => row.merged_into_id), [active[0].id], 'the merge is the reversible pointer flip')
+
+    // The shared commit was not double-counted in the day layer either.
+    const signal = getExternalSignal<GitActivitySignal>(db, commitDate, 'git')!
+    assert.equal(signal.payload.repos.find((repo) => repo.repo === 'api')?.commitCount, 1)
+  } finally {
+    db.close()
+  }
+})
+
+test('a same-named local repository WITHOUT corroboration stays separate — a suggestion, never an auto-merge', async () => {
+  const db = createProductionTestDatabase()
+  const { adapter } = createHarness()
+  try {
+    // A local folder called "api" the probe observed on a DIFFERENT day with
+    // DIFFERENT commits: the name matches, nothing else does.
+    putExternalSignal(db, localDateDaysAgo(5), 'git', {
+      repos: [{
+        repo: 'api',
+        commitCount: 1,
+        messages: ['Unrelated local work in a different api'],
+        firstCommitClock: '09:00',
+        lastCommitClock: '09:00',
+      }],
+      totalCommits: 1,
+      prs: [],
+    })
+    await connectConnector(db, GITHUB, CONNECT_CONFIG, { adapter, gate: OPEN_GATE })
+
+    const active = db.prepare(
+      `SELECT identity_key FROM entities WHERE entity_type = 'repository' AND status = 'active' ORDER BY identity_key`,
+    ).all() as Array<{ identity_key: string }>
+    assert.deepEqual(
+      active.map((row) => row.identity_key),
+      ['local:api', 'provider:github/octo-lab/api'],
+      'a shared display name alone never merges',
+    )
+    const suggestions = listSuggestedEntityMerges(db)
+    assert.ok(
+      suggestions.some((entry) => entry.type === 'repository'),
+      'the low-confidence match stays visible as a suggestion for a person to decide',
+    )
   } finally {
     db.close()
   }

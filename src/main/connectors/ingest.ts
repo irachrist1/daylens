@@ -22,7 +22,7 @@ import type { CalendarEventSignal, CalendarSignal, ConnectorId, GitActivitySigna
 import { isCaptureConsentCurrent } from '@shared/captureConsent'
 import { getSettings } from '../services/settings'
 import { getExternalSignal } from '../services/externalSignals'
-import { adoptConnectedEnvelope } from '../services/entities/entityAdoption'
+import { adoptConnectedEnvelope, unifyRepositoryEntityIdentity } from '../services/entities/entityAdoption'
 import { addEntityEvidenceRef, resolvePersonEntity } from '../services/entities/entityRepository'
 import {
   validateRecordEnvelope,
@@ -232,6 +232,19 @@ export function ingestConnectorPage(
           sourceId: connectorEvidenceSourceId(connectorId, record.provenance.sourceRecordId),
           spanStartMs: record.provenance.effectiveAtMs,
         })
+        // A commit the local git probe ALSO observed corroborates that the
+        // provisional local-folder repository and this provider repository
+        // are one thing — unify them under the provider identity. Runs
+        // BEFORE this page's day-signal merge, so this page's own writes can
+        // never be their own corroboration.
+        if (record.entity.kind === 'repository_activity' && record.gitSignal?.commit) {
+          unifyRepositoryEntityIdentity(db, {
+            providerEntityId: entity.id,
+            repoShortName: record.entity.repo,
+            commitSubject: record.gitSignal.commit.message,
+            date: record.gitSignal.date,
+          })
+        }
       }
       // Attendees/participants minted inside adoptConnectedEnvelope get the
       // same per-record support ref (resolvePersonEntity is idempotent), so

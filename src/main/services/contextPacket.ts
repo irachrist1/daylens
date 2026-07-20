@@ -279,6 +279,46 @@ function dayFactItems(
   return { items, conflicts }
 }
 
+const MAX_CONNECTED_FACTS_PER_DAY = 12
+
+/** The day's connected-source activity records (repository work synced from a
+ *  connector), so "what did I ship" answers can cite the connected evidence
+ *  itself. The statement names the provider ("GitHub: merged pull request…")
+ *  and the sourceType says 'connected' — never mistaken for captured
+ *  activity. Identity shares the memory-record space exact search uses, so a
+ *  citation resolves to the same record either path finds. */
+function connectedActivityDayItems(db: Database.Database, date: string): ContextPacketItem[] {
+  try {
+    const rows = db.prepare(`
+      SELECT rowid AS id, statement, start_ms, end_ms
+      FROM memory_records
+      WHERE date = ? AND record_kind = 'connected_activity' AND deleted_at IS NULL
+      ORDER BY start_ms ASC
+      LIMIT ?
+    `).all(date, MAX_CONNECTED_FACTS_PER_DAY) as Array<{
+      id: number
+      statement: string
+      start_ms: number
+      end_ms: number
+    }>
+    return rows.map((row) => ({
+      identity: `session:${row.id}`,
+      kind: 'day_fact' as const,
+      sourceType: 'connected' as const,
+      statement: row.statement,
+      version: null,
+      reason: `Connected-source record on ${date}`,
+      sensitivity: 'standard' as const,
+      date,
+      startMs: row.start_ms,
+      endMs: row.end_ms,
+    }))
+  } catch (error) {
+    console.warn('[contextPacket] connected day facts failed', date, error)
+    return []
+  }
+}
+
 // A browser whose page-level detail explains materially less time than its
 // own verified foreground total is a disclosed conflict, not a silent
 // undercount: the agent narrates "Dia foreground 3h42m, page detail 0h10m"
@@ -650,7 +690,10 @@ export async function buildContextPacket(
     : {}
 
   const dayResults = dates.map((date) => dayFactItems(db, date, input.dayPayloads?.[date]))
-  const dayFacts = dayResults.flatMap((result) => result.items)
+  const dayFacts = [
+    ...dayResults.flatMap((result) => result.items),
+    ...dates.flatMap((date) => connectedActivityDayItems(db, date)),
+  ]
   const conflicts = [
     ...dayResults.flatMap((result) => result.conflicts),
     ...dates.flatMap((date) => pageCoverageConflicts(db, date)),
@@ -664,6 +707,10 @@ export async function buildContextPacket(
   const semantic = await semanticSearchItems(db, question, searchScope, exactIdentities)
   const files = fileExcerptItems(db, question)
 
+  // One identity appears once: a connected day fact and an exact-search hit
+  // can both name the same memory record, and a citation must resolve to a
+  // single disclosed item.
+  const seenIdentities = new Set<string>()
   const assembled = sortItems([
     ...dayFacts,
     ...corrected,
@@ -671,7 +718,11 @@ export async function buildContextPacket(
     ...exact.items,
     ...semantic,
     ...files.items,
-  ])
+  ]).filter((item) => {
+    if (seenIdentities.has(item.identity)) return false
+    seenIdentities.add(item.identity)
+    return true
+  })
 
   // Defensive final gate: nothing high-sensitivity rides along unless a file
   // grant explicitly allowed it above (memory readers already exclude 'high'
