@@ -22,6 +22,7 @@ import { ipc } from '../lib/ipc'
 import { EntityMemorySection } from './settings/EntityMemorySection'
 import { SuppliedMemorySection } from './settings/SuppliedMemorySection'
 import { FileAccessSection } from './settings/FileAccessSection'
+import { ContextPacketSection } from './settings/ContextPacketSection'
 import { ConnectionsSection } from './settings/ConnectionsSection'
 import { ExportSection } from './settings/ExportSection'
 import { track } from '../lib/analytics'
@@ -1138,7 +1139,7 @@ const SECTION_GROUPS: SectionGroup[] = [
     label: 'AI',
     items: [
       { id: 'ai', label: 'Provider & model', keywords: 'anthropic openai google claude api key model gpt gemini' },
-      { id: 'memory', label: 'Memory', keywords: 'work memory facts remember knows about you' },
+      { id: 'memory', label: 'Memory', keywords: 'work memory facts remember knows about you what the ai saw context packet disclosure' },
       { id: 'entities', label: 'Entities', keywords: 'people meetings repositories projects clients files pages apps merge rename alias durable' },
       { id: 'fileAccess', label: 'Agent file access', keywords: 'files folders grant revoke disclosure read permission model indexed observed' },
     ],
@@ -3192,6 +3193,12 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
             {/* DEV-185: the confirmed supplied-memory tier — every fact here
                 was explicitly saved, with when/context, edit, and delete. */}
             <SuppliedMemorySection reloadToken={suppliedReloadToken} />
+
+            {/* DEV-183: the recorded-context browser — every AI exchange's
+                packet, openable into the read-only "What the AI saw" view. */}
+            <div style={{ marginTop: 14, padding: '14px 18px', borderRadius: 14, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-low)' }}>
+              <ContextPacketSection />
+            </div>
 
             {semanticStatus && (
               <div style={{ marginTop: 14, padding: '14px 18px', borderRadius: 14, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-low)', display: 'grid', gap: 5 }}>

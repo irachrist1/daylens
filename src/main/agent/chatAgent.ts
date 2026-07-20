@@ -27,6 +27,14 @@ import type { FileDisclosureRow } from '../services/fileAccess'
 import { buildInteractionTools, createArtifact, type AgentQuestion, type InteractionDeps } from './interactionTools'
 import { buildMemoryTools } from './memoryTools'
 import { connectMcpTools, type McpServerConfig } from './mcpTools'
+import {
+  buildContextPacket,
+  contextPacketsAvailable,
+  recordContextPacket,
+  renderContextPacketForAgent,
+  type ContextPacket,
+} from '../services/contextPacket'
+import { resolvePacketCitations, type PacketCitation } from './contextCitations'
 import { buildAgentSystemPrompt } from './systemPrompt'
 import { renderTimeChunkAnswer, type TimeChunkResult } from './timeChunkAnswer'
 import { sanitizeForRender } from '@shared/aiSanitize'
@@ -70,6 +78,12 @@ export interface ChatAgentResult {
   usage: AIProviderUsage
   stepCount: number
   groundingRetried: boolean
+  /** The recorded context packet the turn answered from (DEV-182); null when
+   *  the packet ledger is unavailable on this database. */
+  contextPacketId: string | null
+  /** Verified packet citations in the answer, in display order — every entry
+   *  resolves to an item in the recorded packet. */
+  citations: PacketCitation[]
   /** Files whose contents were disclosed to the model this turn (DEV-184) —
    *  persisted with the message so the sources row can cite opened files. */
   fileDisclosures: Array<{
@@ -144,6 +158,40 @@ export async function runChatAgentTurn(
     usage.cacheReadTokens = (usage.cacheReadTokens ?? 0) + (u.cachedInputTokens ?? 0)
   }
 
+  // The exchange starts from the recorded context packet (DEV-182): assembled
+  // deterministically from the corrected read models, persisted BEFORE any
+  // request leaves the device, then rendered into the model prompt with
+  // per-item citation markers. Assembly failure degrades to a tools-only turn
+  // (the tool results still ride the same privacy boundaries) — it never
+  // blocks the answer.
+  const destination = `${deps.config.provider}:${deps.config.model}`
+  let contextPacket: ContextPacket | null = null
+  let contextPacketRecorded = false
+  try {
+    contextPacket = await buildContextPacket(deps.db, {
+      purpose: 'answer',
+      question,
+      now,
+      destination,
+    })
+    if (contextPacketsAvailable(deps.db)) {
+      recordContextPacket(deps.db, contextPacket, {
+        exchangeKind: 'chat',
+        threadId: deps.threadId ?? null,
+      })
+      contextPacketRecorded = true
+    }
+  } catch (error) {
+    console.warn('[agent] context packet assembly failed; answering from tools only', error)
+    contextPacket = null
+  }
+  // Packet statements count as evidence for the grounding verifiers: a time or
+  // name the packet disclosed is cited, not hallucinated, even when the model
+  // answered without re-fetching it through a tool.
+  const packetEvidence = contextPacket && contextPacket.items.length > 0
+    ? contextPacket.items.map((item) => item.statement).join('\n')
+    : ''
+
   const mcp = await connectMcpTools(deps.mcpServers ?? [])
   try {
     const interactionDeps: InteractionDeps = {
@@ -194,15 +242,18 @@ export async function runChatAgentTurn(
       ...mcp.tools,
     }
 
-    const system = buildAgentSystemPrompt({
-      now,
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      trackingStart: deps.trackingStart ?? null,
-      providerLabel: providerLabel(deps.config.provider),
-      model: deps.config.model,
-      homeDir: os.homedir(),
-      extraSystem: deps.extraSystem,
-    })
+    const system = [
+      buildAgentSystemPrompt({
+        now,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        trackingStart: deps.trackingStart ?? null,
+        providerLabel: providerLabel(deps.config.provider),
+        model: deps.config.model,
+        homeDir: os.homedir(),
+        extraSystem: deps.extraSystem,
+      }),
+      contextPacket ? renderContextPacketForAgent(contextPacket) : '',
+    ].filter(Boolean).join('\n\n')
 
     const messages: ModelMessage[] = [
       ...history.map((message) => ({ role: message.role, content: message.content } as ModelMessage)),
@@ -290,7 +341,7 @@ export async function runChatAgentTurn(
     // words). One named-violation retry; a second failure ships anyway with the
     // violation logged — never a crash, the soft-guard philosophy.
     if (text && toolResultStrings.length > 0) {
-      const corpus = [...toolResultStrings, question]
+      const corpus = [...toolResultStrings, ...(packetEvidence ? [packetEvidence] : []), question]
       const timestamps = verifyTimestamps(text, corpus)
       const entities = verifyCitedEntities(text, corpus)
       if (!timestamps.ok || !entities.ok) {
@@ -311,11 +362,17 @@ export async function runChatAgentTurn(
         const replacement = await streamTurn(retryMessages)
         if (replacement) {
           text = replacement
-          const recheck = verifyTimestamps(text, [...toolResultStrings, question])
+          const recheck = verifyTimestamps(text, [...toolResultStrings, ...(packetEvidence ? [packetEvidence] : []), question])
           if (!recheck.ok) console.warn(`[agent:grounding] still suspect after retry: ${recheck.suspect.join(', ')}`)
         }
       }
     }
+
+    // Resolve the answer's [Cn] markers against the recorded packet: verified
+    // citations become superscripts + a citation list; a marker the packet
+    // cannot back is dropped, so every persisted citation is real.
+    const { text: citedText, citations } = resolvePacketCitations(text, contextPacket)
+    text = citedText
 
     text = sanitizeForRender(text).text
     if (text) await deps.onStreamEvent?.({ delta: text, snapshot: text })
@@ -327,6 +384,8 @@ export async function runChatAgentTurn(
       usage,
       stepCount,
       groundingRetried,
+      contextPacketId: contextPacket && contextPacketRecorded ? contextPacket.id : null,
+      citations,
       fileDisclosures: fileDisclosures.map((row) => ({
         path: row.file_path,
         name: row.display_name,

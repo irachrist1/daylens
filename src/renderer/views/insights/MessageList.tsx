@@ -86,6 +86,9 @@ export interface MessageListProps {
   onUndoActionWidget: (proposalId: string, undo: AIActionUndo) => void
   onDismissActionWidget: (widget: AIActionWidget) => void
   onFollowUpClick: (message: ThreadMessage, suggestionText: string, source: string) => void
+  // "What the AI saw" (DEV-183): opens the read-only context-packet inspector
+  // for the exchange behind this assistant message.
+  onInspectPacket?: (message: ThreadMessage) => void
   scrollToBottom: () => void
   // Opening a conversation loads only the newest page of its history; when
   // older messages exist, a "Load earlier messages" affordance tops the list.
@@ -165,11 +168,20 @@ function MessageListImpl({
   onUndoActionWidget,
   onDismissActionWidget,
   onFollowUpClick,
+  onInspectPacket,
   scrollToBottom,
   hasEarlier,
   loadingEarlier,
   onLoadEarlier,
 }: MessageListProps) {
+  // An exchange is inspectable when the packet ledger can be asked about it:
+  // the turn carried its packet id, or the message has a persisted id the
+  // ledger binding can resolve. Agent-run answers only — other answer shapes
+  // never had a packet.
+  const canInspect = (message: ThreadMessage): boolean =>
+    Boolean(onInspectPacket)
+    && message.agent != null
+    && (message.agent.contextPacketId != null || typeof message.id === 'number')
   return (
     <div style={{ display: 'grid', gap: 24, contain: 'layout' }}>
       {hasEarlier && onLoadEarlier && (
@@ -350,6 +362,44 @@ function MessageListImpl({
                           </button>
                         )
                       })}
+                    </div>
+                  )}
+
+                  {(message.agent?.citations?.length ?? 0) > 0 && (
+                    // Packet citations (DEV-182): each chip is one recorded
+                    // context-packet item the answer's superscripts point at.
+                    // Clicking a chip opens the full inspector (DEV-183) on
+                    // this exchange's packet.
+                    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginTop: 12 }}>
+                      <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)', fontWeight: 600 }}>From your day record</span>
+                      {message.agent?.citations?.map((citation) => (
+                        <button
+                          key={`${message.id}:cite:${citation.marker}`}
+                          type="button"
+                          onClick={canInspect(message) ? () => onInspectPacket?.(message) : undefined}
+                          title={`${citation.statement}\n${citation.identity}\n${canInspect(message) ? 'Click to see everything the AI was shown' : "Recorded in this answer's context packet"}`}
+                          style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-low)', color: 'var(--color-text-secondary)', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: canInspect(message) ? 'pointer' : 'default' }}
+                        >
+                          {citation.marker} · {citation.statement}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {canInspect(message) && (
+                    // "What the AI saw" (DEV-183): every agent answer exposes
+                    // its recorded context packet — items with reasons, the
+                    // disclosure record, conflicts, gaps, and what was held
+                    // back. Read-only; works with no model configured.
+                    <div style={{ marginTop: (message.agent?.citations?.length ?? 0) > 0 ? 8 : 12 }}>
+                      <button
+                        type="button"
+                        onClick={() => onInspectPacket?.(message)}
+                        title="Open the recorded context packet for this answer"
+                        style={{ fontSize: 11.5, fontWeight: 600, padding: '3px 10px', borderRadius: 999, border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-tertiary)', cursor: 'pointer' }}
+                      >
+                        What the AI saw
+                      </button>
                     </div>
                   )}
 

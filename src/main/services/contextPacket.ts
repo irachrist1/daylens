@@ -738,6 +738,51 @@ export function renderContextPacketForPrompt(packet: ContextPacket): string {
   return sections.join('\n\n')
 }
 
+/** Deterministic agent-facing rendering (DEV-182): the same disclosed content
+ *  as renderContextPacketForPrompt, plus per-item citation markers, the
+ *  recorded conflicts and gaps, and the honesty rules the agent answers under.
+ *  Marker [Cn] is the 1-based position of the item in packet.items — the same
+ *  index resolvePacketCitations later uses to verify an answer's citations
+ *  against this exact packet. */
+export function renderContextPacketForAgent(packet: ContextPacket): string {
+  const sections: string[] = []
+  if (packet.items.length === 0) {
+    // Honest failure: an empty packet is stated, never papered over. The agent
+    // is told to say what is missing rather than to improvise an answer.
+    sections.push(
+      `Context packet ${packet.id} — assembled locally from your corrected Daylens data for ${packet.request.dates.join(', ')} before this request and recorded in the local disclosure ledger. It contains NO recorded items for this question's scope.`,
+      'Daylens has nothing recorded to answer this from. Say plainly what is missing for the requested day(s) and what would help (tracking running, a different day, a granted file or source). You may still verify with tools; if they also come back empty, report the honest miss. Never invent activity.',
+    )
+  } else {
+    sections.push(
+      `Context packet ${packet.id} — assembled locally from your corrected Daylens data for ${packet.request.dates.join(', ')} before this request; every item below is recorded in the local disclosure ledger. Treat it as orienting context and verify specifics with tools.`,
+      'Citing: every packet item below carries a marker like [C3]. When a claim in your answer comes from a packet item, append that item\'s marker immediately after the claim (e.g. "The morning went to the planner refactor [C1]."). Use only markers printed below — never invent one. Claims grounded in this turn\'s tool results need no marker.',
+    )
+    for (const kind of Object.keys(KIND_ORDER) as ContextItemKind[]) {
+      const lines: string[] = []
+      packet.items.forEach((item, index) => {
+        if (item.kind !== kind) return
+        lines.push(`- [C${index + 1}] ${item.statement}`)
+      })
+      if (lines.length === 0) continue
+      sections.push([`${KIND_HEADINGS[kind]}:`, ...lines].join('\n'))
+    }
+  }
+  if (packet.conflicts.length > 0) {
+    sections.push([
+      'Where the record disagrees with itself — NAME each disagreement in your answer instead of asserting agreement. The person\'s correction wins, but the person should hear that the sources differed:',
+      ...packet.conflicts.map((conflict) => `- ${conflict.detail} (${conflict.identity})`),
+    ].join('\n'))
+  }
+  if (packet.gaps.length > 0) {
+    sections.push([
+      'Gaps in the record — state what is missing instead of letting silence read as inactivity:',
+      ...packet.gaps.map((gap) => `- ${gap.detail} (${gap.date})`),
+    ].join('\n'))
+  }
+  return sections.join('\n\n')
+}
+
 // ─── Persistence ─────────────────────────────────────────────────────────────
 
 export type ContextPacketExchangeKind = 'chat' | 'day_analysis'
