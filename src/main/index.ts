@@ -134,6 +134,7 @@ import { registerDistractionAlerterHandlers, resetDistractionStateOnResume, setD
 import { startExternalSignalCollection, stopExternalSignalCollection } from './services/externalSignals'
 import { startConnectorSyncSchedule, stopConnectorSyncSchedule } from './connectors/service'
 import { registerGoogleCalendarConnector } from './connectors/googleCalendar/adapter'
+import { registerGithubConnector } from './connectors/github/adapter'
 import { registerConnectorHandlers } from './ipc/connectors.handlers'
 import { registerExportHandlers } from './ipc/export.handlers'
 import { getLinuxDesktopDiagnostics, syncLinuxLaunchOnLogin } from './services/linuxDesktop'
@@ -1311,6 +1312,8 @@ app.whenReady()
     // DEV-188: the first real provider — registering flips google_calendar
     // from manifest-only to connectable in Settings → Connections.
     registerGoogleCalendarConnector()
+    // DEV-191: GitHub — the code provider on the same foundation.
+    registerGithubConnector()
     registerConnectorHandlers()
     registerExportHandlers()
 

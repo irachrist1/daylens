@@ -58,7 +58,10 @@ const UPCOMING_MANIFESTS: ConnectorManifest[] = [
     authKind: 'oauth',
     readOnly: true,
     scopes: [
-      { scope: 'repo:read', grants: 'Reads repositories, commits, pull requests, reviews, and issues you can see. Never pushes or changes anything.' },
+      { scope: 'metadata:read', grants: 'Reads the names and identity of the repositories you choose. GitHub requires this for any repository access.' },
+      { scope: 'contents:read', grants: 'Lists your commits — times and subject lines only. Daylens never ingests file contents, diffs, or bodies, and never pushes.' },
+      { scope: 'pull_requests:read', grants: 'Reads pull requests and reviews you are involved in — titles, states, and who was involved. Never writes, comments, or merges.' },
+      { scope: 'issues:read', grants: 'Reads issues you created or are assigned — titles and states. Never comments or edits.' },
     ],
     whatItBrings:
       'What you actually shipped — commits, pull requests, and reviews with their real repository identity, so "worked on the billing service" becomes a claim your history can back.',
