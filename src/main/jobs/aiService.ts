@@ -116,6 +116,7 @@ import { VOICE_SYSTEM_PROMPT, findBannedVocab } from '../ai/voiceContract'
 import { parseDayRegroupGroups } from '../ai/dayRegroup'
 import { maybeStartTrace, setCurrentTrace } from '../ai/trace'
 import { runChatAgentTurn } from '../agent/chatAgent'
+import { linkContextPacketToMessage } from '../services/contextPacket'
 import { providerSupportsAgentTools } from '../agent/providerModel'
 import type { AgentQuestion } from '../agent/interactionTools'
 import { getAmbientAbortSignal } from '../lib/aiCancellation'
@@ -141,6 +142,8 @@ interface AnswerEnvelope {
     stepCount: number
     groundingRetried: boolean
     fileDisclosures?: import('@shared/types').AIMessageFileDisclosure[]
+    contextPacketId?: string | null
+    citations?: import('@shared/types').AIMessageCitation[]
   }
   suggestedFollowUps: FollowUpSuggestion[]
   actions?: AIMessageAction[]
@@ -3431,7 +3434,7 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
 
   const answerKind: AIAnswerKind = 'freeform_chat'
   const suggestedFollowUps = await generateSuggestedFollowUps(userMessage, agentResult.text, answerKind, null)
-  return persistTurn({
+  const turnResult = await persistTurn({
     assistantText: agentResult.text,
     answerKind,
     sourceKind: 'freeform',
@@ -3443,8 +3446,21 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
       stepCount: agentResult.stepCount,
       groundingRetried: agentResult.groundingRetried,
       fileDisclosures: agentResult.fileDisclosures,
+      contextPacketId: agentResult.contextPacketId,
+      citations: agentResult.citations,
     },
   })
+  // Bind the recorded packet to the persisted assistant message (DEV-182), so
+  // "what did the model see for THIS answer" stays a single lookup. The packet
+  // row itself was written before the request left the device.
+  if (agentResult.contextPacketId) {
+    try {
+      linkContextPacketToMessage(db, agentResult.contextPacketId, turnResult.assistantMessage.id)
+    } catch (error) {
+      console.warn('[ai:chat] context packet message binding failed:', error)
+    }
+  }
+  return turnResult
 }
 
 export async function prepareDailyReport(dateStr = currentLocalDateString()): Promise<AIDailyReportPreparationResult> {
