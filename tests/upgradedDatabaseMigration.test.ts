@@ -32,6 +32,7 @@ import {
 } from '../src/main/services/workBlocks.ts'
 import { getCorrectedAppSummariesForRange } from '../src/main/services/activityFacts.ts'
 import { searchAll } from '../src/main/db/queries.ts'
+import { indexMemoryForDay } from '../src/main/services/memoryIndex.ts'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const BASELINE_SCHEMA_PATH = path.join(HERE, 'fixtures', 'upgraded-database', 'schema-v25.sql')
@@ -247,6 +248,32 @@ test('a representative v25 database upgrades through every migration and keeps i
       }
       for (const fact of expectedSearch.prohibitedFacts ?? []) {
         assert.ok(!resultText.includes(normalize(fact)), `search leaked "${fact}" after upgrade`)
+      }
+    }
+
+    // v52 exact retrieval: the memory tables exist, the day projects into
+    // records, and every search fact that held on the legacy path still holds
+    // once the day is served by the memory index (DEV-178 legacy parity).
+    for (const table of ['memory_records', 'memory_record_entities', 'memory_index_days']) {
+      assert.ok(
+        db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table),
+        `v52 must create ${table}`,
+      )
+    }
+    const indexed = indexMemoryForDay(db, fixture.date)
+    assert.ok(indexed.records > 0, 'the upgraded day projected into memory records')
+    for (const expectedSearch of fixture.expected.search ?? []) {
+      const rows = searchAll(db, expectedSearch.query, {
+        startDate: fixture.date,
+        endDate: fixture.date,
+        limit: 50,
+      })
+      const resultText = normalize(JSON.stringify(rows))
+      for (const fact of expectedSearch.requiredFacts ?? []) {
+        assert.ok(resultText.includes(normalize(fact)), `memory-indexed search lost "${fact}"`)
+      }
+      for (const fact of expectedSearch.prohibitedFacts ?? []) {
+        assert.ok(!resultText.includes(normalize(fact)), `memory-indexed search leaked "${fact}"`)
       }
     }
 

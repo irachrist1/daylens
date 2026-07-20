@@ -151,10 +151,11 @@ test('WorkspaceLivePresence is allowlisted and rejects credential labels', () =>
   )
 })
 
-test('DEV-177/DEV-184 tables cannot serialize: entity rows, aliases, grants, and disclosures are rejected', () => {
-  // The durable-entity and file-access tables are LOCAL-ONLY. None of their
-  // shapes have allowlist keys, so any attempt to ride the sync payload —
-  // as a new root collection or nested onto an allowed object — must throw.
+test('DEV-177/DEV-184/DEV-178 tables cannot serialize: entity rows, aliases, grants, disclosures, and memory records are rejected', () => {
+  // The durable-entity, file-access, and exact-search memory tables are
+  // LOCAL-ONLY. None of their shapes have allowlist keys, so any attempt to
+  // ride the sync payload — as a new root collection or nested onto an
+  // allowed object — must throw.
   const cases: Array<{ name: string; mutate: (payload: ReturnType<typeof makeCleanRemoteSyncPayload>) => unknown }> = [
     {
       name: 'entities table rows as a root collection',
@@ -189,6 +190,29 @@ test('DEV-177/DEV-184 tables cannot serialize: entity rows, aliases, grants, and
       mutate: (payload) => ({
         ...payload,
         workBlocks: [{ ...payload.workBlocks[0]!, disclosedFilePath: '/home/person/notes.md' }],
+      }),
+    },
+    // DEV-178: exact-search memory records are LOCAL-ONLY too — the index is
+    // rebuilt from local corrected facts, never synced.
+    {
+      name: 'memory records as a root collection',
+      mutate: (payload) => ({
+        ...payload,
+        memoryRecords: [{ id: 'mem_x', record_kind: 'session', exact_text: 'Secret window title', date: '2026-07-20' }],
+      }),
+    },
+    {
+      name: 'memory-record exact text nested onto a synced entity rollup',
+      mutate: (payload) => ({
+        ...payload,
+        entities: [{ ...payload.entities[0]!, exactText: 'Acme Corp quarterly report draft' }],
+      }),
+    },
+    {
+      name: 'memory index bookkeeping as a root collection',
+      mutate: (payload) => ({
+        ...payload,
+        memoryIndexDays: [{ date: '2026-07-20', fingerprint: 'v1|fe:0:0' }],
       }),
     },
   ]
