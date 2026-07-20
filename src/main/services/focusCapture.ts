@@ -78,14 +78,21 @@ function normalizeHelperEvent(raw: unknown): HelperEvent | null {
   if (!isNullableString(raw.url)) return reject('malformed')
   if (!isNullableString(raw.page_title)) return reject('malformed')
   if (!isNullableString(raw.platform)) return reject('malformed')
+  if (!isNullableNumber(raw.display_id)) return reject('malformed')
 
   const url = raw.url ?? null
   const pageTitle = raw.page_title ?? null
+  const displayId = raw.display_id ?? null
 
   if (!sourceAcceptsFocusEventType(source, eventType)) return reject('malformed')
   if (confidence === 'unknown' && (url !== null || pageTitle !== null)) return reject('malformed')
   if (source === 'apple_events_tab' && confidence === 'observed' && !url) return reject('malformed')
   if (source === 'nsworkspace_event' && (url !== null || pageTitle !== null)) return reject('malformed')
+  // Display-visibility observations are identity-only per-display facts: they
+  // must name their display and never carry page content; no other source may
+  // claim a display.
+  if (source === 'cg_display_visibility' && (displayId === null || url !== null || pageTitle !== null)) return reject('malformed')
+  if (source !== 'cg_display_visibility' && displayId !== null) return reject('malformed')
 
   return {
     ts_ms: raw.ts_ms,
@@ -101,6 +108,7 @@ function normalizeHelperEvent(raw: unknown): HelperEvent | null {
     confidence,
     platform: raw.platform ?? 'darwin',
     schema_ver: FOCUS_EVENT_SCHEMA_VERSION,
+    display_id: displayId,
   }
 }
 
@@ -113,12 +121,18 @@ const FOCUS_FLUSH_MAX_BATCH = 100
 let pendingEvents: HelperEvent[] = []
 let flushTimer: ReturnType<typeof setTimeout> | null = null
 
-function eventParams(ev: HelperEvent): FocusEvent<MacFocusEventSource> {
+// Exported for tests: the last privacy transform before persistence.
+export function eventParams(ev: HelperEvent): FocusEvent<MacFocusEventSource> {
   // A browser's window title/url is page content, and the focus helper cannot
   // know whether the window is private. Browser page detail only enters the
   // store through the corroborated visit pipeline; focus events for browsers
-  // keep app identity and timing only.
+  // keep app identity and timing only. This applies to display-visibility
+  // events identically: a browser full-screen on a second monitor is app
+  // identity and timing, never an unverified page title. The catalog check is
+  // the same fallback tracking.ts uses — it covers known browsers while the
+  // LaunchServices registry is still warming.
   const isBrowser = resolveBrowserApplication({ bundleId: ev.app_bundle_id ?? null, appName: ev.app_name ?? null }) != null
+    || resolveCanonicalApp(ev.app_bundle_id ?? '', ev.app_name ?? '').defaultCategory === 'browsing'
   return {
     ts_ms: ev.ts_ms,
     mono_ns: ev.mono_ns,
@@ -133,6 +147,7 @@ function eventParams(ev: HelperEvent): FocusEvent<MacFocusEventSource> {
     confidence: ev.confidence,
     platform: ev.platform,
     schema_ver: ev.schema_ver,
+    display_id: ev.display_id ?? null,
   }
 }
 
@@ -235,7 +250,14 @@ function spawnHelper(): void {
 
   let proc: ChildProcessWithoutNullStreams
   try {
-    proc = spawn(bin, [], { stdio: ['pipe', 'pipe', 'pipe'] })
+    // Feature gate for the per-display visibility stream: the helper emits
+    // display_visible_* events only when the spawner declares it understands
+    // them. An older app with a newer helper binary therefore never receives
+    // event types it would reject and count as capture failures.
+    proc = spawn(bin, [], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, DAYLENS_CAPTURE_DISPLAY_VISIBILITY: '1' },
+    })
   } catch (err) {
     console.warn('[focusCapture] spawn failed:', err)
     scheduleRestart()
