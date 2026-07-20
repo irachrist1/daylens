@@ -32,8 +32,10 @@ import {
   getConnectorManifest,
   listConnectorManifests,
 } from '../src/main/connectors/registry.ts'
-import { listEntities } from '../src/main/services/entities/entityRepository.ts'
+import { addEntityEvidenceRef, listEntities } from '../src/main/services/entities/entityRepository.ts'
 import { getExternalSignal } from '../src/main/services/externalSignals.ts'
+import { indexMemoryForDay } from '../src/main/services/memoryIndex.ts'
+import { searchExact } from '../src/main/services/exactSearch.ts'
 import type { CalendarSignal, ConnectorId } from '../src/shared/types.ts'
 
 const GOOGLE: ConnectorId = 'google_calendar'
@@ -43,6 +45,11 @@ function isoDaysAgo(days: number, hour: number, minute = 0): string {
   const at = new Date(Date.now() - days * 24 * 60 * 60 * 1000)
   at.setHours(hour, minute, 0, 0)
   return at.toISOString()
+}
+
+function localDateDaysAgo(days: number): string {
+  const at = new Date(Date.now() - days * 24 * 60 * 60 * 1000)
+  return `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, '0')}-${String(at.getDate()).padStart(2, '0')}`
 }
 
 function sourceEvents(): GoogleApiEvent[] {
@@ -332,6 +339,121 @@ test('disconnect with deletion: revokes at Google, clears the vault, and removes
     assert.equal(listEntities(db, { type: 'meeting' }).length, 0)
     assert.equal(listEntities(db, { type: 'person' }).length, 0)
     assert.equal(getConnectorConnection(db, GOOGLE)?.status, 'disconnected')
+  } finally {
+    db.close()
+  }
+})
+
+test('connecting reports honest progress phases: authorizing, then the bounded initial import', async () => {
+  const db = createProductionTestDatabase()
+  const { adapter } = createHarness()
+  try {
+    const phases: string[] = []
+    const summary = await connectConnector(db, GOOGLE, { clientId: CLIENT_ID }, {
+      adapter,
+      gate: OPEN_GATE,
+      onProgress: (phase) => phases.push(phase),
+    })
+    assert.equal(summary.status, 'ok')
+    assert.deepEqual(phases, ['authorizing', 'syncing'])
+  } finally {
+    db.close()
+  }
+})
+
+test('a revoked authorization flags needs_attention on the FIRST failure; reconnecting recovers', async () => {
+  const db = createProductionTestDatabase()
+  const { fake, adapter, store } = createHarness()
+  try {
+    await connectConnector(db, GOOGLE, { clientId: CLIENT_ID }, { adapter, gate: OPEN_GATE })
+
+    // The person revokes the grant (or the vault entry is lost): the stored
+    // authorization is gone.
+    store.dump().clear()
+    fake.putEvent({ id: 'ev-late', summary: 'After revocation', start: { dateTime: isoDaysAgo(0, 17, 0) } })
+    const failed = await syncConnector(db, GOOGLE, { adapter, gate: OPEN_GATE })
+    assert.equal(failed.status, 'failed')
+    const row = getConnectorConnection(db, GOOGLE)!
+    assert.equal(row.consecutive_failures, 1)
+    assert.equal(row.status, 'needs_attention', 'auth trouble is flagged immediately, not after a retry loop')
+    assert.match(row.last_sync_error ?? '', /Reconnect/)
+
+    // Settings' Reconnect affordance re-runs the same connect flow.
+    const reconnected = await connectConnector(db, GOOGLE, { clientId: CLIENT_ID }, { adapter, gate: OPEN_GATE })
+    assert.equal(reconnected.status, 'ok')
+    assert.equal(getConnectorConnection(db, GOOGLE)!.status, 'connected')
+  } finally {
+    db.close()
+  }
+})
+
+test('a synced event is scheduled context in memory and search — never automatically an attended meeting', async () => {
+  const db = createProductionTestDatabase()
+  const { adapter } = createHarness()
+  const standupDate = localDateDaysAgo(2)
+  try {
+    await connectConnector(db, GOOGLE, { clientId: CLIENT_ID }, { adapter, gate: OPEN_GATE })
+    indexMemoryForDay(db, standupDate)
+
+    // The memory record SAYS it is scheduled context (connectors.md: a
+    // calendar event becomes "you met" only with supporting evidence). This
+    // statement is what search results, packets, and agent answers show.
+    const statements = (db.prepare(
+      `SELECT statement, memory_type FROM memory_records WHERE record_kind = 'meeting'`,
+    ).all() as Array<{ statement: string; memory_type: string }>)
+    const standup = statements.find((record) => record.statement.includes('Team standup'))
+    assert.ok(standup, 'the synced event is findable memory')
+    assert.match(standup!.statement, /^Scheduled: /)
+    assert.match(standup!.statement, /not confirmed attended/)
+    assert.equal(standup!.memory_type, 'connected', 'connected origin — distinct from captured activity')
+
+    // Exact search returns it: the entity (typed, connected) and a moment
+    // whose visible label says SCHEDULED — clearly distinct from captured
+    // activity (which reads as an app session with sourceType 'observed').
+    const results = searchExact(db, 'Team standup')
+    const entityHit = results.find((result) => result.type === 'entity' && result.name === 'Team standup')
+    assert.ok(entityHit, 'the meeting entity is searchable')
+    assert.equal((entityHit as { sourceType: string }).sourceType, 'connected')
+    const momentHit = results.find((result) =>
+      result.type === 'session' && 'appName' in result && result.appName === 'Scheduled meeting')
+    assert.ok(momentHit, 'the scheduled moment surfaces in exact search, labeled as scheduled')
+    assert.equal((momentHit as { sourceType?: string }).sourceType, 'connected')
+
+    // Non-calendar evidence lands (device activity, notes, confirmation…):
+    // NOW the record may say the meeting happened.
+    const meeting = listEntities(db, { type: 'meeting' }).find((entity) => entity.name === 'Team standup')!
+    addEntityEvidenceRef(db, meeting.id, {
+      sourceType: 'meeting_presence',
+      sourceId: 'call-window-overlap-1',
+      spanStartMs: Date.now() - 2 * 24 * 60 * 60 * 1000,
+    })
+    indexMemoryForDay(db, standupDate)
+    const after = (db.prepare(
+      `SELECT statement FROM memory_records WHERE record_kind = 'meeting'`,
+    ).all() as Array<{ statement: string }>).find((record) => record.statement.includes('Team standup'))
+    assert.match(after!.statement, /^Meeting: /, 'occurrence support upgrades scheduled context to a meeting')
+  } finally {
+    db.close()
+  }
+})
+
+test('disconnect-with-delete removes synced events from memory and search, not just the ledger', async () => {
+  const db = createProductionTestDatabase()
+  const { adapter, store } = createHarness()
+  const standupDate = localDateDaysAgo(2)
+  try {
+    await connectConnector(db, GOOGLE, { clientId: CLIENT_ID }, { adapter, gate: OPEN_GATE })
+    indexMemoryForDay(db, standupDate)
+    assert.ok(searchExact(db, 'Team standup').length > 0)
+
+    await disconnectConnector(db, GOOGLE, { deleteData: true, adapter, secretStore: store })
+    indexMemoryForDay(db, standupDate)
+
+    assert.equal(db.prepare(
+      `SELECT COUNT(*) AS c FROM memory_records WHERE record_kind = 'meeting'`,
+    ).get()!.c, 0, 'no meeting memory survives the deletion')
+    const results = searchExact(db, 'Team standup')
+    assert.equal(results.length, 0, 'search cannot resurrect deleted connector evidence')
   } finally {
     db.close()
   }
