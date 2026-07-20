@@ -20,8 +20,15 @@ import { mergeTimelineEpisodes, shouldReanalyzeBlockWithAI, writeTimelineBlockRe
 import { getBlockLabelOverride, setBlockLabelOverride, writeAIBlockLabel } from '../db/queries'
 import { generateWorkBlockInsight, generateDayRegroupPlan } from './ai'
 import { absenceSpannedBy, formatAbsenceRange, partitionAtRealAbsences } from '../lib/absenceGuard'
+import { buildDaySnapshot } from '../lib/daySnapshot'
+import { appendDayAnalysisVersion } from '../db/dayAnalysisVersions'
 
 export type BlockInsightTrigger = 'user' | 'background' | 'system'
+
+/** Bumped whenever the regroup/relabel analysis semantics change (prompts,
+ *  merge rules, absence guard), so a stored analysis version records WHICH
+ *  pipeline produced it (DEV-206: reproducible, inspectable versions). */
+export const ANALYZE_DAY_PROMPT_VERSION = 1
 
 export interface AnalyzeTimelineDayDeps {
   // A freeform note about what the user actually did (from the wrap flow / the
@@ -90,8 +97,13 @@ export async function analyzeTimelineDay(
   const userHint = deps.userHint?.trim() || undefined
   const resolveLiveSession = deps.resolveLiveSession ?? (() => null)
   const triggerSource = deps.triggerSource ?? 'user'
-  const regroupPlan = deps.regroupPlan ?? ((blocks, opts) => generateDayRegroupPlan(blocks, opts))
-  const blockInsight = deps.blockInsight ?? ((block, opts) => generateWorkBlockInsight(block, opts))
+  // The models that actually wrote this run's regroup plan and relabels —
+  // recorded on the analysis version row (DEV-206) so an old analysis stays
+  // attributable to the model and prompt that produced it.
+  const modelsUsed = new Set<string>()
+  const onModel = (model: string) => { if (model) modelsUsed.add(model) }
+  const regroupPlan = deps.regroupPlan ?? ((blocks, opts) => generateDayRegroupPlan(blocks, { ...opts, onModel }))
+  const blockInsight = deps.blockInsight ?? ((block, opts) => generateWorkBlockInsight(block, { ...opts, onModel }))
 
   const materialize = (): DayTimelinePayload =>
     materializeTimelineDayProjection(db, dateStr, resolveLiveSession(dateStr))
@@ -244,5 +256,39 @@ export async function analyzeTimelineDay(
   }
 
   const refreshed = materialize()
+
+  // DEV-206: a run that wrote product state is a new ANALYSIS VERSION of this
+  // day — append it to the ledger with the facts it produced (the same
+  // snapshot hash the wraps key on), the models that wrote it, and a compact
+  // record of what it said. A run that changed nothing recorded no divergence
+  // and appends nothing.
+  if (changed) {
+    try {
+      const snapshot = buildDaySnapshot(refreshed)
+      appendDayAnalysisVersion(db, {
+        kind: 'timeline',
+        periodKey: dateStr,
+        factsHash: snapshot.factsHash,
+        model: modelsUsed.size > 0 ? [...modelsUsed].join(',') : null,
+        promptVersion: ANALYZE_DAY_PROMPT_VERSION,
+        triggerSource,
+        source: modelsUsed.size > 0 ? 'ai' : 'deterministic',
+        payload: {
+          summary: `${refreshed.blocks.length} blocks${merged ? ', neighbours merged' : ''}${attempted > 0 ? `, ${attempted} relabel${attempted === 1 ? '' : 's'} attempted` : ''}${failures.length > 0 ? `, ${failures.length} failed` : ''}`,
+          merged,
+          attempted,
+          failureCount: failures.length,
+          blockCount: refreshed.blocks.length,
+          blockLabels: refreshed.blocks
+            .filter((block) => !block.isLive)
+            .slice(0, 30)
+            .map((block) => block.label.current.slice(0, 80)),
+        },
+      })
+    } catch (versionError) {
+      console.warn(`[timeline] failed to record analysis version for ${dateStr}:`, versionError)
+    }
+  }
+
   return { payload: refreshed, changed, merged, attempted, failures }
 }

@@ -2,9 +2,10 @@
 // has no dependency on settings, the database, or providers — tests drive the
 // gate logic with synthetic state alone.
 //
-// Two notifications: the morning brief (yesterday's recap) and the evening
-// wrap that fires as you shut down. The carryover nudge is gone — removed with
-// the brief rebuild, not migrated.
+// Three notifications: the morning brief (yesterday's recap), the evening
+// wrap that fires as you shut down, and the weekly brief that fires at the
+// week boundary and opens the week's wrap. The carryover nudge is gone —
+// removed with the brief rebuild, not migrated.
 //
 // The notifier (`src/main/services/dailySummaryNotifier.ts`) gathers settings +
 // state + tracked seconds and asks these functions whether to fire.
@@ -45,6 +46,10 @@ export interface DailyNotifierState {
   lastDailySummaryDate?: string
   /** Yesterday's-recap notification last fired (keyed to the day it fired). */
   lastYesterdayRecapDate?: string
+  /** Weekly brief last fired for this week (keyed by the completed week's last
+   *  day — the anchor its wrap opens on). Restarts, wakes, and clock changes
+   *  can never duplicate a week that already fired. */
+  lastWeeklyBriefAnchor?: string
   /** Dates the user explicitly generated a recap for (so we don't re-offer it). */
   recapGeneratedDates?: string[]
   /** AI narrative attempts per "<kind>:<date>" — the retry budget below. */
@@ -61,7 +66,7 @@ export interface DailyNotifierState {
 // the loop through the existing last*Date state, so the budget only ever gates
 // retries of failures.
 
-export type AiAttemptKind = 'evening-wrap' | 'yesterday-recap'
+export type AiAttemptKind = 'evening-wrap' | 'yesterday-recap' | 'weekly-brief'
 
 export const AI_ATTEMPT_MAX_PER_DAY = 3
 export const AI_ATTEMPT_MIN_GAP_MS = 20 * 60_000
@@ -189,5 +194,52 @@ export function decideYesterdayRecap(input: YesterdayRecapDecisionInput): Schedu
     return { fire: false, reason: 'insufficient-yesterday-activity' }
   }
   return { fire: true, targetDate: input.yesterdayDateString }
+}
+
+// ─── Weekly brief (briefs.md) ─────────────────────────────────────────────────
+// Fires at the week boundary — Monday morning, inside the same rhythm-derived
+// morning window as the morning brief — and opens the completed week's wrap
+// (the rolling 7-day window ending on Sunday, so the wrap covers Mon–Sun).
+// A missed window is skipped, never delivered late into the week: if Monday's
+// morning window passes without a fire, that week's brief simply doesn't
+// happen (briefs.md §Scheduling and delivery).
+
+/** Minimum tracked seconds across the week before there is enough signal for a
+ *  weekly brief. A near-empty week produces silence over invention. Kept above
+ *  the daily floor: one thin day is not a week story. */
+export const WEEKLY_NOTIFY_MIN_SECONDS = 2 * 3600
+
+export interface WeeklyBriefDecisionInput {
+  now: Date
+  state: DailyNotifierState
+  /** Total tracked seconds across the completed week (anchor-6 … anchor). */
+  weekSecondsTracked: number
+  weeklyBriefEnabled: boolean
+  /** The completed week's last day (yesterday when today is Monday) — the
+   *  anchor date the week wrap opens on, and the once-per-week state key. */
+  weekAnchorDate: string
+  /** Morning window shared with the morning brief; rhythm-derived. */
+  morningStartHour?: number
+  morningEndHour?: number
+}
+
+export function decideWeeklyBrief(input: WeeklyBriefDecisionInput): SchedulerDecision {
+  if (!input.weeklyBriefEnabled) return { fire: false, reason: 'disabled' }
+  // The week boundary: local Monday. Clock changes and timezone travel resolve
+  // through the same local calendar every other gate uses, so a re-crossed
+  // boundary can't re-fire (the anchor key below already recorded the week).
+  if (input.now.getDay() !== 1) return { fire: false, reason: 'not-week-boundary' }
+  if (input.state.lastWeeklyBriefAnchor === input.weekAnchorDate) {
+    return { fire: false, reason: 'already-fired-this-week' }
+  }
+  const morningStartHour = input.morningStartHour ?? STANDARD_WINDOWS.morningStartHour
+  const morningEndHour = input.morningEndHour ?? STANDARD_WINDOWS.morningEndHour
+  if (!hasReachedLocalTime(input.now, morningStartHour)) return { fire: false, reason: `before-${morningStartHour}` }
+  // Past the window: skip the week, never deliver late (missed windows skip).
+  if (input.now.getHours() >= morningEndHour) return { fire: false, reason: 'window-passed' }
+  if (input.weekSecondsTracked < WEEKLY_NOTIFY_MIN_SECONDS) {
+    return { fire: false, reason: 'insufficient-week-activity' }
+  }
+  return { fire: true, targetDate: input.weekAnchorDate }
 }
 

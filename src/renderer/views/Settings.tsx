@@ -3602,7 +3602,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       break
     case 'notifications':
       content = (
-        <SectionPage title="Notifications" description="Your morning brief, evening wrap, and focus alerts.">
+        <SectionPage title="Notifications" description="Your morning brief, evening wrap, weekly brief, and focus alerts.">
           <div>
             <SettingsRow
               first
@@ -3614,6 +3614,16 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
               title="Morning brief"
               description="One honest line about what yesterday actually was."
               control={<Toggle checked={settings.morningNudgeEnabled ?? true} onChange={(value) => void persist({ morningNudgeEnabled: value })} />}
+            />
+            <SettingsRow
+              title="Weekly brief"
+              description="Monday morning, the completed week's wrap."
+              control={<Toggle checked={settings.weeklyBriefEnabled ?? true} onChange={(value) => void persist({ weeklyBriefEnabled: value })} />}
+            />
+            <SettingsRow
+              title="Activity-free notification text"
+              description="Notifications say only that a brief is ready — no activity on the lock screen."
+              control={<Toggle checked={settings.activityFreeNotificationText ?? false} onChange={(value) => void persist({ activityFreeNotificationText: value })} />}
             />
             <SettingsRow
               title="Distraction alerts"

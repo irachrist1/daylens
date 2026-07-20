@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { AIWrappedNarrative, WrapPreflightResult, WrapProviderState } from '@shared/types'
+import type { AIWrappedNarrative, DayAnalysisVersionSummary, WrapPreflightResult, WrapProviderState } from '@shared/types'
 import type { DayTimelinePayload } from '@shared/types'
 import { ipc } from '../lib/ipc'
 import { todayString, shiftDateString } from '../lib/format'
@@ -56,6 +56,7 @@ export default function DayWrapped({
   const [narrative, setNarrative] = useState<AIWrappedNarrative | null>(null)
   const [loaded, setLoaded] = useState(false)
   const [generatedAt, setGeneratedAt] = useState<number | null>(null)
+  const [history, setHistory] = useState<DayAnalysisVersionSummary[] | null>(null)
   // The 2h tracked-work gate applies to the LIVE day only. A finished day is
   // always available. "Generate anyway" is the quiet escape hatch.
   const underThreshold = mode === 'today' && facts.workSeconds < WORK_THRESHOLD_SECONDS && facts.quality !== 'empty'
@@ -102,6 +103,11 @@ export default function DayWrapped({
       // Show when the wrap was actually generated (persisted), not "just now" on
       // every open — only fall back to now for a transient, un-persisted result.
       setGeneratedAt(day?.generatedAt ?? Date.now())
+      // DEV-206: this day's analysis version history, for the finale's
+      // "analysis vN" marker — every version inspectable, with why it changed.
+      const versions = await ipc.ai.getDayAnalysisHistory(data.date).catch(() => null)
+      if (cancelled) return
+      setHistory(versions?.day ?? null)
       setLoaded(true)
     })()
     return () => { cancelled = true }
@@ -186,6 +192,7 @@ export default function DayWrapped({
       seed={facts.seed}
       exportStem={`daylens-${facts.date}`}
       generatedLabel={generatedAt ? relativeTime(generatedAt) : null}
+      history={history}
       onRegenerate={() => setReloadKey((k) => k + 1)}
       onClose={onClose}
       ask={({ slideId, slideLine, question, replyingTo }) =>

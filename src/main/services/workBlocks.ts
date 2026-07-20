@@ -1783,7 +1783,7 @@ export function writeIgnoredBlockReviewBackstop(
   // day's frozen snapshot so week/month/year facts rebuild from what remains,
   // and the stored wrap prose written over the deleted block with it.
   deleteDaySnapshotRow(db, date)
-  deleteWrappedNarrativesForDate(db, date)
+  deleteWrappedNarrativesForDate(db, date, 'deletion')
   const rows = db.prepare(`
     SELECT
       id,
@@ -1863,7 +1863,7 @@ export function writeTimelineBlockReview(
   // stored wrap narrative was written over the pre-correction facts too, so
   // it goes with the snapshot rather than contradicting the corrected day.
   deleteDaySnapshotRow(db, dateStr)
-  deleteWrappedNarrativesForDate(db, dateStr)
+  deleteWrappedNarrativesForDate(db, dateStr, 'correction')
   const existingCorrection = existing ? parseReviewJson(existing.correction_json) : {}
   const nextCorrection: Record<string, unknown> = { ...existingCorrection }
 
@@ -4494,7 +4494,7 @@ export function invalidateTimelineDayBlocks(db: Database.Database, dateStr: stri
   // replay) — the frozen snapshot that feeds period wraps is stale with it,
   // and so is any stored wrap narrative written over the purged evidence.
   deleteDaySnapshotRow(db, dateStr)
-  deleteWrappedNarrativesForDate(db, dateStr)
+  deleteWrappedNarrativesForDate(db, dateStr, 'evidence-change')
 }
 
 type CarriedAiLabel = { label: string; narrative: string | null; confidence: number }

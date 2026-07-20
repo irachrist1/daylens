@@ -3034,6 +3034,41 @@ const migrations: Migration[] = [
       `)
     },
   },
+  // v61 is claimed by the in-flight meeting-attendance branch and v62 is
+  // reserved for the connector stack's next PR (Linear + Granola) — same rule
+  // as the v59 renumbering. The runner tolerates ordered gaps: it applies
+  // every array entry with version > MAX(applied), in array order, so 60 → 63
+  // is safe as long as versions stay strictly increasing in this array.
+  {
+    version: 63,
+    description:
+      'Versioned day analysis (DEV-206): every AI analysis of a day — the day wrap narrative, the period wraps that contain it, and the timeline regroup/relabel run — is recorded as an append-only version row instead of silently replacing what came before. Each row carries what the analysis said (payload_json), the facts hash it was computed from, the model and prompt version that produced it, the trigger source, and WHY it exists (initial / facts-changed / correction / manual-regenerate). A correction retires the current version (retired_at + retired_reason) rather than erasing it, so the next generation is visibly a new version with a reason — old versions stay inspectable forever. LOCAL table: it exports with the timeline section of the history export and never rides a sync payload (the strict sync allowlist has no key for it). (Numbered v63, skipping v61/v62 claimed by the in-flight connector-stack branches — the runner never revisits versions below MAX(applied).)',
+    up: () => {
+      getDb().exec(`
+        CREATE TABLE IF NOT EXISTS day_analysis_versions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          kind TEXT NOT NULL CHECK (kind IN ('day', 'week', 'month', 'year', 'timeline')),
+          period_key TEXT NOT NULL,
+          version INTEGER NOT NULL,
+          facts_hash TEXT NOT NULL,
+          model TEXT,
+          prompt_version INTEGER NOT NULL DEFAULT 1,
+          trigger_source TEXT NOT NULL DEFAULT 'user',
+          source TEXT NOT NULL DEFAULT 'ai' CHECK (source IN ('ai', 'fallback', 'deterministic')),
+          reason TEXT NOT NULL CHECK (reason IN (
+            'initial', 'facts-changed', 'correction', 'deletion',
+            'evidence-change', 'manual-regenerate', 'regenerated'
+          )),
+          payload_json TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          retired_at INTEGER,
+          retired_reason TEXT CHECK (retired_reason IN ('correction', 'deletion', 'evidence-change', 'superseded') OR retired_reason IS NULL),
+          UNIQUE(kind, period_key, version)
+        );
+        CREATE INDEX IF NOT EXISTS idx_day_analysis_versions_key ON day_analysis_versions(kind, period_key);
+      `)
+    },
+  },
 ]
 
 export const LATEST_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0

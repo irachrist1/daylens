@@ -19,6 +19,8 @@ import {
 } from '../services/ai'
 import { getWrappedNarrative } from '../services/wrappedNarrative'
 import { getWrappedPeriodWrap } from '../services/wrappedPeriodNarrative'
+import { listDayAnalysisVersions } from '../db/dayAnalysisVersions'
+import { computePeriodRange } from '../lib/wrappedPeriodRange'
 import { askWrappedQuestion } from '../services/wrappedQuestion'
 import { getWrapProviderState } from '../services/aiOrchestration'
 import { getWrapPreflight } from '../services/wrapPreflight'
@@ -238,6 +240,25 @@ export function registerAIHandlers(): void {
 
   ipcMain.handle(IPC.AI.GET_WRAP_PROVIDER_STATE, async () => {
     return getWrapProviderState()
+  })
+
+  // DEV-206: the version history of a day's AI analyses — every generation of
+  // the day wrap and every timeline regroup/relabel run, newest first, with
+  // facts hash, model, prompt version, and why each version replaced the last.
+  // Old versions stay inspectable; retirements name the correction that
+  // invalidated them. With `period` set, serves the period wrap's history
+  // instead (rows are keyed by the period's start date, derived here from the
+  // same range math the wrap itself uses).
+  ipcMain.handle(IPC.AI.GET_DAY_ANALYSIS_HISTORY, (_e, payload: { date: string; period?: WrappedPeriod }) => {
+    const db = getDb()
+    if (payload.period) {
+      const periodKey = computePeriodRange(payload.period, payload.date).startDate
+      return { day: listDayAnalysisVersions(db, payload.period, periodKey), timeline: [] }
+    }
+    return {
+      day: listDayAnalysisVersions(db, 'day', payload.date),
+      timeline: listDayAnalysisVersions(db, 'timeline', payload.date),
+    }
   })
 
   // Pre-flight data quality check: honest, specific

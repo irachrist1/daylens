@@ -80,6 +80,8 @@ function AppContent({ settings }: { settings: AppSettings | null }) {
         setWrappedArtifactId(artifactId)
         setWrappedOpen(true)
       },
+      // The weekly brief opens the completed week's wrap.
+      openPeriodWrapped: ({ period, anchorDate }) => setPeriodWrap({ period, anchorDate }),
     })
   }, [navigate])
 

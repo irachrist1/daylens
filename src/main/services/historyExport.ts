@@ -143,6 +143,7 @@ const SECTION_RULES: SectionRule[] = [
         'context_patterns',
         'memory_index_days',
         'wrapped_narratives',
+        'day_analysis_versions',
       ].includes(t),
   },
   {

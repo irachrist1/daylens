@@ -16,6 +16,7 @@ import type {
   AIChatTurnResult,
   AIStarterSuggestionResult,
   AIWrappedNarrative,
+  DayAnalysisVersionSummary,
   AISurfaceSummary,
   AIThreadMessage,
   AIThreadSettings,
@@ -327,6 +328,8 @@ const api = {
       ipcRenderer.invoke(IPC.AI.GET_WRAPPED_PERIOD_NARRATIVE, { period, anchorDate, force }),
     getWrapProviderState: (): Promise<WrapProviderState> =>
       ipcRenderer.invoke(IPC.AI.GET_WRAP_PROVIDER_STATE),
+    getDayAnalysisHistory: (date: string, period?: WrappedPeriod): Promise<{ day: DayAnalysisVersionSummary[]; timeline: DayAnalysisVersionSummary[] }> =>
+      ipcRenderer.invoke(IPC.AI.GET_DAY_ANALYSIS_HISTORY, { date, period }),
     getWrapPreflight: (date: string): Promise<WrapPreflightResult> =>
       ipcRenderer.invoke(IPC.AI.GET_WRAP_PREFLIGHT, { date }),
     askWrapped: (payload: WrappedAskRequest): Promise<WrappedAskResult> =>

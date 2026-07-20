@@ -1,4 +1,4 @@
-import type { DayTimelinePayload } from '@shared/types'
+import type { DayTimelinePayload, WrappedPeriod } from '@shared/types'
 
 interface DailySummaryNavigationDeps {
   getTimelineDay: (date: string) => Promise<DayTimelinePayload>
@@ -7,9 +7,13 @@ interface DailySummaryNavigationDeps {
     threadId: number | null
     artifactId: number | null
   }) => void
+  /** Opens the period (week/month/year) wrap — the weekly brief's target. */
+  openPeriodWrapped?: (payload: { period: WrappedPeriod; anchorDate: string }) => void
   navigate: (route: string) => void
   todayString: () => string
 }
+
+const WRAPPED_PERIODS: ReadonlySet<string> = new Set(['week', 'month', 'year'])
 
 function numberParam(value: string | null): number | null {
   if (!value) return null
@@ -41,10 +45,18 @@ export async function handleDailySummaryNavigation(
 ): Promise<boolean> {
   const url = new URL(route, 'http://x')
   const source = url.searchParams.get('source')
-  const opensWrapped = url.pathname === '/wrapped' || source === 'daily-summary' || source === 'evening-wrap'
+  const opensWrapped = url.pathname === '/wrapped' || source === 'daily-summary' || source === 'evening-wrap' || source === 'weekly-brief'
   if (!opensWrapped) {
     deps.navigate(route)
     return false
+  }
+
+  // A period route (the weekly brief) opens the period wrap, not a day deck.
+  const period = url.searchParams.get('period')
+  if (period && WRAPPED_PERIODS.has(period) && deps.openPeriodWrapped) {
+    const anchorDate = url.searchParams.get('date') || deps.todayString()
+    deps.openPeriodWrapped({ period: period as WrappedPeriod, anchorDate })
+    return true
   }
 
   const threadId = numberParam(url.searchParams.get('threadId'))

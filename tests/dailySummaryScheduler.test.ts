@@ -6,7 +6,9 @@ import assert from 'node:assert/strict'
 import {
   decideDailySummary,
   decideYesterdayRecap,
+  decideWeeklyBrief,
   NOTIFY_MIN_SECONDS,
+  WEEKLY_NOTIFY_MIN_SECONDS,
   AI_ATTEMPT_MAX_PER_DAY,
   AI_ATTEMPT_MIN_GAP_MS,
   canAttemptAiNarrative,
@@ -181,6 +183,114 @@ test('yesterday recap does not fire twice in one day', () => {
     yesterdaySecondsTracked: NOTIFY_MIN_SECONDS * 4,
   })
   assert.deepEqual(decision, { fire: false, reason: 'already-fired-today' })
+})
+
+// ─── decideWeeklyBrief (briefs.md) ───────────────────────────────────────────
+// Fires at the week boundary — Monday morning — for the completed week
+// (anchored on Sunday). Missed windows skip; restarts never duplicate.
+
+// 2026-05-11 is a Monday; the completed week it recaps ends Sunday 2026-05-10.
+const MONDAY = '2026-05-11'
+const SUNDAY_ANCHOR = '2026-05-10'
+
+function mondayAt(hour: number, minute = 0): Date {
+  return new Date(2026, 4, 11, hour, minute, 0, 0)
+}
+
+const WEEKLY_BASE = {
+  state: {} as DailyNotifierState,
+  weeklyBriefEnabled: true,
+  weekAnchorDate: SUNDAY_ANCHOR,
+  weekSecondsTracked: WEEKLY_NOTIFY_MIN_SECONDS,
+}
+
+test('weekly brief does not fire when disabled', () => {
+  const decision = decideWeeklyBrief({ ...WEEKLY_BASE, now: mondayAt(9), weeklyBriefEnabled: false })
+  assert.deepEqual(decision, { fire: false, reason: 'disabled' })
+})
+
+test('weekly brief fires Monday morning for the completed week', () => {
+  const decision = decideWeeklyBrief({ ...WEEKLY_BASE, now: mondayAt(9) })
+  assert.deepEqual(decision, { fire: true, targetDate: SUNDAY_ANCHOR })
+})
+
+test('weekly brief only fires at the week boundary, never midweek', () => {
+  for (const day of [12, 13, 14, 15, 16, 17]) { // Tue..Sun of that week
+    const decision = decideWeeklyBrief({ ...WEEKLY_BASE, now: new Date(2026, 4, day, 9, 0, 0, 0) })
+    assert.deepEqual(decision, { fire: false, reason: 'not-week-boundary' }, `day=${day}`)
+  }
+})
+
+test('weekly brief respects the morning window: too early holds, too late skips the week', () => {
+  assert.deepEqual(
+    decideWeeklyBrief({ ...WEEKLY_BASE, now: mondayAt(4, 59) }),
+    { fire: false, reason: 'before-5' },
+  )
+  // A missed window is SKIPPED, not delivered late into the afternoon.
+  for (const hour of [12, 15, 21]) {
+    assert.deepEqual(
+      decideWeeklyBrief({ ...WEEKLY_BASE, now: mondayAt(hour) }),
+      { fire: false, reason: 'window-passed' },
+      `hour=${hour}`,
+    )
+  }
+})
+
+test('weekly brief fires at most once per week: restarts cannot duplicate it', () => {
+  const first = decideWeeklyBrief({ ...WEEKLY_BASE, now: mondayAt(8) })
+  assert.equal(first.fire, true)
+  const afterFire: DailyNotifierState = { lastWeeklyBriefAnchor: SUNDAY_ANCHOR }
+  // Same Monday, later check (a restart mid-window): already fired.
+  assert.deepEqual(
+    decideWeeklyBrief({ ...WEEKLY_BASE, now: mondayAt(10), state: afterFire }),
+    { fire: false, reason: 'already-fired-this-week' },
+  )
+  // NEXT Monday is a different anchor and fires again.
+  const nextMonday = new Date(2026, 4, 18, 9, 0, 0, 0)
+  assert.equal(nextMonday.getDay(), 1)
+  const nextWeek = decideWeeklyBrief({
+    ...WEEKLY_BASE,
+    now: nextMonday,
+    state: afterFire,
+    weekAnchorDate: '2026-05-17',
+  })
+  assert.deepEqual(nextWeek, { fire: true, targetDate: '2026-05-17' })
+})
+
+test('weekly brief stays silent over a near-empty week: silence over invention', () => {
+  const decision = decideWeeklyBrief({
+    ...WEEKLY_BASE,
+    now: mondayAt(9),
+    weekSecondsTracked: WEEKLY_NOTIFY_MIN_SECONDS - 1,
+  })
+  assert.deepEqual(decision, { fire: false, reason: 'insufficient-week-activity' })
+})
+
+test('the weekly rhythm window follows the chosen work rhythm', async () => {
+  const { workRhythmWindows } = await import('../src/main/lib/dailySummaryScheduler')
+  const night = workRhythmWindows('night')
+  // A night owl's Monday-morning window starts later; before it, the brief holds.
+  assert.deepEqual(
+    decideWeeklyBrief({
+      ...WEEKLY_BASE,
+      now: mondayAt(7),
+      morningStartHour: night.morningStartHour,
+      morningEndHour: night.morningEndHour,
+    }),
+    { fire: false, reason: `before-${night.morningStartHour}` },
+  )
+})
+
+test('the weekly-brief AI attempt budget is its own kind', () => {
+  const t0 = Date.parse('2026-05-11T08:00:00')
+  let state: DailyNotifierState = {}
+  for (let i = 0; i < AI_ATTEMPT_MAX_PER_DAY; i += 1) {
+    state = recordAiNarrativeAttempt(state, 'weekly-brief', SUNDAY_ANCHOR, t0 + i * AI_ATTEMPT_MIN_GAP_MS)
+  }
+  assert.equal(canAttemptAiNarrative(state, 'weekly-brief', SUNDAY_ANCHOR, t0 + 6 * 3_600_000), false)
+  // The other kinds keep their own budgets.
+  assert.equal(canAttemptAiNarrative(state, 'evening-wrap', MONDAY, t0 + 6 * 3_600_000), true)
+  assert.equal(canAttemptAiNarrative(state, 'yesterday-recap', SUNDAY_ANCHOR, t0 + 6 * 3_600_000), true)
 })
 
 // ─── The carryover nudge is removed ─────────────────────────────────────────
