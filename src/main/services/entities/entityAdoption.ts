@@ -268,7 +268,24 @@ function adoptExternalSignals(db: Database.Database): void {
 export type ConnectedEnvelope =
   | { kind: 'calendar_event'; sourceEventId: string; title: string; startMs?: number; endMs?: number; attendees?: Array<{ connectorId: string; displayName: string }> }
   | { kind: 'meeting_record'; sourceEventId: string; title: string; startMs?: number; endMs?: number; participants?: Array<{ connectorId: string; displayName: string }> }
-  | { kind: 'repository_activity'; provider: string; owner: string; repo: string; observedAt?: number }
+  | {
+    kind: 'repository_activity'
+    provider: string
+    owner: string
+    repo: string
+    observedAt?: number
+    /** What happened, minimally: activity kind, title (a commit subject or
+     *  PR/issue title — never a body, diff, or URL), and provider state. */
+    activity?: {
+      kind: 'commit' | 'pull_request' | 'review' | 'issue'
+      title: string
+      state?: string | null
+      /** Source-native login of who did it, when it was not the account owner. */
+      actorLogin?: string | null
+    }
+    /** People involved OTHER than the account owner, by source-native login. */
+    people?: Array<{ connectorId: string; displayName: string }>
+  }
   | { kind: 'document_reference'; sourceDocumentId: string; title: string; observedAt?: number }
   | { kind: 'message_reference'; sourceMessageId: string; author?: { connectorId: string; displayName: string }; observedAt?: number }
 
@@ -296,14 +313,26 @@ export function adoptConnectedEnvelope(db: Database.Database, envelope: Connecte
       }
       return meeting
     }
-    case 'repository_activity':
-      return resolveRepositoryEntity(db, {
+    case 'repository_activity': {
+      const repository = resolveRepositoryEntity(db, {
         provider: envelope.provider,
         owner: envelope.owner,
         repo: envelope.repo,
         origin: 'connected',
         observedAt: envelope.observedAt,
       })
+      for (const person of envelope.people ?? []) {
+        const entity = resolvePersonEntity(db, {
+          connectorId: person.connectorId,
+          displayName: person.displayName,
+          observedAt: envelope.observedAt,
+        })
+        if (entity && repository) {
+          addEntityRelationship(db, entity.id, repository.id, 'contributed', { source: 'connected', confidence: 0.9 })
+        }
+      }
+      return repository
+    }
     case 'document_reference': {
       const entity = upsertEntity(db, {
         type: 'file',

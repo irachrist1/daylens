@@ -12,10 +12,10 @@
 // must never resurrect deleted connector data).
 
 import type Database from 'better-sqlite3'
-import type { CalendarSignal, ConnectorId } from '@shared/types'
+import type { CalendarSignal, ConnectorId, GitActivitySignal } from '@shared/types'
 import { getExternalSignal } from '../services/externalSignals'
 import { mergeGroupIds, resolveMergeChain, type EntityRow } from '../services/entities/entityRepository'
-import type { ConnectorRecordEnvelope } from './contract'
+import type { ConnectorGitDaySignal, ConnectorRecordEnvelope } from './contract'
 import {
   deleteConnectorRecords,
   listConnectorRecords,
@@ -83,6 +83,49 @@ export function removeConnectorDaySignalEvent(
   `).run(JSON.stringify({ events: kept } satisfies CalendarSignal), nowMs, daySignal.date)
 }
 
+/** Remove a record's git contribution from the external_signals 'git' day
+ *  row: the commit line (decrementing the repo's count) or the PR entry,
+ *  dropping emptied repo entries and deleting the row when nothing remains.
+ *  Same-shaped data another source also found returns on that source's next
+ *  refresh. Also used by ingest when a re-synced record MOVED days. */
+export function removeConnectorGitDaySignalEvent(
+  db: Database.Database,
+  gitSignal: ConnectorGitDaySignal,
+  nowMs: number,
+): void {
+  const stored = getExternalSignal<GitActivitySignal>(db, gitSignal.date, 'git')
+  if (!stored) return
+  const payload = stored.payload
+  let changed = false
+
+  if (gitSignal.commit) {
+    const entry = payload.repos.find((repo) => repo.repo === gitSignal.repo)
+    if (entry && entry.messages.includes(gitSignal.commit.message)) {
+      entry.messages = entry.messages.filter((message) => message !== gitSignal.commit!.message)
+      entry.commitCount = Math.max(0, entry.commitCount - 1)
+      changed = true
+    }
+  }
+  if (gitSignal.pr) {
+    const before = payload.prs.length
+    payload.prs = payload.prs.filter(
+      (pr) => !(pr.repo === gitSignal.repo && pr.title === gitSignal.pr!.title),
+    )
+    changed = changed || payload.prs.length !== before
+  }
+  if (!changed) return
+
+  payload.repos = payload.repos.filter((repo) => repo.commitCount > 0 || repo.messages.length > 0)
+  payload.totalCommits = payload.repos.reduce((sum, repo) => sum + repo.commitCount, 0)
+  if (payload.repos.length === 0 && payload.prs.length === 0) {
+    db.prepare(`DELETE FROM external_signals WHERE date = ? AND source = 'git'`).run(gitSignal.date)
+    return
+  }
+  db.prepare(`
+    UPDATE external_signals SET payload_json = ?, captured_at = ? WHERE date = ? AND source = 'git'
+  `).run(JSON.stringify(payload), nowMs, gitSignal.date)
+}
+
 /**
  * Remove everything ONE record derived: its evidence refs (both the
  * per-connector support refs and the envelope-adoption refs), its day-signal
@@ -116,6 +159,7 @@ export function removeConnectorRecordDerivedData(
       .run(adoptionSourceId)
   }
   if (envelope?.daySignal) removeConnectorDaySignalEvent(db, envelope.daySignal, nowMs)
+  if (envelope?.gitSignal) removeConnectorGitDaySignalEvent(db, envelope.gitSignal, nowMs)
 
   const candidates = new Set<string>(supportedEntityIds)
   if (row.entity_id) candidates.add(row.entity_id)

@@ -113,12 +113,26 @@ export interface ConnectorDaySignalEvent {
   attendeeCount: number | null
 }
 
+/** Optional per-day git projection so repository activity also lands in the
+ *  external_signals 'git' day layer that briefs/wraps/enrichment already read.
+ *  A record carries at most ONE contribution: a commit line or a PR entry. */
+export interface ConnectorGitDaySignal {
+  date: string
+  /** Repository short name — never a path or a URL. */
+  repo: string
+  /** Commit subject line + local clock, merged into the repo's day entry. */
+  commit?: { message: string; clock: string }
+  /** Pull-request entry, merged by (title, repo). */
+  pr?: { title: string; state: string }
+}
+
 /** One normalized record: provenance + the connected-source entity envelope
  *  the entity repository already accepts (the shape batch 7's fixtures use). */
 export interface ConnectorRecordEnvelope {
   provenance: ConnectorProvenance
   entity: ConnectedEnvelope
   daySignal?: ConnectorDaySignalEvent
+  gitSignal?: ConnectorGitDaySignal
 }
 
 export interface ConnectorSyncPage {
@@ -145,6 +159,11 @@ export interface ConnectorConnectInput {
    *  (e.g. { filePath } for the .ics connector). OAuth flows exchange and
    *  store their token via ./credentials.ts and keep config clean. */
   config: Record<string, unknown>
+  /** Plain-language, credential-free authorization guidance for the person
+   *  ("Enter code ABCD-1234 at github.com/login/device"). Device-style flows
+   *  MUST surface their user code through this — it is the only channel that
+   *  reaches Settings while connect() is still running. */
+  onNotice?: (notice: string) => void
 }
 
 export interface ConnectorConnectResult {
@@ -246,6 +265,7 @@ export function validateRecordEnvelope(record: ConnectorRecordEnvelope): string[
   const strings: string[] = []
   collectStrings(record?.entity, strings)
   if (record?.daySignal) collectStrings(record.daySignal, strings)
+  if (record?.gitSignal) collectStrings(record.gitSignal, strings)
   for (const text of strings) {
     if (containsCredential(text)) {
       problems.push(`credential-shaped content (${findCredentialPattern(text)}) — record quarantined`)
