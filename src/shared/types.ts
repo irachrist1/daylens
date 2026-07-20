@@ -1782,7 +1782,9 @@ export interface AppSettings {
   trackingControlsEnabled?: boolean
   trackingExcludedApps?: string[]   // bundle ids and/or app names
   trackingExcludedSites?: string[]  // hosts/domains
-  trackingSkipIncognito?: boolean   // effective only when controls enabled; defaults on
+  // trackingSkipIncognito was removed: private/incognito exclusion is
+  // unconditional (see trackingControls.ts) and was never a real setting. A
+  // persisted value in old configs is simply ignored.
   trackingPaused?: boolean          // ad-hoc pause; blocks capture regardless of the master switch
   billingInstallationId?: string    // random local install identity; raw activity never leaves with it
   // Appearance (Settings → General). Colors are per-category overrides of the

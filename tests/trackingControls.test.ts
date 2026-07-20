@@ -16,7 +16,6 @@ const base: TrackingControlsState = {
   paused: false,
   excludedApps: [],
   excludedSites: [],
-  skipIncognito: true,
 }
 
 // ── Invariant: OFF + unpaused passes everything through except private windows ─
@@ -91,7 +90,7 @@ test('detectIncognitoFromTitle catches common browser private markers', () => {
 })
 
 test('private windows are never captured, regardless of any setting', () => {
-  const off = { ...base, enabled: false, skipIncognito: false }
+  const off = { ...base, enabled: false }
   assert.equal(decideAppCapture(off, { windowTitle: 'x (Incognito)' }).reason, 'incognito')
   assert.equal(decideSiteCapture(off, { domain: 'example.com', windowTitle: 'x [InPrivate]' }).reason, 'incognito')
 })
@@ -99,7 +98,7 @@ test('private windows are never captured, regardless of any setting', () => {
 test('the structured private-window signal blocks capture even without a title marker', () => {
   // Chrome on macOS puts no marker in the window title; the browser reader
   // supplies isPrivate from the window mode instead.
-  const off = { ...base, enabled: false, skipIncognito: false }
+  const off = { ...base, enabled: false }
   assert.equal(decideSiteCapture(off, { domain: 'example.com', windowTitle: 'Some page', isPrivate: true }).reason, 'incognito')
   assert.equal(decideAppCapture(off, { appName: 'Chrome', windowTitle: 'Some page', isPrivate: true }).reason, 'incognito')
   assert.equal(decideSiteCapture(off, { domain: 'example.com', windowTitle: 'Some page', isPrivate: false }).capture, true)
@@ -107,8 +106,8 @@ test('the structured private-window signal blocks capture even without a title m
 
 // ── Settings adapter defaults ──────────────────────────────────────────────────
 
-test('trackingControlsStateFromSettings defaults to opt-in-off with incognito-skip on', () => {
+test('trackingControlsStateFromSettings defaults to opt-in-off', () => {
   const s = trackingControlsStateFromSettings({})
   // consented defaults FALSE — absent consent means capture refuses everything.
-  assert.deepEqual(s, { consented: false, enabled: false, paused: false, excludedApps: [], excludedSites: [], skipIncognito: true })
+  assert.deepEqual(s, { consented: false, enabled: false, paused: false, excludedApps: [], excludedSites: [] })
 })

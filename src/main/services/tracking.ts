@@ -9,6 +9,7 @@ import {
   clearLiveAppSessionSnapshot,
   getLiveAppSessionSnapshot,
   insertAppSession,
+  markActivityStateEventHeldForMediaPlayback,
   recordActivityStateEvent,
   upsertLiveAppSessionSnapshot,
 } from '../db/queries'
@@ -1251,6 +1252,13 @@ let lastSnapshotPersistAt = 0
 type IdleState = 'active' | 'provisional_idle' | 'away'
 let idleState: IdleState = 'active'
 let provisionalIdleStart: number | null = null
+// Row id of the idle_start event that opened the current provisional idle, and
+// whether that event already carries heldForMediaPlayback. Production always
+// crosses the 2-minute threshold (plain idle_start) before the 5-minute media
+// hold decision, so the hold upgrades the open event in place — consumers
+// (attribution idle exclusion, work-block gap labels) read the flag off it.
+let provisionalIdleEventId: number | null = null
+let provisionalIdleHeldForMedia = false
 // True last-input time captured on the poll where the user returns from
 // away/provisional_idle, consumed by the next session start so its boundary is
 // stamped from real input rather than the poll wall-clock (two-clock fix).
@@ -1529,9 +1537,12 @@ function recordActivityEvent(
   // Backdated events (a sleep gap discovered on the first poll after wake)
   // pass the true boundary; live events default to now.
   eventTs: number = Date.now(),
-): void {
+  // Returns the activity_state_events row id (null when the insert failed) so
+  // the poll FSM can later upgrade a provisional idle_start in place.
+): number | null {
+  let eventId: number | null = null
   try {
-    recordActivityStateEvent(getDb(), {
+    eventId = recordActivityStateEvent(getDb(), {
       eventTs,
       eventType,
       source: 'tracking',
@@ -1548,6 +1559,7 @@ function recordActivityEvent(
   } else if (eventType === 'away_end') {
     recordSupervisorEvent('idle_ended', eventTs)
   }
+  return eventId
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -1660,6 +1672,8 @@ export function __setTrackingFsmTestHarness(harness: TrackingFsmTestHarness | nu
   currentSession = null
   idleState = 'active'
   provisionalIdleStart = null
+  provisionalIdleEventId = null
+  provisionalIdleHeldForMedia = false
   returnFromIdleAtMs = null
   lastFlushEndMs = null
   lastPollTickMs = null
@@ -1730,8 +1744,25 @@ async function poll(): Promise<void> {
         if (idleState === 'active') {
           provisionalIdleStart = nowMs() - Math.round(idleSec) * 1_000
           idleState = 'provisional_idle'
-          recordActivityEvent('idle_start', { idleSeconds: Math.round(idleSec), heldForMediaPlayback: true })
+          provisionalIdleEventId = recordActivityEvent('idle_start', { idleSeconds: Math.round(idleSec), heldForMediaPlayback: true })
+          provisionalIdleHeldForMedia = true
           console.log(`[tracking] idle ${Math.round(idleSec)}s during media playback — session held open`)
+        } else if (idleState === 'provisional_idle' && !provisionalIdleHeldForMedia) {
+          // Production reaches the away threshold via provisional_idle (the
+          // 2-minute branch below fires first), so the plain idle_start is
+          // already on record. Upgrade it in place — otherwise the hold is
+          // invisible and attribution slices the held media span out.
+          try {
+            if (provisionalIdleEventId != null) {
+              markActivityStateEventHeldForMediaPlayback(getDb(), provisionalIdleEventId)
+            } else {
+              provisionalIdleEventId = recordActivityEvent('idle_start', { idleSeconds: Math.round(idleSec), heldForMediaPlayback: true }, provisionalIdleStart ?? undefined)
+            }
+            provisionalIdleHeldForMedia = true
+          } catch (err) {
+            console.warn('[tracking] failed to mark idle_start as media hold:', err)
+          }
+          console.log(`[tracking] idle ${Math.round(idleSec)}s during media playback — provisional idle upgraded to media hold`)
         }
       } else {
         if (idleState !== 'away' && currentSession) {
@@ -1753,7 +1784,8 @@ async function poll(): Promise<void> {
       if (idleState === 'active') {
         provisionalIdleStart = nowMs() - Math.round(idleSec) * 1_000
         idleState = 'provisional_idle'
-        recordActivityEvent('idle_start', { idleSeconds: Math.round(idleSec) })
+        provisionalIdleEventId = recordActivityEvent('idle_start', { idleSeconds: Math.round(idleSec) })
+        provisionalIdleHeldForMedia = false
         console.log(`[tracking] provisional idle at ${Math.round(idleSec)}s — session held open`)
       }
     } else {

@@ -22,7 +22,9 @@ export interface TrackingControlsState {
   paused: boolean
   excludedApps: string[] // bundle ids and/or app names (free-form, case-insensitive)
   excludedSites: string[] // hosts/domains (free-form, case-insensitive)
-  skipIncognito: boolean
+  // NOTE: there is deliberately no skipIncognito switch. Private/incognito
+  // windows are never captured — decideAppCapture/decideSiteCapture refuse
+  // them before paused/enabled, independent of every setting.
 }
 
 export interface AppCaptureCandidate {
@@ -131,15 +133,14 @@ export function decideSiteCapture(state: TrackingControlsState, candidate: SiteC
 
 // Adapt AppSettings into the gate state (keeps this module free of the wider
 // settings shape). Defaults match the opt-in contract: disabled, unpaused,
-// empty lists, incognito-skip on (effective only once enabled). Consent has
-// the opposite default — absent or malformed consent means NOT consented.
+// empty lists. Consent has the opposite default — absent or malformed consent
+// means NOT consented. Incognito refusal is unconditional and has no setting.
 export function trackingControlsStateFromSettings(s: {
   captureConsent?: unknown
   trackingControlsEnabled?: boolean
   trackingPaused?: boolean
   trackingExcludedApps?: string[]
   trackingExcludedSites?: string[]
-  trackingSkipIncognito?: boolean
 }): TrackingControlsState {
   return {
     consented: isCaptureConsentCurrent(normalizeCaptureConsent(s.captureConsent)),
@@ -147,6 +148,5 @@ export function trackingControlsStateFromSettings(s: {
     paused: Boolean(s.trackingPaused),
     excludedApps: s.trackingExcludedApps ?? [],
     excludedSites: s.trackingExcludedSites ?? [],
-    skipIncognito: s.trackingSkipIncognito ?? true,
   }
 }

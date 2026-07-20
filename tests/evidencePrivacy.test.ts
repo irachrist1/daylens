@@ -9,7 +9,6 @@ const controls: TrackingControlsState = {
   paused: false,
   excludedApps: ['app.zen-browser.zen'],
   excludedSites: ['private.example.com'],
-  skipIncognito: true,
 }
 
 test('AI evidence boundary removes excluded apps, sites, and system surfaces', () => {
@@ -183,7 +182,6 @@ test('system noise is stripped even when tracking controls are disabled', () => 
     paused: false,
     excludedApps: ['app.zen-browser.zen'],
     excludedSites: ['private.example.com'],
-    skipIncognito: true,
   }) as { topApps: Array<{ appName: string }> }
 
   // Controls off → user exclusions do not apply, but invisible OS surfaces

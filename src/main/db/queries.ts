@@ -3344,6 +3344,30 @@ export function recordActivityStateEvent(
   return result.lastInsertRowid as number
 }
 
+/** Upgrade an already-recorded idle_start to a passive-media hold. The poll FSM
+ *  records a plain provisional idle_start at the 2-minute threshold and only
+ *  decides to hold the session for media playback at the 5-minute away
+ *  threshold, so the flag has to be stamped onto the existing open event —
+ *  appending a second flagged event would leave the plain one to open an idle
+ *  period in attribution. */
+export function markActivityStateEventHeldForMediaPlayback(
+  db: Database.Database,
+  eventId: number,
+): void {
+  const row = db.prepare(`
+    SELECT metadata_json AS metadataJson FROM activity_state_events WHERE id = ?
+  `).get(eventId) as { metadataJson: string } | undefined
+  if (!row) return
+  let metadata: Record<string, unknown> = {}
+  try {
+    metadata = JSON.parse(row.metadataJson || '{}') as Record<string, unknown>
+  } catch { /* malformed metadata is rebuilt with just the flag */ }
+  metadata.heldForMediaPlayback = true
+  db.prepare(`
+    UPDATE activity_state_events SET metadata_json = ? WHERE id = ?
+  `).run(JSON.stringify(metadata), eventId)
+}
+
 export function getActivityStateEventsForRange(
   db: Database.Database,
   fromMs: number,

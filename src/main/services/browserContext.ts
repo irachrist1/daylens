@@ -562,9 +562,9 @@ export class ActiveBrowserContextTracker {
     if (!domain) return false
 
     // T3: drop this website visit when the user excluded the site, paused
-    // tracking, or it's an incognito window (by title) and skip-incognito is on.
-    // Passthrough when Tracking Controls is off — the browser app session is
-    // gated separately upstream in tracking.ts.
+    // tracking, or it's an incognito window (by title) — incognito refusal is
+    // unconditional. Passthrough when Tracking Controls is off — the browser
+    // app session is gated separately upstream in tracking.ts.
     if (!decideSiteCapture(trackingControlsStateFromSettings(getSettings()), { domain, windowTitle: context.snapshot.windowTitle }).capture) {
       return false
     }

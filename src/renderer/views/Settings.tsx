@@ -1075,17 +1075,16 @@ function TrackingControlsContent({
         control={<Toggle checked={settings.trackingPaused ?? false} onChange={(value) => void persist({ trackingPaused: value })} />}
       />
       <SettingsRow
+        title="Private / incognito windows"
+        description="Never recorded. Daylens keeps nothing from a browser's private or incognito window — no URL, page title, or session. This protection is always on and cannot be turned off."
+      />
+      <SettingsRow
         title="Limit what's tracked"
-        description="Off by default — Daylens records everything. Turn this on to keep specific apps, sites, and private windows out of your history and AI answers."
+        description="Off by default — Daylens records everything. Turn this on to keep specific apps and sites out of your history and AI answers."
         control={<Toggle checked={enabled} onChange={(value) => void persist({ trackingControlsEnabled: value })} />}
       />
       {enabled && (
         <>
-          <SettingsRow
-            title="Skip private / incognito windows"
-            description="When on, Daylens records nothing from a browser's incognito or private window — no URL, page title, or session."
-            control={<Toggle checked={settings.trackingSkipIncognito ?? true} onChange={(value) => void persist({ trackingSkipIncognito: value })} />}
-          />
           <ExclusionEditor
             label="Excluded apps"
             placeholder="App name (e.g. Messages) or bundle id"
