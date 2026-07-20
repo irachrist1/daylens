@@ -348,7 +348,11 @@ export function indexMemoryForDay(db: Database.Database, date: string): IndexDay
 
   const now = Date.now()
   const commit = db.transaction(() => {
-    db.prepare(`DELETE FROM memory_records WHERE date = ?`).run(date)
+    // Supplied facts are NOT part of the day projection — they exist by
+    // explicit confirmation, not evidence (DEV-185) — so a day rebuild must
+    // never touch them: neither wiping an active fact nor resurrecting a
+    // deleted one.
+    db.prepare(`DELETE FROM memory_records WHERE date = ? AND record_kind != 'supplied_fact'`).run(date)
     for (const record of records) {
       insertRecord.run(
         record.id,

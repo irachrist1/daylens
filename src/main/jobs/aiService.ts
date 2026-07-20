@@ -47,7 +47,7 @@ import { abortError, isAbortError, registerAICancellation, runWithAbortSignal, u
 import { getDb } from '../services/database'
 import { workMemoryPromptBlock, chatMemoryPromptBlock, getWorkMemoryProfile, getClientMemory, findClientScopeForWrite, clientScope as clientScopeId } from '../services/workMemoryProfile'
 import { looksLikeMemoryInstruction, extractMemoryOps } from '../ai/memoryWrite'
-import { attachActionWidgets, buildMemoryProposal, buildMergeBlocksProposal, buildRenameBlockProposal } from '../ai/actions'
+import { attachActionWidgets, buildMemoryProposal, buildMergeBlocksProposal, buildRenameBlockProposal, filterMemoryOpsForProposal } from '../ai/actions'
 import {
   createArtifact,
   createThread,
@@ -382,7 +382,10 @@ async function maybeHandleMemoryInstruction(
     ? getClientMemory(db, clientScope.clientId)
     : getWorkMemoryProfile(db).facts
   const currentFacts = scopeFacts.map((fact) => ({ id: fact.id, text: fact.text }))
-  const ops = await extractMemoryOps({ message, currentFacts, runner, prior })
+  const extracted = await extractMemoryOps({ message, currentFacts, runner, prior })
+  // Confirmation-gate filter (DEV-185): sensitive facts are never proposed,
+  // and a previously rejected fact is not re-proposed without new evidence.
+  const ops = filterMemoryOpsForProposal(db, extracted)
   if (ops.length === 0) return null
   const proposal = buildMemoryProposal(
     ops,
@@ -3370,7 +3373,7 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
     }
   })()
   const pendingMemoryNote = memoryEnvelope
-    ? 'A memory preview is shown separately for this turn. Respond naturally, but do not claim the memory has already been saved.'
+    ? 'A memory preview is shown separately for this turn. Respond naturally, but do not claim the memory has already been saved, and do not call propose_memory this turn — the preview already covers it.'
     : null
   const extraSystem = [threadInstructionBlock, memoryContextBlock, pendingMemoryNote]
     .filter(Boolean).join('\n\n') || null

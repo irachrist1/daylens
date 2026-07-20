@@ -812,27 +812,31 @@ function memorySearchAvailable(db: Database.Database): boolean {
 // Belt-and-braces correction filters shared by the memory-record readers. The
 // index is built FROM corrected facts, so these normally match nothing — they
 // only matter when a correction landed through a path that did not refresh the
-// day yet (the fingerprint check catches it on the next search).
+// day yet (the fingerprint check catches it on the next search). Supplied
+// facts (DEV-185) are exempt: they are not evidence, so an ignored-block span
+// that happens to cover a fact's confirmation time must not hide it.
 const MEMORY_RECORD_CORRECTION_FILTERS = `
-      AND NOT EXISTS (
-        SELECT 1
-        FROM timeline_block_reviews review
-        WHERE review.review_state = 'ignored'
-          AND memory_records.start_ms >= json_extract(review.original_block_json, '$.startTime')
-          AND memory_records.start_ms < json_extract(review.original_block_json, '$.endTime')
-      )
-      AND NOT EXISTS (
-        SELECT 1
-        FROM evidence_exclusions exclusion
-        WHERE exclusion.kind = 'app'
-          AND (exclusion.bundle_id = memory_records.app_bundle_id OR exclusion.app_name = memory_records.app_name)
-          AND memory_records.start_ms >= exclusion.span_start_ms
-          AND memory_records.start_ms < exclusion.span_end_ms
-      )`
+      AND (memory_records.record_kind = 'supplied_fact' OR (
+        NOT EXISTS (
+          SELECT 1
+          FROM timeline_block_reviews review
+          WHERE review.review_state = 'ignored'
+            AND memory_records.start_ms >= json_extract(review.original_block_json, '$.startTime')
+            AND memory_records.start_ms < json_extract(review.original_block_json, '$.endTime')
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM evidence_exclusions exclusion
+          WHERE exclusion.kind = 'app'
+            AND (exclusion.bundle_id = memory_records.app_bundle_id OR exclusion.app_name = memory_records.app_name)
+            AND memory_records.start_ms >= exclusion.span_start_ms
+            AND memory_records.start_ms < exclusion.span_end_ms
+        )
+      ))`
 
 interface MemoryMomentRow {
   id: number
-  record_kind: 'session' | 'meeting' | 'artifact'
+  record_kind: 'session' | 'meeting' | 'artifact' | 'supplied_fact'
   memory_type: SearchSourceType
   app_bundle_id: string | null
   app_name: string | null
@@ -853,7 +857,8 @@ function mapMemoryMomentRow(row: MemoryMomentRow): SessionSearchResult {
     : (row.primary_name ?? row.title ?? row.statement)
   const appName = row.record_kind === 'session'
     ? resolveDisplayName(row.app_bundle_id ?? '', row.app_name ?? 'Unknown app')
-    : row.record_kind === 'meeting' ? 'Meeting' : 'File'
+    : row.record_kind === 'meeting' ? 'Meeting'
+      : row.record_kind === 'supplied_fact' ? 'You told Daylens' : 'File'
   return {
     type: 'session',
     id: row.id,
