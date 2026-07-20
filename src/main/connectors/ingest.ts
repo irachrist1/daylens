@@ -319,6 +319,7 @@ export function ingestConnectorPage(
             participantEmails: (record.entity.participants ?? [])
               .map((person) => person.connectorId.split(':').slice(1).join(':'))
               .filter((identity) => identity.includes('@')),
+            linkedCalendarEventIds: record.entity.linkedCalendarEventIds,
           })
         }
       }

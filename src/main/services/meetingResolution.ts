@@ -85,6 +85,10 @@ export interface ResolvedDayMeeting {
    *  'attended' forces the matched bucket (explicit confirmation); the other
    *  three force calendar_only — the evidence is not this meeting. */
   marked: MeetingAttendanceStatus | null
+  /** True when a meeting-notes source (Granola) documents this meeting —
+   *  one of the spec's occurrence supports, so it matches even without
+   *  captured device time. Observed time still comes only from capture. */
+  noteSupported: boolean
   /** Attendee display names from the calendar source, when it carries them
    *  (the connectors do; the local probe only counts). Never leaves the
    *  evidence surfaces — the wrap sees counts, not names. */
@@ -266,6 +270,60 @@ export function scheduledParticipantsForDay(
   return out
 }
 
+// ─── Meeting-notes corroboration (Granola) ───────────────────────────────────
+// connectors.md §Google Calendar: "…Granola, transcript, or explicit
+// confirmation supports that interpretation" — a Granola note documenting a
+// scheduled event is occurrence evidence, so the event lands in the matched
+// bucket even on a day with no captured meeting-app time (notes taken on a
+// phone call, a meeting room, a walk).
+
+/** Scheduled events a Granola note on this date documents, by event key.
+ *  A note supports an event when the titles agree exactly and the note's
+ *  clock (when it has one) sits within tolerance of the scheduled start. */
+export function meetingNoteSupportedEventKeys(
+  db: Database.Database,
+  date: string,
+  scheduled: readonly ScheduledDayMeeting[],
+): Set<string> {
+  const keys = new Set<string>()
+  if (scheduled.length === 0) return keys
+  let rows: Array<{ envelope_json: string }> = []
+  try {
+    rows = db.prepare(`
+      SELECT envelope_json FROM connector_records
+      WHERE date = ? AND connector_id = 'granola' AND kind = 'meeting_record' AND tombstoned_at IS NULL
+    `).all(date) as Array<{ envelope_json: string }>
+  } catch {
+    return keys
+  }
+  const NOTE_CLOCK_TOLERANCE_MINUTES = 20
+  const notes: Array<{ minutes: number | null; title: string }> = []
+  for (const row of rows) {
+    try {
+      const envelope = JSON.parse(row.envelope_json) as {
+        notesSignal?: { title?: unknown; scheduledClock?: unknown }
+      }
+      const title = envelope.notesSignal?.title
+      if (typeof title !== 'string' || !title.trim()) continue
+      notes.push({
+        minutes: parseStartClockMinutes(envelope.notesSignal?.scheduledClock),
+        title: title.trim().toLowerCase(),
+      })
+    } catch { /* one unreadable envelope never hides the rest */ }
+  }
+  if (notes.length === 0) return keys
+  const [dayStartMs] = localDayBounds(date)
+  for (const event of scheduled) {
+    const eventMinutes = Math.round((event.startMs - dayStartMs) / 60_000)
+    const eventTitle = event.title.trim().toLowerCase()
+    const supported = notes.some((note) =>
+      note.title === eventTitle
+      && (note.minutes == null || Math.abs(note.minutes - eventMinutes) <= NOTE_CLOCK_TOLERANCE_MINUTES))
+    if (supported) keys.add(event.key)
+  }
+  return keys
+}
+
 // ─── Captured side ───────────────────────────────────────────────────────────
 
 /** Coalesce meeting-category sessions into contiguous captured spans. The
@@ -394,6 +452,9 @@ export function matchDayMeetings(
     marks?: ReadonlyMap<string, MeetingAttendanceStatus>
     /** Attendee display names by scheduled-event key (calendar source). */
     participants?: ReadonlyMap<string, string[]>
+    /** Scheduled events a meeting-notes source (Granola) documents — the
+     *  spec's notes leg of occurrence support. */
+    noteSupported?: ReadonlySet<string>
   } = {},
 ): DayMeetingReport {
   const meetings: ResolvedDayMeeting[] = []
@@ -423,14 +484,18 @@ export function matchDayMeetings(
     }
     const evidenceSupports = best != null
       && bestOverlap >= Math.min(MIN_MATCH_OVERLAP_MS, event.durationMinutes * 60_000)
-    // "Device activity, call presence, … or explicit confirmation can
-    // support 'you met'" (timeline.md §Meetings): an 'attended' mark is the
-    // explicit-confirmation leg and matches even without captured overlap.
-    if (evidenceSupports || marked === 'attended') {
+    const noteSupported = mayMatch && options.noteSupported?.has(event.key) === true
+    // "Device activity, call presence, Granola, transcript, or explicit
+    // confirmation" (connectors.md / timeline.md §Meetings): an 'attended'
+    // mark is the explicit-confirmation leg, a Granola note is the notes
+    // leg — each matches even without captured overlap, but observed time
+    // only ever comes from capture.
+    if (evidenceSupports || marked === 'attended' || noteSupported) {
       if (evidenceSupports) claimedSpans.add(best!)
       meetings.push({
         attendance: 'matched',
         marked,
+        noteSupported,
         participants: participantsOf(event),
         title: event.title,
         scheduledStartMs: event.startMs,
@@ -447,6 +512,7 @@ export function matchDayMeetings(
       meetings.push({
         attendance: 'calendar_only',
         marked,
+        noteSupported: false,
         participants: participantsOf(event),
         title: event.title,
         scheduledStartMs: event.startMs,
@@ -468,6 +534,7 @@ export function matchDayMeetings(
     meetings.push({
       attendance: 'captured_only',
       marked: null,
+      noteSupported: false,
       participants: [],
       title: span.appName || null,
       scheduledStartMs: null,
@@ -528,8 +595,10 @@ export function resolveDayMeetingReport(
   if (scheduled.length === 0 && captured.length === 0) return null
   let marks: Map<string, MeetingAttendanceStatus> | undefined
   let participants: Map<string, string[]> | undefined
+  let noteSupported: Set<string> | undefined
   try { marks = getMeetingAttendanceMarks(db, date) } catch { /* pre-migration DB */ }
   try { participants = scheduledParticipantsForDay(db, date) } catch { /* no ledger */ }
-  const report = matchDayMeetings(scheduled, captured, { marks, participants })
+  try { noteSupported = meetingNoteSupportedEventKeys(db, date, scheduled) } catch { /* no ledger */ }
+  const report = matchDayMeetings(scheduled, captured, { marks, participants, noteSupported })
   return report.meetings.length > 0 ? report : null
 }

@@ -269,7 +269,17 @@ function adoptExternalSignals(db: Database.Database): void {
 
 export type ConnectedEnvelope =
   | { kind: 'calendar_event'; sourceEventId: string; title: string; startMs?: number; endMs?: number; attendees?: Array<{ connectorId: string; displayName: string }> }
-  | { kind: 'meeting_record'; sourceEventId: string; title: string; startMs?: number; endMs?: number; participants?: Array<{ connectorId: string; displayName: string }> }
+  | {
+    kind: 'meeting_record'
+    sourceEventId: string
+    title: string
+    startMs?: number
+    endMs?: number
+    participants?: Array<{ connectorId: string; displayName: string }>
+    /** Source-native ids of the calendar event this record documents, when
+     *  the source carries the link — the strongest attachment corroboration. */
+    linkedCalendarEventIds?: string[]
+  }
   | {
     kind: 'repository_activity'
     provider: string
@@ -496,6 +506,9 @@ export interface MeetingNoteUnificationInput {
   date: string
   /** Participant addresses the note carries, for cross-source corroboration. */
   participantEmails: string[]
+  /** Source-native calendar event ids the note links to — an exact identity
+   *  match attaches directly (source identity outranks everything else). */
+  linkedCalendarEventIds?: string[]
 }
 
 const NOTE_MATCH_TOLERANCE_MS = 20 * 60 * 1000
@@ -582,6 +595,17 @@ function scheduledMeetingCandidates(db: Database.Database, date: string): Schedu
   return candidates
 }
 
+function mergeNoteIntoMeeting(db: Database.Database, note: EntityRow, survivorId: string): void {
+  const now = Date.now()
+  db.prepare(`UPDATE entities SET status = 'merged', merged_into_id = ?, updated_at = ? WHERE id = ?`)
+    .run(survivorId, now, note.id)
+  db.prepare(`UPDATE entities SET updated_at = ? WHERE id = ?`).run(now, survivorId)
+  addEntityAlias(db, survivorId, note.canonical_name, {
+    rawLabel: note.canonical_name,
+    source: 'connected',
+  })
+}
+
 export function unifyMeetingNoteIdentity(
   db: Database.Database,
   input: MeetingNoteUnificationInput,
@@ -591,6 +615,23 @@ export function unifyMeetingNoteIdentity(
   const note = resolveMergeChain(db, noteRow)
   if (note.status !== 'active') return false
   if (note.name_source === 'user') return false
+
+  // Source identity first: the note links the calendar event it documents,
+  // and the calendar connectors key their meeting entities by that same
+  // source-native id — an exact match needs no further corroboration.
+  for (const linkedId of input.linkedCalendarEventIds ?? []) {
+    if (!linkedId.trim()) continue
+    for (const identityKey of [`event:gcal:${linkedId}`, `event:outlook:${linkedId}`]) {
+      const linkedRow = db.prepare(
+        `SELECT * FROM entities WHERE entity_type = 'meeting' AND identity_key = ?`,
+      ).get(identityKey) as EntityRow | undefined
+      if (!linkedRow) continue
+      const survivor = resolveMergeChain(db, linkedRow)
+      if (survivor.status !== 'active' || survivor.id === note.id) continue
+      mergeNoteIntoMeeting(db, note, survivor.id)
+      return true
+    }
+  }
 
   const noteTitle = normalizeEntityLabel(input.title)
   const noteEmails = new Set(input.participantEmails.map((address) => address.toLowerCase()))
@@ -610,14 +651,7 @@ export function unifyMeetingNoteIdentity(
     const agreements = Number(titleAgrees) + Number(timingAgrees) + Number(addressAgrees)
     if (agreements < 2) continue
 
-    const now = Date.now()
-    db.prepare(`UPDATE entities SET status = 'merged', merged_into_id = ?, updated_at = ? WHERE id = ?`)
-      .run(survivor.id, now, note.id)
-    db.prepare(`UPDATE entities SET updated_at = ? WHERE id = ?`).run(now, survivor.id)
-    addEntityAlias(db, survivor.id, note.canonical_name, {
-      rawLabel: note.canonical_name,
-      source: 'connected',
-    })
+    mergeNoteIntoMeeting(db, note, survivor.id)
     return true
   }
   return false

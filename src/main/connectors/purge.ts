@@ -222,6 +222,17 @@ export function purgeConnectorDerivedData(
     removeConnectorRecordDerivedData(db, row, nowMs)
   }
   const recordsRemoved = deleteConnectorRecords(db, connectorId)
+  // Model traces that disclosed this connector's high-sensitivity content
+  // (a Granola transcript excerpt in a recorded context packet) are the
+  // spec's "model traces" deletion class: the packet rows carrying a
+  // transcript:<connector>: item are removed with the source.
+  const hasPackets = db.prepare(
+    `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'context_packets'`,
+  ).get() != null
+  if (hasPackets) {
+    db.prepare(`DELETE FROM context_packets WHERE packet_json LIKE ?`)
+      .run(`%"transcript:${connectorId}:%`)
+  }
   markConnectorDisconnected(db, connectorId, nowMs)
   return { recordsRemoved }
 }

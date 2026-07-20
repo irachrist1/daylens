@@ -72,6 +72,7 @@ export function normalizeGranolaNote(
       startMs: doc.startMs ?? effectiveAtMs,
       endMs: doc.endMs ?? undefined,
       participants,
+      linkedCalendarEventIds: doc.calendarEventId ? [doc.calendarEventId] : undefined,
     },
     notesSignal: {
       date: localDateOf(effectiveAtMs),
