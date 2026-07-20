@@ -580,11 +580,12 @@ function scheduledMeetingCandidates(db: Database.Database, date: string): Schedu
   ).all(`${prefix}%`) as Array<{ id: string; identity_key: string }>
   for (const row of localRows) {
     const rest = row.identity_key.slice(prefix.length)
-    const separator = rest.indexOf(':')
-    if (separator <= 0) continue
-    const clock = rest.slice(0, separator)
-    const title = rest.slice(separator + 1)
-    if (!title) continue
+    // The clock may itself contain a colon ("10:00" / "2:30pm"), so it is
+    // matched as a clock, not split at the first separator.
+    const match = /^(\d{1,2}(?::\d{2})?\s*(?:am|pm)?):(.+)$/i.exec(rest)
+    if (!match) continue
+    const clock = match[1]
+    const title = match[2]
     candidates.push({
       entityId: row.id,
       startMs: clockToMs(date, clock),
