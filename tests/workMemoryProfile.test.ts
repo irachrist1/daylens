@@ -74,12 +74,17 @@ test('editing a drafted fact makes it a correction that survives rebuild', () =>
     assert.ok(drafted, 'expected a drafted fact')
 
     updateWorkMemoryFact(db, drafted.id, 'I mostly pair-program in Cursor on Daylens.')
-    // A rebuild must NOT overwrite the user-corrected fact.
+    // A rebuild must NOT overwrite the user-corrected fact. Since DEV-185 the
+    // edit is an explicit confirmation: the corrected text becomes a supplied
+    // fact (new id in the supplied store) and the drafted topic is tombstoned.
     rebuildWorkMemory(db)
-    const after = getWorkMemoryProfile(db).facts.find((f) => f.id === drafted.id)
+    const facts = getWorkMemoryProfile(db).facts
+    const after = facts.find((f) => f.text === 'I mostly pair-program in Cursor on Daylens.')
     assert.ok(after)
-    assert.equal(after.text, 'I mostly pair-program in Cursor on Daylens.')
     assert.equal(after.origin, 'user')
+    assert.equal(after.supplied, true)
+    // The tombstoned drafted topic must not come back alongside the correction.
+    assert.ok(!facts.some((f) => f.id === drafted.id))
   } finally {
     db.close()
   }

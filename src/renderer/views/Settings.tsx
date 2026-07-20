@@ -20,11 +20,12 @@ import type {
 import { ACTIVITY_COLOR_CHOICES, ACTIVITY_COLOR_GROUPS, applyAppearanceSettings } from '@shared/activityColors'
 import { ipc } from '../lib/ipc'
 import { EntityMemorySection } from './settings/EntityMemorySection'
+import { SuppliedMemorySection } from './settings/SuppliedMemorySection'
 import { FileAccessSection } from './settings/FileAccessSection'
 import { track } from '../lib/analytics'
 import { setPendingChatSeed } from '../lib/aiSeed'
 import { showIntercom } from '../lib/intercom'
-import type { UpdaterStatusInfo } from '../../preload/index'
+import type { DaylensSemanticSearchStatus, UpdaterStatusInfo } from '../../preload/index'
 import ConnectAI from '../components/ConnectAI'
 import { formatUsdAmount } from '@shared/formatUsd'
 import { CHANGELOG, LATEST_CHANGELOG, formatChangelogDate, changelogIssueLabel, type ChangelogEntry } from '@shared/changelog'
@@ -2132,12 +2133,17 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
   // appear on hover so the view reads as plain sentences, not a control panel.
   const [hoveredFactId, setHoveredFactId] = useState<string | null>(null)
   const [memoryExpanded, setMemoryExpanded] = useState(false)
+  // DEV-185: bump to make the "Things you've told me" panel reload after a
+  // mutation that can move facts into or out of the supplied store.
+  const [suppliedReloadToken, setSuppliedReloadToken] = useState(0)
   // DEV-108: each client's scoped memory, shown under that client; plus the
   // per-client "add a fact" drafts keyed by client id.
   const [clientMemory, setClientMemory] = useState<ClientMemoryGroup[]>([])
   const [clientFactDrafts, setClientFactDrafts] = useState<Record<string, string>>({})
   // A short audit of what memory remembered/edited/forgot (memory.md §3).
   const [memoryAudit, setMemoryAudit] = useState<MemoryAuditEntry[] | null>(null)
+  // DEV-180: local semantic-search status shown in the Memory section.
+  const [semanticStatus, setSemanticStatus] = useState<DaylensSemanticSearchStatus | null>(null)
   const [mcpConfig, setMcpConfig] = useState<{ command: string; args: string[]; env: Record<string, string>; isPackaged: boolean; dbPath: string } | null>(null)
   const [mcpSnippetCopied, setMcpSnippetCopied] = useState(false)
   const [mcpAdvancedOpen, setMcpAdvancedOpen] = useState(false)
@@ -2268,6 +2274,18 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
     })
     return () => { cancelled = true }
   }, [activeSection, workMemoryProfile])
+
+  // DEV-180: local search-by-meaning status (model on disk, embedding progress).
+  useEffect(() => {
+    if (activeSection !== 'memory' || semanticStatus !== null) return
+    let cancelled = false
+    void ipc.search.semanticStatus().then((status) => {
+      if (!cancelled) setSemanticStatus(status)
+    }).catch(() => {
+      // The card simply stays hidden; search itself already degrades honestly.
+    })
+    return () => { cancelled = true }
+  }, [activeSection, semanticStatus])
 
   useEffect(() => {
     if (!selectedAiProvider || !['ai', 'billing'].includes(activeSection)) return
@@ -2408,6 +2426,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
         return next
       })
       setWorkMemoryChange('Saved — the AI will use this the next time it talks about you.')
+      setSuppliedReloadToken((token) => token + 1)
       void reloadMemoryAudit()
       void reloadClientMemory()
     } catch (error) {
@@ -2521,6 +2540,11 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
             transition: 'opacity 120ms',
           }}
         >
+          {fact.origin === 'drafted' && (
+            <button type="button" disabled={anyBusy} onClick={() => void keepDraftedFact(fact.id)} style={{ ...memoryActionStyle, color: 'var(--color-text-primary)' }}>
+              {busy ? 'Keeping…' : 'Keep'}
+            </button>
+          )}
           <button type="button" disabled={anyBusy} onClick={() => startEditFact(fact.id, fact.text)} style={memoryActionStyle}>
             Edit
           </button>
@@ -2542,6 +2566,25 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       setWorkMemoryProfile(profile.facts)
       setNewFactText('')
       setWorkMemoryChange('Added — the AI will use this the next time it talks about you.')
+      setSuppliedReloadToken((token) => token + 1)
+      void reloadMemoryAudit()
+    } catch (error) {
+      setWorkMemoryError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setWorkMemoryBusy(null)
+    }
+  }
+
+  // DEV-185 (spec migration slice 2): keeping a drafted fact is an explicit
+  // confirmation — it becomes supplied memory, searchable and packet-visible.
+  async function keepDraftedFact(id: string) {
+    setWorkMemoryBusy(id)
+    setWorkMemoryError(null)
+    try {
+      const profile = await ipc.db.confirmDraftedMemoryFact(id)
+      setWorkMemoryProfile(profile.facts)
+      setWorkMemoryChange('Kept — saved to "Things you\'ve told me".')
+      setSuppliedReloadToken((token) => token + 1)
       void reloadMemoryAudit()
     } catch (error) {
       setWorkMemoryError(error instanceof Error ? error.message : String(error))
@@ -2557,6 +2600,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       const result = await ipc.db.forgetWorkMemoryFact(id)
       setWorkMemoryProfile(result.facts)
       setWorkMemoryChange(result.changeSummary)
+      setSuppliedReloadToken((token) => token + 1)
       void reloadMemoryAudit()
       void reloadClientMemory()
     } catch (error) {
@@ -2591,6 +2635,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       const profile = await ipc.db.getWorkMemoryProfile()
       setWorkMemoryProfile(profile.facts)
       setWorkMemoryChange('Forgot everything Daylens had learned about you.')
+      setSuppliedReloadToken((token) => token + 1)
       void reloadMemoryAudit()
     } catch (error) {
       setWorkMemoryError(error instanceof Error ? error.message : String(error))
@@ -2967,7 +3012,9 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
                   { key: 'personal', label: 'Personal' },
                   { key: 'preferences', label: 'Preferences' },
                 ] as const).map((section) => {
-                  const sectionFacts = workMemoryProfile.filter((fact) => fact.category === section.key)
+                  // Supplied facts live in "Things you've told me" below; this
+                  // panel keeps the evidence-drafted profile (DEV-185).
+                  const sectionFacts = workMemoryProfile.filter((fact) => fact.category === section.key && !fact.supplied)
                   if (sectionFacts.length === 0) return null
                   return (
                     <div key={section.key} style={{ paddingTop: 16 }}>
@@ -3134,6 +3181,41 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
               </div>
             )}
             </div>
+            )}
+
+            {/* DEV-185: the confirmed supplied-memory tier — every fact here
+                was explicitly saved, with when/context, edit, and delete. */}
+            <SuppliedMemorySection reloadToken={suppliedReloadToken} />
+
+            {semanticStatus && (
+              <div style={{ marginTop: 14, padding: '14px 18px', borderRadius: 14, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-low)', display: 'grid', gap: 5 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 620, color: 'var(--color-text-primary)' }}>
+                  Search by meaning
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', lineHeight: 1.55 }}>
+                  {semanticStatus.available ? (
+                    <>
+                      Vague searches like “that pricing doc from Tuesday” match what a moment was about, not just its exact words.
+                      {' '}Powered by a small language model on this device ({semanticStatus.modelId.split('/').pop()},{' '}
+                      {semanticStatus.modelBytes > 0 ? `${Math.max(1, Math.round(semanticStatus.modelBytes / (1024 * 1024)))} MB, ` : ''}downloaded with Daylens).
+                      {' '}Everything is embedded and searched locally — nothing leaves your machine.
+                      {semanticStatus.pendingRecords > 0
+                        ? ` Indexing in the background: ${semanticStatus.pendingRecords.toLocaleString()} moment${semanticStatus.pendingRecords === 1 ? '' : 's'} to go.`
+                        : semanticStatus.embeddedRecords > 0
+                          ? ` ${semanticStatus.embeddedRecords.toLocaleString()} moment${semanticStatus.embeddedRecords === 1 ? '' : 's'} indexed.`
+                          : ''}
+                    </>
+                  ) : (
+                    <>
+                      Not available right now
+                      {semanticStatus.reason === 'model-missing'
+                        ? ' — the local model file is missing. Reinstalling Daylens restores it.'
+                        : ' on this device.'}
+                      {' '}Exact search works as always; nothing about your data changes.
+                    </>
+                  )}
+                </div>
+              </div>
             )}
           </div>
         </SectionPage>

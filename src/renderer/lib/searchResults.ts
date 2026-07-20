@@ -4,7 +4,7 @@ import type { DaylensSearchResult } from '../../preload/index'
 // (literal FTS vs natural-language), row metadata, and de-dup/rank — kept out of
 // the component so they can be unit-tested and reused.
 
-export type SearchSourceKind = 'web' | 'app' | 'block' | 'file'
+export type SearchSourceKind = 'web' | 'app' | 'block' | 'file' | 'entity'
 
 /**
  * Short / literal queries (1–3 words, no question mark) run instant local FTS.
@@ -18,12 +18,26 @@ export function isNaturalQuery(query: string): boolean {
   return trimmed.split(/\s+/).filter(Boolean).length >= 4
 }
 
+const ENTITY_TYPE_LABELS: Record<string, string> = {
+  application: 'Application',
+  page: 'Page',
+  file: 'File',
+  person: 'Person',
+  meeting: 'Meeting',
+  repository: 'Repository',
+  project: 'Project',
+  client: 'Client',
+  timeline_block: 'Timeline block',
+  ai_thread: 'AI thread',
+}
+
 export function searchResultSourceKind(result: DaylensSearchResult): SearchSourceKind {
   switch (result.type) {
     case 'session': return 'app'
     case 'block': return 'block'
     case 'browser': return 'web'
     case 'artifact': return 'file'
+    case 'entity': return 'entity'
   }
 }
 
@@ -33,15 +47,33 @@ export function searchResultTitle(result: DaylensSearchResult): string {
     case 'block': return result.label
     case 'browser': return result.pageTitle || result.url || result.domain
     case 'artifact': return result.title
+    case 'entity': return result.name
   }
 }
 
 export function searchResultSubtitle(result: DaylensSearchResult): string {
   switch (result.type) {
-    case 'session': return result.appName
+    case 'session': {
+      // Source type per the memory spec's search interface — but plain
+      // observed capture stays quiet (the product describes activity before
+      // telemetry). Connected/supplied/inferred provenance is worth a word.
+      const base = result.sourceType && result.sourceType !== 'observed'
+        ? `${result.appName} · ${result.sourceType}`
+        : result.appName
+      // DEV-180: a by-meaning hit says so — it matched what the moment was
+      // about, not the words the person typed.
+      return result.foundBy === 'meaning' ? `${base} · similar meaning` : base
+    }
     case 'block': return 'Timeline block'
     case 'browser': return result.domain
     case 'artifact': return result.filePath ? 'Generated file' : 'AI artifact'
+    case 'entity': {
+      const label = ENTITY_TYPE_LABELS[result.entityType] ?? result.entityType
+      const base = result.matchedAlias ? `${label} · also known as “${result.matchedAlias}”` : label
+      return result.sourceType && result.sourceType !== 'observed'
+        ? `${base} · ${result.sourceType}`
+        : base
+    }
   }
 }
 

@@ -3,6 +3,10 @@ import { normalizeUrlForStorage, pageKeyForUrl, resolveCanonicalApp, resolveCano
 import { deriveClientAliasTokens } from '../lib/clientAliases'
 import { ensureAIMessageFeedbackSchema, ensureAIThreadSchema } from './aiThreadSchema'
 import { runEntityAdoptionBackfill } from '../services/entities/entityAdoption'
+import {
+  migrateLegacyUserFactsToSupplied,
+  reconcileSuppliedMemoryRecords,
+} from '../services/suppliedMemory'
 import type Database from 'better-sqlite3'
 import { randomUUID } from 'node:crypto'
 
@@ -304,6 +308,56 @@ export function ensureSearchSchema(db: Database.Database): void {
     INSERT INTO timeline_blocks_fts(timeline_blocks_fts) VALUES ('rebuild');
     INSERT INTO website_visits_fts(website_visits_fts) VALUES ('rebuild');
     INSERT INTO ai_artifacts_fts(ai_artifacts_fts) VALUES ('rebuild');
+  `)
+}
+
+// Exact-retrieval FTS over memory_records.exact_text (DEV-178). Same
+// external-content pattern as the legacy FTS tables above; triggers keep the
+// index in sync with day reindexes (delete + reinsert per day) so a corrected
+// or deleted moment leaves the index in the same transaction that removes its
+// record.
+export function ensureMemorySearchSchema(db: Database.Database): void {
+  db.exec(`
+    CREATE VIEW IF NOT EXISTS memory_records_fts_content AS
+    SELECT
+      rowid AS rowid,
+      exact_text
+    FROM memory_records;
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS memory_records_fts USING fts5(
+      exact_text,
+      content='memory_records_fts_content',
+      content_rowid='rowid',
+      tokenize='unicode61'
+    );
+
+    CREATE TRIGGER IF NOT EXISTS memory_records_fts_ai
+    AFTER INSERT ON memory_records BEGIN
+      INSERT INTO memory_records_fts(rowid, exact_text)
+      VALUES (new.rowid, new.exact_text);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS memory_records_fts_bd
+    BEFORE DELETE ON memory_records BEGIN
+      INSERT INTO memory_records_fts(memory_records_fts, rowid, exact_text)
+      VALUES ('delete', old.rowid, old.exact_text);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS memory_records_fts_bu
+    BEFORE UPDATE OF exact_text ON memory_records BEGIN
+      INSERT INTO memory_records_fts(memory_records_fts, rowid, exact_text)
+      VALUES ('delete', old.rowid, old.exact_text);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS memory_records_fts_au
+    AFTER UPDATE OF exact_text ON memory_records BEGIN
+      INSERT INTO memory_records_fts(rowid, exact_text)
+      VALUES (new.rowid, new.exact_text);
+    END;
+  `)
+
+  db.exec(`
+    INSERT INTO memory_records_fts(memory_records_fts) VALUES ('rebuild');
   `)
 }
 
@@ -2539,6 +2593,193 @@ const migrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_file_disclosures_time ON file_disclosures (disclosed_at DESC);
         CREATE INDEX IF NOT EXISTS idx_file_disclosures_thread ON file_disclosures (thread_id, disclosed_at DESC);
       `)
+    },
+  },
+  {
+    version: 52,
+    description:
+      'Exact-retrieval memory records (memory-and-entities.md §Memory record, DEV-178): memory_records projected per day from corrected facts, entity tags for alias-aware retrieval, per-day index bookkeeping, and the memory_records_fts index replacing app_sessions_fts as the session search path. No backfill here — days index in the background and on demand; unindexed days keep serving through the legacy FTS path until then.',
+    up: () => {
+      const db = getDb()
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS memory_records (
+          id                TEXT PRIMARY KEY,
+          record_kind       TEXT NOT NULL CHECK(record_kind IN ('session', 'meeting', 'artifact')),
+          memory_type       TEXT NOT NULL CHECK(memory_type IN ('observed', 'connected', 'supplied', 'inferred')),
+          statement         TEXT NOT NULL,
+          exact_text        TEXT NOT NULL DEFAULT '',
+          semantic_text     TEXT,
+          date              TEXT NOT NULL,
+          start_ms          INTEGER NOT NULL,
+          end_ms            INTEGER NOT NULL,
+          app_bundle_id     TEXT,
+          app_name          TEXT,
+          title             TEXT,
+          primary_entity_id TEXT,
+          source_refs_json  TEXT NOT NULL DEFAULT '[]',
+          confidence        TEXT NOT NULL DEFAULT 'observed',
+          provenance        TEXT NOT NULL DEFAULT 'capture',
+          sensitivity       TEXT NOT NULL DEFAULT 'standard' CHECK(sensitivity IN ('standard', 'personal', 'high')),
+          embedding_model   TEXT,
+          embedding_version INTEGER,
+          created_at        INTEGER NOT NULL,
+          deleted_at        INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_memory_records_date ON memory_records (date);
+        CREATE INDEX IF NOT EXISTS idx_memory_records_kind_start ON memory_records (record_kind, start_ms DESC);
+
+        CREATE TABLE IF NOT EXISTS memory_record_entities (
+          record_id TEXT NOT NULL REFERENCES memory_records(id) ON DELETE CASCADE,
+          entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+          PRIMARY KEY (record_id, entity_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_memory_record_entities_entity ON memory_record_entities (entity_id);
+
+        CREATE TABLE IF NOT EXISTS memory_index_days (
+          date         TEXT PRIMARY KEY,
+          fingerprint  TEXT NOT NULL,
+          indexed_at   INTEGER NOT NULL,
+          record_count INTEGER NOT NULL DEFAULT 0
+        );
+
+        -- The per-day input fingerprint scans these by time range.
+        CREATE INDEX IF NOT EXISTS idx_entity_evidence_refs_span ON entity_evidence_refs (span_start_ms);
+        CREATE INDEX IF NOT EXISTS idx_artifact_mentions_time ON artifact_mentions (start_time);
+      `)
+      ensureMemorySearchSchema(db)
+    },
+  },
+  {
+    version: 53,
+    description:
+      'Semantic search by meaning (memory-and-entities.md §Local semantic search, DEV-180): memory_record_vectors bookkeeping keyed to memory record ids with ON DELETE CASCADE, so embeddings die with day re-projection and deletions/corrections propagate for free. The float vectors live in the sqlite-vec vec0 virtual table created at runtime by the semantic index (the extension may be absent here); rows without a bookkeeping entry are invisible to queries and garbage-collected in the background. No backfill — records embed in bounded background batches.',
+    up: () => {
+      const db = getDb()
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS memory_record_vectors (
+          vec_rowid     INTEGER PRIMARY KEY AUTOINCREMENT,
+          record_id     TEXT NOT NULL UNIQUE REFERENCES memory_records(id) ON DELETE CASCADE,
+          date          TEXT NOT NULL,
+          model         TEXT NOT NULL,
+          model_version INTEGER NOT NULL,
+          dims          INTEGER NOT NULL,
+          created_at    INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_memory_record_vectors_date ON memory_record_vectors (date);
+      `)
+    },
+  },
+  {
+    version: 54,
+    description:
+      'Context packets (agent-runtime-and-context.md §Context packet, DEV-181): one recorded, deterministic disclosure bundle per AI exchange — the generalization of the DEV-184 file_disclosures ledger to every content kind. The full packet (items with identity/version/source-type/reason, disclosure record, content fingerprint) is stored as JSON before the request leaves the local boundary; message_id binds it to the persisted assistant message afterwards. LOCAL-ONLY — no sync-allowlist keys.',
+    up: () => {
+      const db = getDb()
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS context_packets (
+          id                  TEXT PRIMARY KEY,
+          purpose             TEXT NOT NULL CHECK(purpose IN ('answer', 'interpret')),
+          exchange_kind       TEXT NOT NULL CHECK(exchange_kind IN ('chat', 'day_analysis')),
+          thread_id           INTEGER,
+          message_id          INTEGER,
+          scope_key           TEXT,
+          question            TEXT NOT NULL,
+          destination         TEXT NOT NULL,
+          left_device         INTEGER NOT NULL DEFAULT 1,
+          policy_version      INTEGER NOT NULL,
+          item_count          INTEGER NOT NULL,
+          content_fingerprint TEXT NOT NULL,
+          packet_json         TEXT NOT NULL,
+          created_at          INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_context_packets_message ON context_packets (message_id);
+        CREATE INDEX IF NOT EXISTS idx_context_packets_thread ON context_packets (thread_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_context_packets_scope ON context_packets (exchange_kind, scope_key, created_at DESC);
+      `)
+    },
+  },
+  {
+    version: 55,
+    description:
+      'Supplied memory (memory-and-entities.md §Conversational memory, §Migration slices 1–2, DEV-185): supplied_memory_facts as the canonical store for explicitly confirmed facts (mirrored into memory_records for retrieval), memory_proposal_rejections so declined proposals are not re-suggested, record_kind widened to admit the supplied_fact mirror rows, and migration slice 1 — user-created or hand-edited work_memory_facts/user_memory_facts rows become supplied memory with their content and creation times; evidence-drafted rows stay behind as inferred proposals (slice 2) and are never silently promoted. LOCAL-ONLY tables — no sync-allowlist keys.',
+    up: () => {
+      const db = getDb()
+
+      // Widen the record_kind CHECK for the supplied_fact mirror rows. SQLite
+      // cannot alter a CHECK in place; memory_records holds only projection
+      // rows at this point (supplied rows do not exist before this migration),
+      // so it is wiped and rebuilt — days re-project lazily through the
+      // fingerprint check and the background backfill, and embeddings rebuild
+      // in bounded background batches. Children are cleared first because with
+      // foreign_keys ON, DROP TABLE raises an FK violation while child rows
+      // exist. Fresh installs already have the widened shape from SCHEMA_SQL.
+      const memoryRecordsSql = getTableSql('memory_records') ?? ''
+      if (memoryRecordsSql && !memoryRecordsSql.includes('supplied_fact')) {
+        db.exec(`
+          DELETE FROM memory_record_vectors;
+          DELETE FROM memory_record_entities;
+          DELETE FROM memory_records;
+          DELETE FROM memory_index_days;
+          DROP TABLE memory_records;
+          CREATE TABLE memory_records (
+            id                TEXT PRIMARY KEY,
+            record_kind       TEXT NOT NULL CHECK(record_kind IN ('session', 'meeting', 'artifact', 'supplied_fact')),
+            memory_type       TEXT NOT NULL CHECK(memory_type IN ('observed', 'connected', 'supplied', 'inferred')),
+            statement         TEXT NOT NULL,
+            exact_text        TEXT NOT NULL DEFAULT '',
+            semantic_text     TEXT,
+            date              TEXT NOT NULL,
+            start_ms          INTEGER NOT NULL,
+            end_ms            INTEGER NOT NULL,
+            app_bundle_id     TEXT,
+            app_name          TEXT,
+            title             TEXT,
+            primary_entity_id TEXT,
+            source_refs_json  TEXT NOT NULL DEFAULT '[]',
+            confidence        TEXT NOT NULL DEFAULT 'observed',
+            provenance        TEXT NOT NULL DEFAULT 'capture',
+            sensitivity       TEXT NOT NULL DEFAULT 'standard' CHECK(sensitivity IN ('standard', 'personal', 'high')),
+            embedding_model   TEXT,
+            embedding_version INTEGER,
+            created_at        INTEGER NOT NULL,
+            deleted_at        INTEGER
+          );
+          CREATE INDEX IF NOT EXISTS idx_memory_records_date ON memory_records (date);
+          CREATE INDEX IF NOT EXISTS idx_memory_records_kind_start ON memory_records (record_kind, start_ms DESC);
+        `)
+        // Dropping the table dropped its FTS triggers; recreate them and
+        // rebuild the index over the (now empty) content view.
+        ensureMemorySearchSchema(db)
+      }
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS supplied_memory_facts (
+          id           TEXT PRIMARY KEY,
+          statement    TEXT NOT NULL,
+          scope        TEXT NOT NULL DEFAULT 'general',
+          source       TEXT NOT NULL DEFAULT 'chat' CHECK(source IN ('chat', 'hand', 'migrated')),
+          context      TEXT,
+          thread_id    INTEGER,
+          sensitivity  TEXT NOT NULL DEFAULT 'standard' CHECK(sensitivity IN ('standard', 'personal', 'high')),
+          confirmed_at INTEGER NOT NULL,
+          created_at   INTEGER NOT NULL,
+          updated_at   INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_supplied_memory_facts_scope ON supplied_memory_facts (scope, confirmed_at DESC);
+
+        CREATE TABLE IF NOT EXISTS memory_proposal_rejections (
+          id            TEXT PRIMARY KEY,
+          statement     TEXT NOT NULL,
+          statement_key TEXT NOT NULL,
+          sensitivity   TEXT NOT NULL DEFAULT 'standard' CHECK(sensitivity IN ('standard', 'personal', 'high')),
+          thread_id     INTEGER,
+          rejected_at   INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_memory_proposal_rejections_key ON memory_proposal_rejections (statement_key);
+      `)
+
+      migrateLegacyUserFactsToSupplied(db)
+      reconcileSuppliedMemoryRecords(db)
     },
   },
 ]

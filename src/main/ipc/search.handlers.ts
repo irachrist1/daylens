@@ -1,7 +1,6 @@
 import { ipcMain } from 'electron'
 import { getDb } from '../services/database'
 import {
-  searchAll,
   searchArtifacts,
   searchBlocks,
   searchBrowser,
@@ -9,6 +8,10 @@ import {
   type SearchOptions,
 } from '../db/queries'
 import { searchNatural } from '../services/naturalSearch'
+import { searchExact } from '../services/exactSearch'
+import { getSemanticSearchStatus, searchByMeaning } from '../services/semanticIndex'
+import { ensureDayMemoryIndexed } from '../services/memoryIndex'
+import { localDateString } from '../lib/localDate'
 
 const SEARCH_CHANNELS = {
   ALL: 'search:all',
@@ -17,6 +20,8 @@ const SEARCH_CHANNELS = {
   BROWSER: 'search:browser',
   ARTIFACTS: 'search:artifacts',
   NATURAL: 'search:natural',
+  SEMANTIC: 'search:semantic',
+  SEMANTIC_STATUS: 'search:semanticStatus',
 } as const
 
 function normalizePayload(payload: { query?: string; opts?: SearchOptions } | string): {
@@ -32,14 +37,25 @@ function normalizePayload(payload: { query?: string; opts?: SearchOptions } | st
   }
 }
 
+function freshenLiveDayIndex(): void {
+  try {
+    ensureDayMemoryIndexed(getDb(), localDateString())
+  } catch (error) {
+    console.error('[search] live-day index refresh failed', error)
+  }
+}
+
 export function registerSearchHandlers(): void {
+  // DEV-178: the palette's shared query is the exact retrieval path —
+  // entities (alias-aware) + corrected memory records + FTS, one ranked list.
   ipcMain.handle(SEARCH_CHANNELS.ALL, (_event, payload: { query?: string; opts?: SearchOptions } | string) => {
     const { query, opts } = normalizePayload(payload)
-    return searchAll(getDb(), query, opts)
+    return searchExact(getDb(), query, opts)
   })
 
   ipcMain.handle(SEARCH_CHANNELS.SESSIONS, (_event, payload: { query?: string; opts?: SearchOptions } | string) => {
     const { query, opts } = normalizePayload(payload)
+    freshenLiveDayIndex()
     return searchSessions(getDb(), query, opts)
   })
 
@@ -63,4 +79,15 @@ export function registerSearchHandlers(): void {
     const { query, opts } = normalizePayload(payload)
     return searchNatural(query, opts)
   })
+
+  // DEV-180: by-meaning retrieval — the query embeds locally and k-NNs over
+  // the embedded memory records. Purely additive next to the exact path: []
+  // whenever the local model, extension, or index is unavailable.
+  ipcMain.handle(SEARCH_CHANNELS.SEMANTIC, (_event, payload: { query?: string; opts?: SearchOptions } | string) => {
+    const { query, opts } = normalizePayload(payload)
+    return searchByMeaning(getDb(), query, opts)
+  })
+
+  // Settings: local model + index status ("what runs on this device").
+  ipcMain.handle(SEARCH_CHANNELS.SEMANTIC_STATUS, () => getSemanticSearchStatus(getDb()))
 }

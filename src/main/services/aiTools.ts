@@ -8,11 +8,16 @@ import {
   searchSessions as dbSearchSessions,
   searchBrowser as dbSearchBrowser,
   searchArtifacts as dbSearchArtifacts,
+  searchEntityMoments,
   getWebsiteVisitsForRange,
   listDistinctVisitDomains,
   listRecentSessionWindowTitles,
   listSessionActivityDays,
 } from '../db/queries'
+import { ensureDayMemoryIndexed } from './memoryIndex'
+import { searchByMeaning } from './semanticIndex'
+import { resolveQueryEntityMatches } from './exactSearch'
+import { mergeGroupIds } from './entities/entityRepository'
 import { blockActiveSeconds } from '@shared/blockDuration'
 // AI facts read the corrected activity truth (invariant 7): a Timeline block
 // the user deleted is subtracted from every total the AI quotes, so the AI
@@ -99,6 +104,11 @@ export interface SessionSearchHit {
   /** The page URL for kind:'page' hits — what link recall (ai.md §8.1) returns
    *  to the user. Null for app-session hits. */
   url?: string | null
+  /** DEV-180: set when the hit came from local semantic search, not an exact
+   *  word match. The model must present these as "similar meaning" leads. */
+  foundBy?: 'meaning'
+  /** Cosine similarity (0..1) for foundBy === 'meaning' hits. */
+  similarity?: number
 }
 
 export interface SearchSessionsResult {
@@ -119,6 +129,10 @@ export interface SearchSessionsResult {
   // exactly how to phrase the answer and which next tool to call when the
   // current search is empty.
   _instruction?: string
+  // DEV-180: by-meaning hits from local semantic search, always separate from
+  // (and presented after) the exact hits. Absent when the local model is
+  // unavailable — exact search behaves exactly as before.
+  semanticHits?: SessionSearchHit[]
 }
 
 interface AppUsageStat {
@@ -534,6 +548,11 @@ function tokenizeForBroadenedSearch(query: string): string[] {
 export function execSearchSessions(params: SearchSessionsParams, db: Database.Database): SearchSessionsResult {
   const limit = params.limit ?? 25
   const searchOpts = { startDate: params.startDate, endDate: params.endDate, limit }
+  // DEV-178: AI search reads the same exact-retrieval index as the palette.
+  // Keep the live day's projection fresh so "just now" moments are findable.
+  try {
+    ensureDayMemoryIndexed(db, localDateString())
+  } catch { /* search stays available on the already-indexed days */ }
   const ignoredFrom = params.startDate ? localDayBounds(params.startDate)[0] : 0
   const ignoredTo = params.endDate ? localDayBounds(params.endDate)[1] : Date.now()
   const ignoredSpans = getIgnoredBlockSpansForRange(db, ignoredFrom, ignoredTo)
@@ -608,12 +627,34 @@ export function execSearchSessions(params: SearchSessionsParams, db: Database.Da
     return visible.slice(0, wanted)
   }
 
-  // B2: search both app_sessions_fts and website_visits_fts so the AI can
-  // cite specific page titles (e.g. Coursera lesson names), not just app names.
+  // DEV-178: alias-aware entity retrieval joins the strict phase. The query
+  // resolves through durable-entity canonical names AND aliases ("acme" →
+  // Acme Corp, merge-aware), and every corrected moment tagged with those
+  // entities counts as a strict hit — meetings, attributed client/project
+  // stretches, and renamed things that no window title ever spelled out.
+  const entityMatches = resolveQueryEntityMatches(db, params.query)
+  const entityGroupIds = [...new Set(entityMatches.flatMap((match) => mergeGroupIds(db, match.entity.id)))]
+  const entityHits = searchEntityMoments(db, entityGroupIds, searchOpts)
+    .map(mapSessionHit)
+    .filter(isVisibleHit)
+
+  // B2: search both the exact memory index and website_visits_fts so the AI
+  // can cite specific page titles (e.g. Coursera lesson names), not just app
+  // names.
+  const seenStrict = new Set<string>()
   const strictHits = [
     ...collectVisibleSessions(params.query, limit),
     ...collectVisiblePages(params.query, limit),
-  ].sort((a, b) => b.startTime - a.startTime).slice(0, limit)
+    ...entityHits,
+  ]
+    .sort((a, b) => b.startTime - a.startTime)
+    .filter((hit) => {
+      const key = `${hit.kind}:${hit.id}:${hit.startTime}`
+      if (seenStrict.has(key)) return false
+      seenStrict.add(key)
+      return true
+    })
+    .slice(0, limit)
 
   if (strictHits.length > 0) {
     return {
@@ -670,6 +711,78 @@ export function execSearchSessions(params: SearchSessionsParams, db: Database.Da
     broadenedTokens: tokens,
     _instruction: instruction,
   } as SearchSessionsResult & { _instruction?: string }
+}
+
+/** Same span-overlap visibility rule execSearchSessions applies to its FTS
+ *  and entity hits: a hit is visible only where it pokes out of every
+ *  ignored-block span. */
+function hitVisibleOutsideSpans(
+  hit: { startTime: number; endTime: number },
+  spans: readonly { startMs: number; endMs: number }[],
+): boolean {
+  let cursor = hit.startTime
+  for (const span of spans) {
+    if (span.endMs <= cursor) continue
+    if (span.startMs >= hit.endTime) break
+    if (span.startMs > cursor) return true
+    cursor = Math.max(cursor, span.endMs)
+    if (cursor >= hit.endTime) return false
+  }
+  return cursor < hit.endTime
+}
+
+const SEMANTIC_HIT_LIMIT = 8
+
+/**
+ * The agent's search with the DEV-180 by-meaning path added. Exact retrieval
+ * runs first and is untouched; local semantic hits arrive as a separate
+ * `semanticHits` array with the same guardrails (corrected read model,
+ * ignored-span visibility, date bounds), deduped against the exact hits, and
+ * explicitly framed as similarity leads — never as exact evidence. When the
+ * local model is unavailable the result is byte-for-byte the exact result.
+ */
+export async function execSearchSessionsWithMeaning(
+  params: SearchSessionsParams,
+  db: Database.Database,
+): Promise<SearchSessionsResult> {
+  const base = execSearchSessions(params, db)
+  let semantic: SessionSearchHit[] = []
+  try {
+    const moments = await searchByMeaning(db, params.query, {
+      startDate: params.startDate,
+      endDate: params.endDate,
+      limit: SEMANTIC_HIT_LIMIT,
+    })
+    const ignoredFrom = params.startDate ? localDayBounds(params.startDate)[0] : 0
+    const ignoredTo = params.endDate ? localDayBounds(params.endDate)[1] : Date.now()
+    const ignoredSpans = getIgnoredBlockSpansForRange(db, ignoredFrom, ignoredTo)
+    const seen = new Set(base.hits.map((hit) => `${hit.kind}:${hit.id}:${hit.startTime}`))
+    semantic = moments
+      .filter((moment) => hitVisibleOutsideSpans(moment, ignoredSpans))
+      .filter((moment) => !seen.has(`session:${moment.id}:${moment.startTime}`))
+      .map((moment) => ({
+        id: moment.id,
+        kind: 'session' as const,
+        appName: moment.appName,
+        windowTitle: moment.windowTitle,
+        startTime: moment.startTime,
+        endTime: moment.endTime,
+        durationSeconds: Math.max(0, Math.round((moment.endTime - moment.startTime) / 1000)),
+        date: moment.date,
+        excerpt: moment.excerpt,
+        url: null,
+        foundBy: 'meaning' as const,
+        similarity: moment.similarity,
+      }))
+  } catch (error) {
+    console.error('[aiTools] semantic search failed; exact results unaffected', error)
+  }
+  if (semantic.length === 0) return base
+  return {
+    ...base,
+    semanticHits: semantic,
+    _instruction: `${base._instruction ?? ''} semanticHits were found by MEANING using the local on-device embedding index, not by exact words — present them as "similar meaning" leads with their dates/titles, never as exact matches for "${params.query}".`.trim(),
+  }
 }
 
 function fmtHHMM(ms: number): string {
