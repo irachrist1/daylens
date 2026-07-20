@@ -2289,6 +2289,7 @@ export const IPC = {
     GET_STARTER_SUGGESTIONS: 'ai:get-starter-suggestions',
     COMMIT_ACTION: 'ai:commit-action',
     UNDO_ACTION: 'ai:undo-action',
+    DISMISS_ACTION: 'ai:dismiss-action',
     SET_MESSAGE_FEEDBACK: 'ai:set-message-feedback',
     GENERATE_DAY_SUMMARY: 'ai:generate-day-summary',
     GET_WEEK_REVIEW: 'ai:get-week-review',

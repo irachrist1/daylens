@@ -24,7 +24,7 @@ import { getWrapProviderState } from '../services/aiOrchestration'
 import { getWrapPreflight } from '../services/wrapPreflight'
 import { markRecapGenerated } from '../services/dailySummaryNotifier'
 import { getTimelineDayPayload, getBlockDetailPayload } from '../services/workBlocks'
-import { commitAction, undoAction } from '../ai/actions'
+import { commitAction, recordMemoryProposalDismissal, undoAction } from '../ai/actions'
 import {
   getContextPacketById,
   getContextPacketForMessage,
@@ -152,6 +152,15 @@ export function registerAIHandlers(): void {
       }
     }
     return result
+  })
+
+  // The user cancelled a proposal card. For memory previews that is a
+  // decision, not silence: the proposed facts are recorded as rejections so
+  // the same fact is not proposed again without new evidence (DEV-185).
+  ipcMain.handle(IPC.AI.DISMISS_ACTION, (_e, action: AIActionWidget): void => {
+    if (action.kind === 'memory_write') {
+      recordMemoryProposalDismissal(getDb(), action)
+    }
   })
 
   ipcMain.handle(IPC.AI.UNDO_ACTION, (_e, undo: AIActionUndo): AIActionCommitResult => {

@@ -378,6 +378,47 @@ test('a journaled supplied-fact deletion replays against a restored database (ba
   }
 })
 
+test('confirmed memory improves the specific fixture answer it was saved for', async () => {
+  const { chatMemoryPromptBlock } = await import('../src/main/services/workMemoryProfile.ts')
+  const db = createProductionTestDatabase()
+  try {
+    const question = 'Who leads the pricing project?'
+    // BEFORE the confirmation: the agent has nothing to answer from — no
+    // memory context, no search hit, nothing in the packet.
+    assert.equal(chatMemoryPromptBlock(db, question), '')
+    assert.equal(sessionSearchHits(db, 'pricing project').length, 0)
+    const before = await buildContextPacket(db, {
+      purpose: 'answer',
+      question,
+      destination: 'test:model',
+      now: new Date('2026-07-10T12:00:00'),
+    })
+    assert.ok(!before.items.some((item) => item.statement.includes('pricing project')))
+
+    const fact = confirmSuppliedFact(db, { statement: 'You lead the pricing project.', source: 'chat' })
+    assert.ok(fact)
+
+    // AFTER: the exact fact the user confirmed reaches every path the agent
+    // answers this question from — the memory prompt block, exact search,
+    // and the context packet, labeled `supplied`.
+    assert.match(chatMemoryPromptBlock(db, question), /You lead the pricing project\./)
+    const hits = sessionSearchHits(db, 'pricing project')
+    assert.equal(hits.length, 1)
+    assert.equal(hits[0].sourceType, 'supplied')
+    const after = await buildContextPacket(db, {
+      purpose: 'answer',
+      question,
+      destination: 'test:model',
+      now: new Date('2026-07-10T12:00:00'),
+    })
+    const packetFact = after.items.find((item) => item.statement === 'You lead the pricing project.')
+    assert.ok(packetFact, 'the confirmed fact must reach the packet for its fixture question')
+    assert.equal(packetFact.sourceType, 'supplied')
+  } finally {
+    db.close()
+  }
+})
+
 test('the sensitive-fact guard refuses secrets, credentials, health, and financial details', () => {
   assert.equal(isSensitiveFactStatement('Your GitHub password is hunter2.'), true)
   assert.equal(isSensitiveFactStatement('Your API key lives in 1Password.'), true)

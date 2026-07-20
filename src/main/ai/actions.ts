@@ -27,6 +27,11 @@ import {
   type MemoryWriteOp,
 } from '../services/workMemoryProfile'
 import { applyBlockLabelCorrection, applyBlockMerge, clearBlockLabelCorrection } from '../services/blockCorrections'
+import {
+  findMemoryProposalRejection,
+  isSensitiveFactStatement,
+  recordMemoryProposalRejection,
+} from '../services/suppliedMemory'
 
 function newProposalId(): string {
   return `act_${crypto.randomBytes(6).toString('hex')}`
@@ -275,6 +280,32 @@ export function buildMergeBlocksProposal(
 }
 
 // ── Memory (preview built from extracted ops; extraction lives in the caller) ─
+
+/** The confirmation-gate filter for extracted memory ops (DEV-185, spec
+ *  §Conversational memory). Drops an add/update whose text is a secret,
+ *  credential, health, or financial detail (never proposed automatically) or
+ *  matches a stored rejection (a rejected proposal is not re-suggested in the
+ *  next similar conversation without new evidence). Deletes and corrections of
+ *  existing facts pass through — the user is steering, not being re-asked. */
+export function filterMemoryOpsForProposal(db: Database.Database, ops: MemoryWriteOp[]): MemoryWriteOp[] {
+  return ops.filter((op) => {
+    if (op.action === 'delete') return true
+    const text = op.text ?? ''
+    if (isSensitiveFactStatement(text)) return false
+    if (op.action === 'add' && findMemoryProposalRejection(db, text)) return false
+    return true
+  })
+}
+
+/** The user cancelled a memory preview card — record each proposed add/update
+ *  text as a rejection so the same fact is not proposed again without new
+ *  evidence. Deletes are not rejections of a fact, so they record nothing. */
+export function recordMemoryProposalDismissal(db: Database.Database, action: AIMemoryProposal): void {
+  for (const op of action.ops) {
+    if (op.op === 'delete' || !op.text) continue
+    recordMemoryProposalRejection(db, { statement: op.text })
+  }
+}
 
 /** Turn extracted memory ops into a preview proposal. Returns null when there's
  *  nothing durable to change. `scope` targets a client's memory (memory.md

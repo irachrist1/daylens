@@ -84,7 +84,7 @@ export interface MessageListProps {
   onMessageAction: (messageId: string | number, action: AIMessageAction, options?: { reviewNote?: string }) => void
   onCommitActionWidget: (widget: AIActionWidget) => void
   onUndoActionWidget: (proposalId: string, undo: AIActionUndo) => void
-  onDismissActionWidget: (proposalId: string) => void
+  onDismissActionWidget: (widget: AIActionWidget) => void
   onFollowUpClick: (message: ThreadMessage, suggestionText: string, source: string) => void
   scrollToBottom: () => void
   // Opening a conversation loads only the newest page of its history; when

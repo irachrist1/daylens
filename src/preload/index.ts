@@ -306,6 +306,8 @@ const api = {
       ipcRenderer.invoke(IPC.AI.COMMIT_ACTION, action),
     undoAction: (undo: AIActionUndo): Promise<AIActionCommitResult> =>
       ipcRenderer.invoke(IPC.AI.UNDO_ACTION, undo),
+    dismissAction: (action: AIActionWidget): Promise<void> =>
+      ipcRenderer.invoke(IPC.AI.DISMISS_ACTION, action),
     generateDaySummary: (date: string): Promise<AIDaySummaryResult> =>
       ipcRenderer.invoke(IPC.AI.GENERATE_DAY_SUMMARY, date),
     getWeekReview: (weekStart: string, force?: boolean): Promise<AISurfaceSummary | null> =>
