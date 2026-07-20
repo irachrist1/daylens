@@ -5,6 +5,13 @@ import os from 'node:os'
 import path from 'node:path'
 import { chooseUserDataPath } from '../../src/main/services/userData'
 import {
+  evaluateLabelVoice,
+  labelVoiceReportLines,
+  summarizeLabelVoice,
+  type LabelVoiceContext,
+  type LabelVoiceSummary,
+} from '../../src/shared/labelVoice'
+import {
   normalizeDayFixture,
   type PrivateDatabaseCopyDayFixture,
 } from '../../tests/support/dayFixture'
@@ -77,6 +84,26 @@ export interface ObservedMeeting {
   minutes: number
 }
 
+export interface LabelVoiceBlockEntry {
+  label: string
+  range: string
+  context: LabelVoiceContext
+}
+
+export interface LabelVoiceFailure {
+  range: string
+  label: string
+  rule: string
+  tier: string
+  detail: string
+}
+
+export interface LabelVoiceReview {
+  rubric: string
+  summary: LabelVoiceSummary
+  failures: LabelVoiceFailure[]
+}
+
 export interface RealDayObservation {
   schemaVersion: 1
   fixtureId: string
@@ -84,6 +111,7 @@ export interface RealDayObservation {
   date: string
   sourceSha256: string
   capture: Record<string, number | string | null>
+  labelVoice: LabelVoiceReview
   timeline: {
     productionProjection: { version: string; totalSeconds: number; episodes: ObservedEpisode[] }
     directPayload: { version: string; totalSeconds: number; episodes: ObservedEpisode[] }
@@ -460,6 +488,53 @@ export function comparisonFailureLines(metrics: ComparisonMetrics): string[] {
   return (Object.entries(metrics) as Array<[keyof ComparisonMetrics, number]>)
     .filter(([, count]) => count !== 0)
     .map(([key, count]) => `${count} ${labels[key]}`)
+}
+
+// The recorded label-voice rubric (label-voice.md), applied to every produced
+// block label of the replayed day. Failures are named per rule with the
+// offending fragment so label quality is reviewed explicitly instead of
+// surfacing only as reviewer dissatisfaction.
+export function buildLabelVoiceReview(entries: LabelVoiceBlockEntry[]): LabelVoiceReview {
+  const evaluated = entries.map((entry) => ({
+    label: entry.label,
+    findings: evaluateLabelVoice(entry.label, entry.context),
+  }))
+  const failures: LabelVoiceFailure[] = []
+  entries.forEach((entry, index) => {
+    for (const finding of evaluated[index].findings) {
+      if (finding.passed) continue
+      failures.push({
+        range: entry.range,
+        label: entry.label,
+        rule: finding.rule,
+        tier: finding.tier,
+        detail: finding.detail ?? '',
+      })
+    }
+  })
+  return {
+    rubric: 'docs/specs/label-voice.md',
+    summary: summarizeLabelVoice(evaluated),
+    failures,
+  }
+}
+
+export function labelVoiceMarkdownLines(review: LabelVoiceReview): string[] {
+  const lines = [
+    `Rubric: ${review.rubric}`,
+    '',
+    ...labelVoiceReportLines(review.summary),
+    '',
+  ]
+  if (review.failures.length === 0) {
+    lines.push('Every block label meets the recorded voice.')
+  } else {
+    lines.push('Failing labels:')
+    for (const failure of review.failures) {
+      lines.push(`- ${failure.range} "${failure.label}" — ${failure.rule} (${failure.tier}): ${failure.detail}`)
+    }
+  }
+  return lines
 }
 
 export function acceptReviewedCandidate(
