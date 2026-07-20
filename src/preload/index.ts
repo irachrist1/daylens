@@ -505,6 +505,8 @@ const api = {
     revokeGrant: (grantId: string) => ipcRenderer.invoke(IPC.FILE_ACCESS.REVOKE_GRANT, grantId),
     listDisclosures: (payload: { limit?: number } = {}) =>
       ipcRenderer.invoke(IPC.FILE_ACCESS.LIST_DISCLOSURES, payload),
+    pickPath: (payload: { scopeKind?: 'file' | 'folder' } = {}): Promise<{ path: string; scopeKind: 'file' | 'folder' } | null> =>
+      ipcRenderer.invoke(IPC.FILE_ACCESS.PICK_PATH, payload),
   },
   contextPackets: {
     // DEV-181: the recorded, deterministic bundle behind an AI exchange.

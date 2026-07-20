@@ -2927,7 +2927,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       content = (
         <SectionPage title="Memory" description="What Daylens knows about you, in plain language. Your edits always win — the AI uses them everywhere it talks about you.">
           <div>
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 4 }}>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 16 }}>
               <button
                 type="button"
                 onClick={() => {
@@ -3337,7 +3337,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       content = (
         <SectionPage
           title="Entities"
-          description="The durable things your days are about — people, meetings, repositories, projects, clients, files, pages, apps. Rename or merge them here; your corrections outrank anything Daylens infers later and survive every rebuild."
+          description="Fix names Daylens got wrong — merge duplicates like Canva appearing twice, rename things, add aliases. Your corrections stick."
           maxWidth={760}
         >
           <EntityMemorySection />
@@ -3348,7 +3348,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       content = (
         <SectionPage
           title="Agent file access"
-          description="What the AI may do with your files, in three separate states. Contents are never read without a grant, every read is logged before it happens, and revoking a grant deletes what was derived from it."
+          description="Control which files the AI may read. Observed activity is always on; contents need an explicit grant."
           maxWidth={760}
         >
           <FileAccessSection />

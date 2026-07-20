@@ -2408,6 +2408,7 @@ export const IPC = {
     ADD_GRANT: 'file-access:add-grant',
     REVOKE_GRANT: 'file-access:revoke-grant',
     LIST_DISCLOSURES: 'file-access:list-disclosures',
+    PICK_PATH: 'file-access:pick-path',
   },
   CONTEXT_PACKETS: {
     GET: 'context-packets:get',

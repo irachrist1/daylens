@@ -1,8 +1,6 @@
-// Settings → Memory → Entities (DEV-177): browse the durable entity store by
-// type, rename inline, merge two entities with a preview and undo, manage
-// alias chips, review suggested merges (never auto-applied), and open an
-// entity's linked evidence. Every mutation flows through the entity correction
-// commands, so it lands in the same undo ledger the Timeline uses.
+// Settings → Entities: fix identity (rename / merge duplicates). Default view
+// is “Needs attention” — same-name pairs like Canva/Canva — not a dump of
+// every observed thing. Browse is opt-in and capped so the page stays fast.
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ipc } from '../../lib/ipc'
 
@@ -47,35 +45,31 @@ interface MergePreview {
   surfaces: string[]
 }
 
+type ViewMode = 'attention' | 'browse'
+
 const TYPE_TABS: Array<{ id: EntityType | null; label: string }> = [
-  { id: null, label: 'All' },
-  { id: 'person', label: 'People' },
-  { id: 'meeting', label: 'Meetings' },
-  { id: 'repository', label: 'Repositories' },
-  { id: 'client', label: 'Clients' },
-  { id: 'project', label: 'Projects' },
-  { id: 'file', label: 'Files' },
-  { id: 'page', label: 'Pages' },
   { id: 'application', label: 'Apps' },
+  { id: 'project', label: 'Projects' },
+  { id: 'client', label: 'Clients' },
+  { id: 'person', label: 'People' },
+  { id: 'repository', label: 'Repos' },
+  { id: 'page', label: 'Pages' },
+  { id: 'file', label: 'Files' },
+  { id: 'meeting', label: 'Meetings' },
+  { id: null, label: 'All' },
 ]
 
-const chipStyle: React.CSSProperties = {
-  fontSize: 11,
-  padding: '2px 8px',
-  borderRadius: 999,
-  border: '1px solid var(--color-border)',
-  color: 'var(--color-text-tertiary)',
-  background: 'var(--color-bg-secondary)',
-}
+const LIST_LIMIT = 40
 
 const buttonStyle: React.CSSProperties = {
-  fontSize: 12,
-  padding: '5px 11px',
-  borderRadius: 8,
-  border: '1px solid var(--color-border)',
-  background: 'var(--color-bg-secondary)',
+  fontSize: 12.5,
+  padding: '6px 12px',
+  borderRadius: 9,
+  border: '1px solid var(--color-border-ghost)',
+  background: 'var(--color-surface-low)',
   color: 'var(--color-text-primary)',
   cursor: 'pointer',
+  fontFamily: 'inherit',
 }
 
 const primaryButtonStyle: React.CSSProperties = {
@@ -83,18 +77,22 @@ const primaryButtonStyle: React.CSSProperties = {
   background: 'var(--gradient-primary)',
   color: 'var(--color-primary-contrast)',
   border: 'none',
+  fontWeight: 620,
 }
 
-function formatDate(ms: number | null): string {
-  if (!ms) return '—'
-  return new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+const quietButtonStyle: React.CSSProperties = {
+  ...buttonStyle,
+  background: 'transparent',
 }
 
 export function EntityMemorySection() {
-  const [typeFilter, setTypeFilter] = useState<EntityType | null>(null)
+  const [view, setView] = useState<ViewMode>('attention')
+  const [typeFilter, setTypeFilter] = useState<EntityType | null>('application')
   const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [entities, setEntities] = useState<EntitySummary[]>([])
   const [loaded, setLoaded] = useState(false)
+  const [suggestionsLoaded, setSuggestionsLoaded] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [selected, setSelected] = useState<string[]>([])
   const [renamingId, setRenamingId] = useState<string | null>(null)
@@ -107,10 +105,34 @@ export function EntityMemorySection() {
   const [newProjectName, setNewProjectName] = useState('')
   const [addingProject, setAddingProject] = useState(false)
   const [aliasDraft, setAliasDraft] = useState('')
+  const [reviewingKey, setReviewingKey] = useState<string | null>(null)
 
-  const reload = useCallback(async () => {
+  const [bulkBusy, setBulkBusy] = useState(false)
+
+  useEffect(() => {
+    const handle = window.setTimeout(() => setDebouncedSearch(search), 200)
+    return () => window.clearTimeout(handle)
+  }, [search])
+
+  const reloadSuggestions = useCallback(async () => {
     try {
-      const rows = await ipc.entities.list({ type: typeFilter, search: search || null })
+      const rows = await ipc.entities.suggestedMerges()
+      setSuggestions(rows as SuggestedMerge[])
+      setError(null)
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : String(loadError))
+    } finally {
+      setSuggestionsLoaded(true)
+    }
+  }, [])
+
+  const reloadBrowse = useCallback(async () => {
+    try {
+      const rows = await ipc.entities.list({
+        type: typeFilter,
+        search: debouncedSearch || null,
+        limit: LIST_LIMIT,
+      })
       setEntities(rows as EntitySummary[])
       setError(null)
     } catch (loadError) {
@@ -118,12 +140,15 @@ export function EntityMemorySection() {
     } finally {
       setLoaded(true)
     }
-  }, [typeFilter, search])
+  }, [typeFilter, debouncedSearch])
 
-  useEffect(() => { void reload() }, [reload])
   useEffect(() => {
-    void ipc.entities.suggestedMerges().then((rows: SuggestedMerge[]) => setSuggestions(rows)).catch(() => {})
-  }, [])
+    if (view === 'attention') void reloadSuggestions()
+  }, [view, reloadSuggestions])
+
+  useEffect(() => {
+    if (view === 'browse') void reloadBrowse()
+  }, [view, reloadBrowse])
 
   const openDetail = useCallback(async (entityId: string) => {
     try {
@@ -133,21 +158,45 @@ export function EntityMemorySection() {
     } catch { /* detail failures leave the browser usable */ }
   }, [])
 
-  async function applyAndToast(command: unknown) {
+  async function applyAndToast(command: unknown, options: { reload?: boolean } = {}) {
+    const shouldReload = options.reload !== false
     const result = await ipc.entities.applyCorrection(command) as { correctionId: string; description: string }
     setUndoToast(result)
-    await reload()
-    if (detail) await openDetail(detail.id)
-    void ipc.entities.suggestedMerges().then((rows: SuggestedMerge[]) => setSuggestions(rows)).catch(() => {})
+    if (shouldReload) {
+      if (view === 'browse') await reloadBrowse()
+      await reloadSuggestions()
+      if (detail) await openDetail(detail.id)
+    }
     return result
   }
 
+  async function mergePair(targetId: string, sourceId: string) {
+    const key = `${targetId}:${sourceId}`
+    setReviewingKey(key)
+    setError(null)
+    try {
+      await applyAndToast({ kind: 'entity-merge', targetId, sourceId })
+      setMergePreview(null)
+      setSelected([])
+    } catch (mergeError) {
+      setError(mergeError instanceof Error ? mergeError.message : 'Couldn’t merge those. Try again.')
+    } finally {
+      setReviewingKey(null)
+    }
+  }
+
+  // Browse "Merge selected" — confirm bar at the top of the page.
   async function startMergePreview(targetId: string, sourceId: string) {
+    const key = `${targetId}:${sourceId}`
+    setReviewingKey(key)
+    setError(null)
     try {
       const preview = await ipc.entities.previewCorrection({ kind: 'entity-merge', targetId, sourceId }) as MergePreview
       setMergePreview({ preview, targetId, sourceId })
     } catch (previewError) {
-      setError(previewError instanceof Error ? previewError.message : String(previewError))
+      setError(previewError instanceof Error ? previewError.message : 'Couldn’t prepare that merge. Try again.')
+    } finally {
+      setReviewingKey(null)
     }
   }
 
@@ -156,25 +205,61 @@ export function EntityMemorySection() {
     [suggestions, dismissedSuggestions],
   )
 
+  async function mergeAllVisible() {
+    const pairs = visibleSuggestions
+    if (pairs.length === 0 || bulkBusy) return
+    setBulkBusy(true)
+    setError(null)
+    let lastResult: { correctionId: string; description: string } | null = null
+    let merged = 0
+    let failed = 0
+    try {
+      for (const item of pairs) {
+        try {
+          lastResult = await applyAndToast(
+            { kind: 'entity-merge', targetId: item.leftId, sourceId: item.rightId },
+            { reload: false },
+          )
+          merged += 1
+        } catch {
+          failed += 1
+        }
+      }
+      if (lastResult) {
+        setUndoToast({
+          ...lastResult,
+          description: failed > 0
+            ? `Merged ${merged} duplicate${merged === 1 ? '' : 's'} (${failed} skipped). Undo reverses the last one.`
+            : `Merged ${merged} duplicate${merged === 1 ? '' : 's'}. Undo reverses the last one.`,
+        })
+      }
+    } finally {
+      setBulkBusy(false)
+      await reloadSuggestions()
+      if (view === 'browse') await reloadBrowse()
+    }
+  }
+
   const selectedEntities = entities.filter((entity) => selected.includes(entity.id))
-  const canMerge = selectedEntities.length === 2 && selectedEntities[0].type === selectedEntities[1].type
+  const canMerge = selectedEntities.length === 2 && selectedEntities[0]?.type === selectedEntities[1]?.type
 
   return (
-    <div style={{ display: 'grid', gap: 14 }}>
+    <div style={{ display: 'grid', gap: 16 }}>
       {undoToast && (
         <div style={{
-          display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', borderRadius: 10,
-          border: '1px solid var(--color-border)', background: 'var(--color-bg-secondary)', fontSize: 12.5,
+          display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderRadius: 12,
+          border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-low)', fontSize: 12.5,
         }}>
           <span style={{ color: 'var(--color-text-secondary)' }}>{undoToast.description}</span>
           <button
             type="button"
-            style={{ ...buttonStyle, marginLeft: 'auto' }}
+            style={{ ...quietButtonStyle, marginLeft: 'auto' }}
             onClick={async () => {
               try {
                 await ipc.entities.undoCorrection(undoToast.correctionId)
                 setUndoToast(null)
-                await reload()
+                if (view === 'browse') await reloadBrowse()
+                await reloadSuggestions()
                 if (detail) await openDetail(detail.id)
               } catch (undoError) {
                 setError(undoError instanceof Error ? undoError.message : String(undoError))
@@ -183,200 +268,305 @@ export function EntityMemorySection() {
           >
             Undo
           </button>
-          <button type="button" style={buttonStyle} onClick={() => setUndoToast(null)}>Dismiss</button>
+          <button type="button" style={quietButtonStyle} onClick={() => setUndoToast(null)}>Dismiss</button>
         </div>
       )}
 
-      {visibleSuggestions.length > 0 && (
-        <div style={{ display: 'grid', gap: 8, padding: 12, borderRadius: 10, border: '1px dashed var(--color-border)' }}>
-          <div style={{ fontSize: 12, fontWeight: 640, color: 'var(--color-text-secondary)' }}>
-            Suggested merges — never applied without you
-          </div>
-          {visibleSuggestions.slice(0, 4).map((item) => (
-            <div key={`${item.leftId}:${item.rightId}`} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
-              <span>“{item.leftName}” + “{item.rightName}”</span>
-              <span style={{ color: 'var(--color-text-tertiary)' }}>{item.reason}</span>
-              <button type="button" style={{ ...buttonStyle, marginLeft: 'auto' }} onClick={() => void startMergePreview(item.leftId, item.rightId)}>Review</button>
-              <button
-                type="button"
-                style={buttonStyle}
-                onClick={() => setDismissedSuggestions((current) => new Set([...current, `${item.leftId}:${item.rightId}`]))}
-              >
-                Dismiss
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-        {TYPE_TABS.map((tab) => (
-          <button
-            key={tab.label}
-            type="button"
-            onClick={() => { setTypeFilter(tab.id); setSelected([]) }}
-            style={{
-              ...chipStyle,
-              cursor: 'pointer',
-              ...(typeFilter === tab.id ? { background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)', border: '1px solid transparent' } : {}),
-            }}
-          >
-            {tab.label}
-          </button>
-        ))}
-        <input
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-          placeholder="Search names and aliases"
-          style={{
-            marginLeft: 'auto', fontSize: 12.5, padding: '5px 10px', borderRadius: 8,
-            border: '1px solid var(--color-border)', background: 'var(--color-bg-secondary)', color: 'var(--color-text-primary)',
-          }}
-        />
-      </div>
-
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+      <div style={{ display: 'flex', gap: 8 }}>
         <button
           type="button"
-          style={canMerge ? primaryButtonStyle : { ...buttonStyle, opacity: 0.5, cursor: 'default' }}
-          disabled={!canMerge}
-          onClick={() => { if (canMerge) void startMergePreview(selected[0], selected[1]) }}
+          onClick={() => setView('attention')}
+          style={view === 'attention' ? primaryButtonStyle : buttonStyle}
         >
-          Merge selected
+          Needs attention
+          {suggestionsLoaded && visibleSuggestions.length > 0 ? ` · ${visibleSuggestions.length}` : ''}
         </button>
-        <span style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}>
-          Select two entities of the same type to merge them (with preview and undo).
-        </span>
-        {(typeFilter === 'project' || typeFilter === null) && (
-          addingProject ? (
-            <span style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
-              <input
-                value={newProjectName}
-                onChange={(event) => setNewProjectName(event.target.value)}
-                placeholder="Project name — no client needed"
-                style={{ fontSize: 12.5, padding: '5px 10px', borderRadius: 8, border: '1px solid var(--color-border)', background: 'var(--color-bg-secondary)', color: 'var(--color-text-primary)' }}
-              />
+        <button
+          type="button"
+          onClick={() => { setView('browse'); setLoaded(false) }}
+          style={view === 'browse' ? primaryButtonStyle : buttonStyle}
+        >
+          Browse
+        </button>
+      </div>
+
+      {error && <div style={{ fontSize: 12.5, color: '#f87171' }}>{error}</div>}
+
+      {mergePreview && (
+        <div style={{ display: 'grid', gap: 10, padding: 14, borderRadius: 12, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-low)' }}>
+          <div style={{ fontSize: 13.5, fontWeight: 660 }}>{mergePreview.preview.description}</div>
+          {mergePreview.preview.entity && (
+            <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)' }}>
+              Keeps “{mergePreview.preview.entity.name}” with {mergePreview.preview.entity.evidenceCount} linked item{mergePreview.preview.entity.evidenceCount === 1 ? '' : 's'}.
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              type="button"
+              style={primaryButtonStyle}
+              disabled={reviewingKey !== null}
+              onClick={() => void mergePair(mergePreview.targetId, mergePreview.sourceId)}
+            >
+              Confirm merge
+            </button>
+            <button type="button" style={quietButtonStyle} onClick={() => setMergePreview(null)}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {view === 'attention' && (
+        <div style={{ display: 'grid', gap: 10 }}>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+            <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.55, flex: 1, minWidth: 200 }}>
+              Same name twice usually means Daylens minted two records for one real thing.
+              Merge them here — you can undo the last merge.
+            </div>
+            {visibleSuggestions.length > 1 && (
               <button
                 type="button"
                 style={primaryButtonStyle}
-                onClick={async () => {
-                  try {
-                    await ipc.entities.createProject({ name: newProjectName })
-                    setNewProjectName('')
-                    setAddingProject(false)
-                    await reload()
-                  } catch (createError) {
-                    setError(createError instanceof Error ? createError.message : String(createError))
-                  }
+                disabled={bulkBusy || reviewingKey !== null}
+                onClick={() => void mergeAllVisible()}
+              >
+                {bulkBusy ? 'Merging…' : `Merge all ${visibleSuggestions.length}`}
+              </button>
+            )}
+          </div>
+          {!suggestionsLoaded ? (
+            <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>Checking for duplicates…</div>
+          ) : visibleSuggestions.length === 0 ? (
+            <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.55 }}>
+              Nothing needs a merge right now. Use Browse if you want to rename something.
+            </div>
+          ) : (
+            visibleSuggestions.map((item) => (
+              <div
+                key={`${item.leftId}:${item.rightId}`}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  padding: '12px 14px',
+                  borderRadius: 12,
+                  border: '1px solid var(--color-border-ghost)',
+                  background: 'var(--color-surface-low)',
+                  fontSize: 13,
                 }}
               >
-                Create
-              </button>
-              <button type="button" style={buttonStyle} onClick={() => setAddingProject(false)}>Cancel</button>
-            </span>
-          ) : (
-            <button type="button" style={{ ...buttonStyle, marginLeft: 'auto' }} onClick={() => setAddingProject(true)}>
-              New project (no client required)
-            </button>
-          )
-        )}
-      </div>
-
-      {error && <div style={{ fontSize: 12.5, color: 'var(--color-danger, #d33)' }}>{error}</div>}
-
-      {!loaded ? (
-        <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>Loading entities…</div>
-      ) : entities.length === 0 ? (
-        <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.6 }}>
-          Nothing here yet. Entities appear as Daylens observes apps, pages, repositories, meetings, and the clients and projects you set up.
+                <div style={{ display: 'grid', gap: 2, minWidth: 0, flex: 1 }}>
+                  <span style={{ fontWeight: 620, color: 'var(--color-text-primary)' }}>
+                    “{item.leftName}” and “{item.rightName}”
+                  </span>
+                  <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>
+                    {item.type} · {item.reason}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  style={primaryButtonStyle}
+                  disabled={reviewingKey !== null || bulkBusy}
+                  onClick={() => void mergePair(item.leftId, item.rightId)}
+                >
+                  {reviewingKey === `${item.leftId}:${item.rightId}` ? 'Merging…' : 'Merge'}
+                </button>
+                <button
+                  type="button"
+                  style={quietButtonStyle}
+                  disabled={bulkBusy}
+                  onClick={() => setDismissedSuggestions((current) => new Set([...current, `${item.leftId}:${item.rightId}`]))}
+                >
+                  Not the same
+                </button>
+              </div>
+            ))
+          )}
         </div>
-      ) : (
-        <div style={{ display: 'grid', gap: 6 }}>
-          {entities.map((entity) => (
-            <div
-              key={entity.id}
+      )}
+
+      {view === 'browse' && (
+        <div style={{ display: 'grid', gap: 12 }}>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+            {TYPE_TABS.map((tab) => (
+              <button
+                key={tab.label}
+                type="button"
+                onClick={() => { setTypeFilter(tab.id); setSelected([]); setLoaded(false) }}
+                style={typeFilter === tab.id ? primaryButtonStyle : buttonStyle}
+              >
+                {tab.label}
+              </button>
+            ))}
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search…"
               style={{
-                display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px',
-                borderRadius: 10, border: '1px solid var(--color-border)',
-                background: detail?.id === entity.id ? 'var(--color-bg-secondary)' : 'transparent',
+                marginLeft: 'auto',
+                fontSize: 12.5,
+                padding: '6px 12px',
+                borderRadius: 9,
+                border: '1px solid var(--color-border-ghost)',
+                background: 'var(--color-surface-high)',
+                color: 'var(--color-text-primary)',
+                fontFamily: 'inherit',
+                minWidth: 160,
               }}
+            />
+          </div>
+
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <button
+              type="button"
+              style={canMerge ? primaryButtonStyle : { ...buttonStyle, opacity: 0.5, cursor: 'default' }}
+              disabled={!canMerge}
+              onClick={() => { if (canMerge) void startMergePreview(selected[0]!, selected[1]!) }}
             >
-              <input
-                type="checkbox"
-                checked={selected.includes(entity.id)}
-                onChange={(event) => setSelected((current) => event.target.checked
-                  ? [...current, entity.id].slice(-2)
-                  : current.filter((id) => id !== entity.id))}
-              />
-              {renamingId === entity.id ? (
-                <span style={{ display: 'flex', gap: 6 }}>
+              Merge selected
+            </button>
+            {(typeFilter === 'project' || typeFilter === null) && (
+              addingProject ? (
+                <span style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
                   <input
-                    value={renameValue}
-                    autoFocus
-                    onChange={(event) => setRenameValue(event.target.value)}
-                    style={{ fontSize: 13, padding: '3px 8px', borderRadius: 6, border: '1px solid var(--color-border)', background: 'var(--color-bg-secondary)', color: 'var(--color-text-primary)' }}
+                    value={newProjectName}
+                    onChange={(event) => setNewProjectName(event.target.value)}
+                    placeholder="Project name"
+                    style={{
+                      fontSize: 12.5, padding: '6px 10px', borderRadius: 9,
+                      border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-high)',
+                      color: 'var(--color-text-primary)', fontFamily: 'inherit',
+                    }}
                   />
                   <button
                     type="button"
                     style={primaryButtonStyle}
                     onClick={async () => {
                       try {
-                        await applyAndToast({ kind: 'entity-rename', entityId: entity.id, name: renameValue })
-                        setRenamingId(null)
-                      } catch (renameError) {
-                        setError(renameError instanceof Error ? renameError.message : String(renameError))
+                        await ipc.entities.createProject({ name: newProjectName })
+                        setNewProjectName('')
+                        setAddingProject(false)
+                        await reloadBrowse()
+                      } catch (createError) {
+                        setError(createError instanceof Error ? createError.message : String(createError))
                       }
                     }}
                   >
-                    Save
+                    Create
                   </button>
-                  <button type="button" style={buttonStyle} onClick={() => setRenamingId(null)}>Cancel</button>
+                  <button type="button" style={quietButtonStyle} onClick={() => setAddingProject(false)}>Cancel</button>
                 </span>
               ) : (
-                <button
-                  type="button"
-                  onClick={() => void openDetail(entity.id)}
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 13.5, fontWeight: 600, color: 'var(--color-text-primary)', padding: 0 }}
-                >
-                  {entity.name}
+                <button type="button" style={{ ...quietButtonStyle, marginLeft: 'auto' }} onClick={() => setAddingProject(true)}>
+                  New project
                 </button>
-              )}
-              {entity.nameSource === 'user' && <span style={{ ...chipStyle, borderStyle: 'solid' }}>renamed by you</span>}
-              <span style={chipStyle}>{entity.type}</span>
-              <span style={chipStyle}>{entity.origin}</span>
-              {entity.aliases.slice(0, 3).map((alias) => <span key={alias} style={chipStyle}>{alias}</span>)}
-              {entity.aliases.length > 3 && <span style={chipStyle}>+{entity.aliases.length - 3}</span>}
-              <span style={{ marginLeft: 'auto', fontSize: 11.5, color: 'var(--color-text-tertiary)' }}>
-                {formatDate(entity.firstObservedAt)} – {formatDate(entity.lastObservedAt)} · {entity.evidenceCount} evidence
-              </span>
-              <button
-                type="button"
-                style={buttonStyle}
-                onClick={() => { setRenamingId(entity.id); setRenameValue(entity.name) }}
-              >
-                Rename
-              </button>
+              )
+            )}
+          </div>
+
+          {!loaded ? (
+            <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>Loading…</div>
+          ) : entities.length === 0 ? (
+            <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.55 }}>
+              Nothing here yet.
             </div>
-          ))}
+          ) : (
+            <div style={{ display: 'grid', gap: 6 }}>
+              {entities.map((entity) => (
+                <div
+                  key={entity.id}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10,
+                    padding: '10px 12px',
+                    borderRadius: 12,
+                    border: '1px solid var(--color-border-ghost)',
+                    background: detail?.id === entity.id ? 'var(--color-surface-low)' : 'transparent',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selected.includes(entity.id)}
+                    onChange={(event) => setSelected((current) => event.target.checked
+                      ? [...current, entity.id].slice(-2)
+                      : current.filter((id) => id !== entity.id))}
+                  />
+                  {renamingId === entity.id ? (
+                    <span style={{ display: 'flex', gap: 6, flex: 1 }}>
+                      <input
+                        value={renameValue}
+                        autoFocus
+                        onChange={(event) => setRenameValue(event.target.value)}
+                        style={{
+                          flex: 1, fontSize: 13, padding: '4px 8px', borderRadius: 8,
+                          border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-high)',
+                          color: 'var(--color-text-primary)', fontFamily: 'inherit',
+                        }}
+                      />
+                      <button
+                        type="button"
+                        style={primaryButtonStyle}
+                        onClick={async () => {
+                          try {
+                            await applyAndToast({ kind: 'entity-rename', entityId: entity.id, name: renameValue })
+                            setRenamingId(null)
+                          } catch (renameError) {
+                            setError(renameError instanceof Error ? renameError.message : String(renameError))
+                          }
+                        }}
+                      >
+                        Save
+                      </button>
+                      <button type="button" style={quietButtonStyle} onClick={() => setRenamingId(null)}>Cancel</button>
+                    </span>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => void openDetail(entity.id)}
+                        style={{
+                          background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+                          fontSize: 13.5, fontWeight: 600, color: 'var(--color-text-primary)', textAlign: 'left',
+                        }}
+                      >
+                        {entity.name}
+                      </button>
+                      <span style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}>{entity.type}</span>
+                      <button
+                        type="button"
+                        style={{ ...quietButtonStyle, marginLeft: 'auto' }}
+                        onClick={() => { setRenamingId(entity.id); setRenameValue(entity.name) }}
+                      >
+                        Rename
+                      </button>
+                    </>
+                  )}
+                </div>
+              ))}
+              {entities.length >= LIST_LIMIT && (
+                <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>
+                  Showing the first {LIST_LIMIT}. Search to narrow.
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
       {detail && (
-        <div style={{ display: 'grid', gap: 10, padding: 14, borderRadius: 12, border: '1px solid var(--color-border)', background: 'var(--color-bg-secondary)' }}>
+        <div style={{ display: 'grid', gap: 10, padding: 14, borderRadius: 12, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-low)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ fontSize: 14, fontWeight: 660 }}>{detail.name}</span>
-            <span style={chipStyle}>{detail.type}</span>
-            <button type="button" style={{ ...buttonStyle, marginLeft: 'auto' }} onClick={() => setDetail(null)}>Close</button>
+            <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>{detail.type}</span>
+            <button type="button" style={{ ...quietButtonStyle, marginLeft: 'auto' }} onClick={() => setDetail(null)}>Close</button>
           </div>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
             {detail.aliasRows.map((alias) => (
-              <span key={alias.id} style={{ ...chipStyle, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              <span key={alias.id} style={{ fontSize: 12, color: 'var(--color-text-secondary)', display: 'inline-flex', gap: 6, alignItems: 'center' }}>
                 {alias.alias}
                 <button
                   type="button"
-                  aria-label={`Remove alias ${alias.alias}`}
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', padding: 0, fontSize: 11 }}
-                  onClick={() => void applyAndToast({ kind: 'entity-remove-alias', entityId: alias.entity_id, aliasId: alias.id }).catch((aliasError) => setError(String(aliasError)))}
+                  style={{ ...quietButtonStyle, padding: '2px 6px' }}
+                  onClick={() => void applyAndToast({ kind: 'entity-remove-alias', entityId: detail.id, aliasId: alias.id }).catch((err) => setError(String(err)))}
                 >
                   ×
                 </button>
@@ -385,27 +575,31 @@ export function EntityMemorySection() {
             <input
               value={aliasDraft}
               onChange={(event) => setAliasDraft(event.target.value)}
-              placeholder="Add alias"
-              style={{ fontSize: 12, padding: '3px 8px', borderRadius: 999, border: '1px dashed var(--color-border)', background: 'transparent', color: 'var(--color-text-primary)', width: 110 }}
+              placeholder="Add alias…"
               onKeyDown={(event) => {
                 if (event.key === 'Enter' && aliasDraft.trim()) {
                   void applyAndToast({ kind: 'entity-add-alias', entityId: detail.id, alias: aliasDraft.trim() })
                     .then(() => setAliasDraft(''))
-                    .catch((aliasError) => setError(String(aliasError)))
+                    .catch((err) => setError(String(err)))
                 }
+              }}
+              style={{
+                fontSize: 12.5, padding: '4px 8px', borderRadius: 8, minWidth: 120,
+                border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-high)',
+                color: 'var(--color-text-primary)', fontFamily: 'inherit',
               }}
             />
           </div>
           {detail.mergedEntities.length > 0 && (
             <div style={{ fontSize: 12.5, display: 'grid', gap: 4 }}>
-              <span style={{ color: 'var(--color-text-tertiary)' }}>Merged into this entity:</span>
+              <span style={{ color: 'var(--color-text-tertiary)' }}>Merged into this:</span>
               {detail.mergedEntities.map((merged) => (
                 <span key={merged.id} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                   “{merged.name}”
                   <button
                     type="button"
-                    style={buttonStyle}
-                    onClick={() => void applyAndToast({ kind: 'entity-split', entityId: merged.id }).catch((splitError) => setError(String(splitError)))}
+                    style={quietButtonStyle}
+                    onClick={() => void applyAndToast({ kind: 'entity-split', entityId: merged.id }).catch((err) => setError(String(err)))}
                   >
                     Split back out
                   </button>
@@ -413,69 +607,6 @@ export function EntityMemorySection() {
               ))}
             </div>
           )}
-          <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)' }}>
-            <div style={{ fontWeight: 640, marginBottom: 4 }}>Linked evidence ({detail.evidenceRefs.length})</div>
-            {detail.evidenceRefs.slice(0, 8).map((ref) => (
-              <div key={ref.id} style={{ color: 'var(--color-text-tertiary)' }}>
-                {ref.source_type} · {ref.source_id}
-                {ref.span_start_ms != null && ` · ${new Date(ref.span_start_ms).toLocaleString()}`}
-              </div>
-            ))}
-            {detail.blockRefs.length > 0 && (
-              <div style={{ marginTop: 6 }}>
-                <div style={{ fontWeight: 640, marginBottom: 2 }}>Timeline blocks</div>
-                {detail.blockRefs.map((ref, index) => (
-                  <div key={index} style={{ color: 'var(--color-text-tertiary)' }}>
-                    {ref.degraded
-                      ? `Evidence span ${ref.spanStartMs ? new Date(ref.spanStartMs).toLocaleString() : ''} – ${ref.spanEndMs ? new Date(ref.spanEndMs).toLocaleTimeString() : ''}`
-                      : `Block ${ref.blockId}`}
-                  </div>
-                ))}
-              </div>
-            )}
-            {detail.related.length > 0 && (
-              <div style={{ marginTop: 6 }}>
-                <div style={{ fontWeight: 640, marginBottom: 2 }}>Related</div>
-                {detail.related.map((relation) => (
-                  <div key={`${relation.id}:${relation.kind}`} style={{ color: 'var(--color-text-tertiary)' }}>
-                    {relation.kind} → {relation.name} ({relation.type})
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {mergePreview && (
-        <div style={{ display: 'grid', gap: 10, padding: 14, borderRadius: 12, border: '1px solid var(--color-border)', background: 'var(--color-bg-secondary)' }}>
-          <div style={{ fontSize: 13.5, fontWeight: 660 }}>{mergePreview.preview.description}</div>
-          {mergePreview.preview.entity && (
-            <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)' }}>
-              Result: “{mergePreview.preview.entity.name}” with {mergePreview.preview.entity.aliases.length} alias{mergePreview.preview.entity.aliases.length === 1 ? '' : 'es'} and {mergePreview.preview.entity.evidenceCount} linked evidence item{mergePreview.preview.entity.evidenceCount === 1 ? '' : 's'}.
-            </div>
-          )}
-          {mergePreview.preview.surfaces.map((line) => (
-            <div key={line} style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>• {line}</div>
-          ))}
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button
-              type="button"
-              style={primaryButtonStyle}
-              onClick={async () => {
-                try {
-                  await applyAndToast({ kind: 'entity-merge', targetId: mergePreview.targetId, sourceId: mergePreview.sourceId })
-                  setMergePreview(null)
-                  setSelected([])
-                } catch (mergeError) {
-                  setError(mergeError instanceof Error ? mergeError.message : String(mergeError))
-                }
-              }}
-            >
-              Merge
-            </button>
-            <button type="button" style={buttonStyle} onClick={() => setMergePreview(null)}>Cancel</button>
-          </div>
         </div>
       )}
     </div>
