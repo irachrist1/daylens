@@ -1082,6 +1082,10 @@ export function searchSemanticMoments(
       AND vectors.model_version = ?
       AND hits.distance <= ?
       AND memory_records.deleted_at IS NULL
+      -- High-sensitivity memory is excluded from semantic retrieval even if a
+      -- record was embedded before it was marked high; the indexer also never
+      -- embeds it in the first place.
+      AND memory_records.sensitivity != 'high'
       AND memory_records.start_ms >= ?
       AND memory_records.start_ms < ?
       ${MEMORY_RECORD_CORRECTION_FILTERS}

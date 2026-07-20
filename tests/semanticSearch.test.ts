@@ -28,8 +28,13 @@ import {
   countSemanticPending,
   ensureVectorStore,
   getSemanticSearchStatus,
+  reconcileLostVectors,
   searchByMeaning,
   semanticIndexStep,
+  semanticIndexingPausedNow,
+  setSemanticPowerStateProviderForTests,
+  startSemanticIndexBackfill,
+  stopSemanticIndexBackfill,
   sweepOrphanedVectors,
 } from '../src/main/services/semanticIndex.ts'
 import {
@@ -73,6 +78,7 @@ const CONCEPTS: string[][] = [
   ['price', 'pricing', 'discount', 'deal', 'cost', 'cheap', 'markdown', 'offer'],
   ['doc', 'document', 'note', 'plan', 'agenda'],
   ['marathon', 'training', 'run'],
+  ['offsite', 'retreat', 'team'],
 ]
 
 function tokenAxis(token: string): number {
@@ -113,6 +119,8 @@ function useFixtureEmbedder(embedder: SemanticEmbedder = fixtureEmbedder()): voi
 
 test.afterEach(() => {
   setSemanticEmbedderFactoryForTests(null)
+  setSemanticPowerStateProviderForTests(null)
+  stopSemanticIndexBackfill()
 })
 
 async function seedAndEmbed(db: Database.Database, embedder = fixtureEmbedder()): Promise<void> {
@@ -329,6 +337,131 @@ test("the agent's search gains semanticHits with the same guardrails, deduped fr
   setSemanticEmbedderFactoryForTests(() => ({ ok: false, reason: 'model-missing', detail: 'fixture' }))
   const withoutModel = await execSearchSessionsWithMeaning({ query: 'cheap television offers' }, db)
   assert.equal(withoutModel.semanticHits, undefined, 'no semanticHits key when the model is absent')
+})
+
+test('vague-memory fixtures retrieve the accepted result through local semantic search', async () => {
+  const db = createProductionTestDatabase()
+  useFixtureEmbedder()
+  // Ticket-shaped fixtures: the probe shares little or no wording with the
+  // accepted result; meaning has to carry it past the distractors.
+  insertSession(db, 'Best OLED TV markdowns', 9, 0, 30)
+  insertSession(db, 'Team offsite agenda notes', 11, 0, 30)
+  insertSession(db, 'Marathon training schedule', 14, 0, 30)
+  indexMemoryForDay(db, DATE)
+  await semanticIndexStep(db, fixtureEmbedder())
+
+  const fixtures = [
+    { probe: 'the TV page with the best discount', accepted: 'Best OLED TV markdowns' },
+    { probe: 'the doc where we planned the team retreat', accepted: 'Team offsite agenda notes' },
+  ]
+  for (const fixture of fixtures) {
+    const hits = await searchByMeaning(db, fixture.probe, { limit: 10 })
+    assert.equal(
+      hits[0]?.windowTitle,
+      fixture.accepted,
+      `"${fixture.probe}" must retrieve "${fixture.accepted}" first, got ${JSON.stringify(hits.map((hit) => hit.windowTitle))}`,
+    )
+  }
+})
+
+test('high-sensitivity memory never enters the semantic index and never surfaces if marked late', async () => {
+  const db = createProductionTestDatabase()
+  useFixtureEmbedder()
+  insertSession(db, 'Best OLED TV discounts', 9, 0, 45)
+  insertSession(db, 'Confidential television settlement terms', 11, 0, 30)
+  indexMemoryForDay(db, DATE)
+
+  // The records layer marks the late-morning moment high-sensitivity.
+  db.prepare(`
+    UPDATE memory_records SET sensitivity = 'high' WHERE title = 'Confidential television settlement terms'
+  `).run()
+
+  const embedder = fixtureEmbedder()
+  assert.equal(countSemanticPending(db, embedder), 1, 'the high-sensitivity record is not pending')
+  await semanticIndexStep(db, embedder)
+  assert.equal(countSemanticEmbedded(db), 1, 'only the standard record was embedded')
+  assert.equal(
+    (db.prepare(`SELECT embedding_model FROM memory_records WHERE sensitivity = 'high'`).get() as { embedding_model: string | null }).embedding_model,
+    null,
+    'the high-sensitivity record is never stamped',
+  )
+  const hits = await searchByMeaning(db, 'cheap television offers', { limit: 10 })
+  assert.ok(hits.length >= 1)
+  assert.ok(
+    !hits.some((hit) => hit.windowTitle === 'Confidential television settlement terms'),
+    'high-sensitivity content is absent from by-meaning results',
+  )
+
+  // Marked high AFTER being embedded: the query-time filter hides it
+  // immediately, before any re-projection or re-embed cleans up.
+  db.prepare(`UPDATE memory_records SET sensitivity = 'high' WHERE title = 'Best OLED TV discounts'`).run()
+  assert.equal(
+    (await searchByMeaning(db, 'cheap television offers', { limit: 10 })).length,
+    0,
+    'a record marked high after embedding stops surfacing at query time',
+  )
+  // …and the next background step scrubs the stored vector itself.
+  await semanticIndexStep(db, embedder)
+  assert.equal(countSemanticEmbedded(db), 0, 'the stale vector is dropped, not just hidden')
+  assert.equal(
+    (db.prepare(`SELECT COUNT(*) AS c FROM memory_records WHERE embedding_model IS NOT NULL`).get() as { c: number }).c,
+    0,
+    'the engine stamp is cleared so a lowered sensitivity re-embeds naturally',
+  )
+})
+
+test('background embedding pauses on battery or load and resumes when the condition clears', async () => {
+  const db = createProductionTestDatabase()
+  const embedder = fixtureEmbedder()
+  useFixtureEmbedder(embedder)
+  insertSession(db, 'Best OLED TV discounts', 9, 0, 45)
+  indexMemoryForDay(db, DATE)
+  assert.equal(countSemanticPending(db, embedder), 1)
+
+  // The decision itself, per signal.
+  setSemanticPowerStateProviderForTests(() => ({ onBattery: true, overloaded: false }))
+  assert.deepEqual(semanticIndexingPausedNow(), { paused: true, reason: 'on-battery' })
+  setSemanticPowerStateProviderForTests(() => ({ onBattery: false, overloaded: true }))
+  assert.deepEqual(semanticIndexingPausedNow(), { paused: true, reason: 'system-load' })
+  setSemanticPowerStateProviderForTests(() => ({ onBattery: false, overloaded: false }))
+  assert.deepEqual(semanticIndexingPausedNow(), { paused: false, reason: null })
+
+  // The loop honors it: on battery nothing embeds; back on mains it resumes.
+  setSemanticPowerStateProviderForTests(() => ({ onBattery: true, overloaded: false }))
+  startSemanticIndexBackfill(() => db, { stepDelayMs: 5, idleDelayMs: 10 })
+  await new Promise((resolve) => setTimeout(resolve, 120))
+  assert.equal(countSemanticEmbedded(db), 0, 'paused: no embedding work while on battery')
+
+  setSemanticPowerStateProviderForTests(() => ({ onBattery: false, overloaded: false }))
+  const deadline = Date.now() + 3_000
+  while (countSemanticEmbedded(db) === 0 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+  stopSemanticIndexBackfill()
+  assert.equal(countSemanticEmbedded(db), 1, 'resumed: the pending record embedded once power returned')
+})
+
+test('a wiped vector index rebuilds itself from the permitted memory records', async () => {
+  const db = createProductionTestDatabase()
+  useFixtureEmbedder()
+  await seedAndEmbed(db)
+  assert.equal((await searchByMeaning(db, 'cheap television offers')).length, 1)
+
+  // Simulate a corrupt/lost vec0 index: the vectors vanish, bookkeeping and
+  // record stamps still claim they exist.
+  db.prepare(`DELETE FROM memory_semantic_vec`).run()
+  assert.equal((await searchByMeaning(db, 'cheap television offers')).length, 0)
+
+  // Reconcile resets the affected records to pending; the next step re-embeds.
+  const reset = reconcileLostVectors(db)
+  assert.equal(reset, 2, 'both records reset to pending')
+  const progress = await semanticIndexStep(db, fixtureEmbedder())
+  assert.equal(progress.embedded, 2)
+  assert.equal(
+    (await searchByMeaning(db, 'cheap television offers')).length,
+    1,
+    'the index rebuilt from the permitted records without manual recovery',
+  )
 })
 
 test('the vector store loads the real sqlite-vec extension once per connection', () => {

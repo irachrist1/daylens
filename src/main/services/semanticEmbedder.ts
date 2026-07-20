@@ -1,7 +1,7 @@
 // Local embedding model behind semantic search (DEV-180).
 //
-// The engine is the one DEV-179 chose and recorded in
-// docs/specs/memory-and-entities.md §Chosen engine: the pinned
+// The engine is the one DEV-179 chose and recorded in the memory
+// specification (memory-and-entities.md §Chosen engine): the pinned
 // Xenova/all-MiniLM-L6-v2 revision (384 dimensions, int8-quantized ONNX)
 // running under transformers.js, with sqlite-vec as the vector index
 // (src/main/services/semanticIndex.ts).

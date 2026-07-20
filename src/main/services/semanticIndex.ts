@@ -29,6 +29,7 @@
 // LOCAL-ONLY: memory_record_vectors and the vec0 table have no sync-allowlist
 // keys and can never serialize into a remote payload (tests/syncAllowlist.test.ts).
 import { createRequire } from 'node:module'
+import os from 'node:os'
 import type Database from 'better-sqlite3'
 import {
   searchSemanticMoments,
@@ -44,7 +45,7 @@ import {
   type SemanticEmbedder,
 } from './semanticEmbedder'
 
-/** The engine DEV-179 chose (docs/specs/memory-and-entities.md §Chosen engine). */
+/** The engine DEV-179 chose (memory-and-entities.md §Chosen engine). */
 export const SEMANTIC_ENGINE = 'sqlite-vec'
 
 const EMBED_BATCH_SIZE = 32
@@ -112,8 +113,15 @@ interface PendingRow {
   semantic_text: string
 }
 
+// High-sensitivity memory never enters the semantic index (spec §Local
+// semantic search: "High-sensitivity evidence is excluded unless its own
+// specification permits embedding" — none does today). The exclusion is
+// enforced twice: here so the text is never embedded, and again at query
+// time (searchSemanticMoments) so a record marked high AFTER it was embedded
+// stops surfacing immediately, before any re-projection cleans it up.
 const PENDING_FILTER = `
   memory_records.deleted_at IS NULL
+  AND memory_records.sensitivity != 'high'
   AND memory_records.semantic_text IS NOT NULL
   AND memory_records.semantic_text != ''
   AND (
@@ -168,6 +176,9 @@ export async function semanticIndexStep(
   const store = ensureVectorStore(db)
   if (!store.ok) return { embedded: 0, pending: 0, done: true }
 
+  reconcileLostVectors(db)
+  scrubHighSensitivityVectors(db)
+
   const rows = db.prepare(`
     SELECT memory_records.id, memory_records.date, memory_records.semantic_text
     FROM memory_records
@@ -210,6 +221,61 @@ export async function semanticIndexStep(
   return { embedded: rows.length, pending, done: pending === 0 }
 }
 
+/** A record marked high-sensitivity AFTER it was embedded keeps nothing
+ *  behind: the query filter already hides it instantly; this drops the stored
+ *  vector too (the vec0 row becomes an invisible orphan for the sweep) and
+ *  clears the engine stamp, so if the sensitivity is ever lowered the record
+ *  simply becomes pending again. */
+export function scrubHighSensitivityVectors(db: Database.Database): number {
+  const dropped = db.prepare(`
+    DELETE FROM memory_record_vectors WHERE record_id IN (
+      SELECT id FROM memory_records WHERE sensitivity = 'high'
+    )
+  `).run().changes
+  db.prepare(`
+    UPDATE memory_records SET embedding_model = NULL, embedding_version = NULL
+    WHERE sensitivity = 'high' AND embedding_model IS NOT NULL
+  `).run()
+  return dropped
+}
+
+/** The inverse repair of the orphan sweep: bookkeeping rows whose vec0 row
+ *  vanished (a corrupt or wiped vector index) reset their records to pending,
+ *  so the index rebuilds itself from the permitted memory records — no manual
+ *  recovery step (spec §Failure behavior: "A corrupt index is rebuilt from
+ *  permitted memory records"). Bounded per call; the background loop finishes
+ *  the job across ticks. */
+export function reconcileLostVectors(db: Database.Database): number {
+  if (!vectorTableExists(db) || !bookkeepingAvailable(db)) return 0
+  // Cheap steady-state guard: vectors can only be "lost" when the vec0 table
+  // holds fewer rows than the bookkeeping claims (orphans from re-projection
+  // only push the vec0 count the other way, and the sweep drains those). Skip
+  // the per-row join unless the counts say something is missing.
+  const bookkeepingCount = (db.prepare(`SELECT COUNT(*) AS c FROM memory_record_vectors`).get() as { c: number }).c
+  if (bookkeepingCount === 0) return 0
+  const vecCount = (db.prepare(`SELECT COUNT(*) AS c FROM memory_semantic_vec`).get() as { c: number }).c
+  if (vecCount >= bookkeepingCount) return 0
+  const lost = db.prepare(`
+    SELECT vectors.record_id AS record_id
+    FROM memory_record_vectors vectors
+    LEFT JOIN memory_semantic_vec ON memory_semantic_vec.rowid = vectors.vec_rowid
+    WHERE memory_semantic_vec.rowid IS NULL
+    LIMIT ?
+  `).all(ORPHAN_SWEEP_LIMIT) as Array<{ record_id: string }>
+  if (lost.length === 0) return 0
+  const dropBookkeeping = db.prepare(`DELETE FROM memory_record_vectors WHERE record_id = ?`)
+  const resetRecord = db.prepare(`
+    UPDATE memory_records SET embedding_model = NULL, embedding_version = NULL WHERE id = ?
+  `)
+  db.transaction(() => {
+    for (const row of lost) {
+      dropBookkeeping.run(row.record_id)
+      resetRecord.run(row.record_id)
+    }
+  })()
+  return lost.length
+}
+
 /** Delete a bounded batch of vec0 rows whose bookkeeping row died with a day
  *  re-projection. They were already invisible to queries; this reclaims space
  *  and k-NN candidate slots. */
@@ -230,18 +296,66 @@ export function sweepOrphanedVectors(db: Database.Database): number {
   return orphans.length
 }
 
+// ─── Power/load guard ────────────────────────────────────────────────────────
+// Embedding is deferrable work; it must not tax a machine that is already
+// drawing from battery or busy (spec: re-embedding "can pause on battery or
+// load"). The guard gates the background loop only — corrections, queries,
+// and the manual step stay untouched, and search keeps answering from
+// whatever is already embedded while paused.
+
+export interface SemanticPowerState {
+  onBattery: boolean
+  overloaded: boolean
+}
+
+function defaultPowerState(): SemanticPowerState {
+  let onBattery = false
+  try {
+    // Present in the Electron main process; under plain Node (tests, tooling)
+    // the require yields no powerMonitor and the battery signal reads false.
+    const electron = nodeRequire('electron') as {
+      powerMonitor?: { isOnBattery?: () => boolean }
+    }
+    onBattery = electron.powerMonitor?.isOnBattery?.() === true
+  } catch {
+    // No power signal available — never paused on its account.
+  }
+  // Conservative load signal: pause while the 1-minute load average exceeds
+  // the core count (loadavg reports 0 on Windows, so this never fires there).
+  const overloaded = os.loadavg()[0] > Math.max(1, os.cpus().length)
+  return { onBattery, overloaded }
+}
+
+let powerStateProvider: () => SemanticPowerState = defaultPowerState
+
+/** Test seam for the battery/load pause. Pass null to restore the real signal. */
+export function setSemanticPowerStateProviderForTests(
+  provider: (() => SemanticPowerState) | null,
+): void {
+  powerStateProvider = provider ?? defaultPowerState
+}
+
+export function semanticIndexingPausedNow(): { paused: boolean; reason: 'on-battery' | 'system-load' | null } {
+  const state = powerStateProvider()
+  if (state.onBattery) return { paused: true, reason: 'on-battery' }
+  if (state.overloaded) return { paused: true, reason: 'system-load' }
+  return { paused: false, reason: null }
+}
+
 // ─── Background indexing ─────────────────────────────────────────────────────
 
 let indexTimer: ReturnType<typeof setTimeout> | null = null
 
 /**
  * Background embedding: a bounded batch per tick so the main process stays
- * responsive (spec: "Re-embedding runs in bounded background batches"). When
- * the index is current it drops to a slow idle cadence instead of stopping,
- * so records re-projected by later corrections (embedding_model reset to
- * NULL) are re-embedded without the correction paths having to know about
- * embeddings at all. Honest absence: when the model or extension is
- * unavailable the loop exits — status explains why, exact search unaffected.
+ * responsive (spec: "Re-embedding runs in bounded background batches"). The
+ * loop pauses while the machine is on battery or under load and resumes on
+ * the next tick when the condition clears. When the index is current it
+ * drops to a slow idle cadence instead of stopping, so records re-projected
+ * by later corrections (embedding_model reset to NULL) are re-embedded
+ * without the correction paths having to know about embeddings at all.
+ * Honest absence: when the model or extension is unavailable the loop
+ * exits — status explains why, exact search unaffected.
  */
 export function startSemanticIndexBackfill(
   getDatabase: () => Database.Database,
@@ -254,6 +368,10 @@ export function startSemanticIndexBackfill(
     indexTimer = null
     let progress: SemanticIndexProgress
     try {
+      if (semanticIndexingPausedNow().paused) {
+        indexTimer = setTimeout(() => void step(), idleDelayMs)
+        return
+      }
       const loaded = await loadSemanticEmbedder()
       if (!loaded.ok) return // honest absence — status explains why
       progress = await semanticIndexStep(getDatabase(), loaded.embedder, {
