@@ -354,6 +354,14 @@ export function buildDayFactTable(
     addDuration(table, `appSite.${slug}.duration`, slice.seconds)
   }
 
+  // The day's named entities — the "what the day was about" scene's substrate.
+  const usedEntitySlugs = new Set<string>()
+  for (const entity of facts.entities ?? []) {
+    const slug = uniqueSlug(slugify(entity.name), usedEntitySlugs)
+    addLabel(table, `about.${slug}.label`, entity.name)
+    addDuration(table, `about.${slug}.duration`, entity.seconds)
+  }
+
   addEnrichmentFacts(table, enrichment)
 
   return { cadence: 'day', periodKey, facts: table, factsHash: computeTableHash(table) }

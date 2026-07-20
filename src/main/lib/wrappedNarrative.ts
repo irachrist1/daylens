@@ -13,6 +13,7 @@ import { VOICE_SYSTEM_PROMPT } from '../ai/voiceContract'
 import type { AIWrappedNarrative, DayEnrichment } from '@shared/types'
 import {
   formatHm,
+  lowerName,
   workActionPhrase,
   type DayWrapFacts,
 } from '../../renderer/lib/dayWrapScenes'
@@ -93,6 +94,7 @@ export function computeFactsHash(facts: DayWrapFacts, enrichment?: DayEnrichment
     standout: facts.standout ? [facts.standout.name.toLowerCase(), bucket(facts.standout.seconds)] : null,
     wildcard: facts.wildcardHook ? [facts.wildcardHook.kind, facts.wildcardHook.value] : null,
     story: facts.dayStory.map((seg) => [seg.part, seg.items.map((i) => i.toLowerCase()), bucket(seg.seconds)]),
+    entities: (facts.entities ?? []).map((e) => [e.type, e.name.toLowerCase(), bucket(e.seconds)]),
     enrichment: enrichmentFingerprint(enrichment),
   })
   return createHash('sha1').update(canonical).digest('hex').slice(0, 12)
@@ -166,6 +168,12 @@ export function compactDayFacts(facts: DayWrapFacts, enrichment?: DayEnrichment 
     longestStretch: facts.standout
       ? { time: formatHm(facts.standout.seconds), on: facts.standout.name, from: `${facts.standout.startClock} to ${facts.standout.endClock}` }
       : null,
+    // The durable entities the day's evidence supports naming — the ONLY
+    // projects, clients, people, and meetings a line may call by name beyond
+    // the activity labels above.
+    ...((facts.entities?.length ?? 0) > 0
+      ? { dayWasAbout: facts.entities!.map((e) => ({ name: e.name, kind: e.type, time: formatHm(e.seconds) })) }
+      : {}),
     topLeisure: facts.topLeisure,
     // What the window titles say was actually being done in each app — the
     // semantic depth under "4 hours in Cursor". Already humanized;
@@ -421,6 +429,27 @@ export function mergeWrapRepair(
     question: rejectedIds.has('question') && repair.question != null ? repair.question : original.question,
     reflection: rejectedIds.has('reflection') && repair.reflection != null ? repair.reflection : original.reflection,
   }
+}
+
+// ─── Fact-only recap line (deterministic) ─────────────────────────────────────
+// The evening recap's honest floor: when no provider can write the recap, the
+// notification carries a line made ONLY of the day's shared corrected facts —
+// the same total, clocks, and top activity every other surface shows — or
+// nothing at all. Never a canned teaser, never a guess.
+
+export function factOnlyRecapLine(facts: DayWrapFacts): string | null {
+  if (facts.quality === 'empty' || facts.quality === 'tooEarly') return null
+  if (facts.activeSeconds <= 0) return null
+  const total = formatHm(facts.activeSeconds)
+  const span = facts.mainStartClock && facts.ribbonEndClock
+    ? `, ${facts.mainStartClock} to ${facts.ribbonEndClock}`
+    : ''
+  if (facts.isLeisureDay) {
+    return `${total} on screen${span}, mostly off the clock.`
+  }
+  const top = facts.workActivities[0]
+  const work = top ? `, most of it ${lowerName(workActionPhrase(top.name, top.category))}` : ''
+  return `${total} on screen${span}${work}.`
 }
 
 // ─── Fallback narrative (deterministic) ───────────────────────────────────────

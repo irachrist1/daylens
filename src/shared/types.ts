@@ -364,6 +364,18 @@ export interface SecondaryDisplayVisibleSpan {
   presence: 'visible'
 }
 
+/** One durable entity the day's evidence supports naming — a project, client,
+ *  person, meeting, or repository from the entity ledger whose evidence spans
+ *  overlap the day's surviving (trusted, undeleted) blocks. The wrap's
+ *  "what the day was about" scene reads these; seconds are the overlap with
+ *  the surviving blocks, so deleted evidence can never lend an entity time. */
+export interface DayWrapEntity {
+  id: string
+  type: 'project' | 'client' | 'person' | 'meeting' | 'repository'
+  name: string
+  seconds: number
+}
+
 export interface DayTimelinePayload {
   date: string
   sessions: AppSession[]
@@ -381,6 +393,9 @@ export interface DayTimelinePayload {
   // Additive: what secondary displays showed while focus was elsewhere.
   // Absent on payloads that predate multi-display capture.
   secondaryDisplay?: SecondaryDisplayVisibleSpan[]
+  // Additive: the durable entities the day's evidence supports naming.
+  // Absent on payloads built before the entity ledger existed.
+  dayEntities?: DayWrapEntity[]
 }
 
 export type HistoryDayPayload = DayTimelinePayload

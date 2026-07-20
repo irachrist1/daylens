@@ -17,6 +17,7 @@ import {
   type WebsiteVisitRecord,
 } from '../db/queries'
 import { deleteWrappedNarrativesForDate } from '../db/wrappedNarrativeStore'
+import { entitiesForDayWrap } from './entities/dayEntities'
 import { isWorkIntentRole } from '@shared/types'
 import type {
   AppDetailPayload,
@@ -27,6 +28,7 @@ import type {
   BlockConfidence,
   BoundaryReason,
   DayTimelinePayload,
+  DayWrapEntity,
   DistractionCostPayload,
   DocumentRef,
   HistoryDayPayload,
@@ -5702,6 +5704,16 @@ export function getTimelineDayPayload(
   // its own honest label — deliberately NOT added to totalSeconds/blocks,
   // which stay input-focused foreground truth.
   const secondaryDisplay = getSecondaryDisplayVisibleSpansForRange(db, fromMs, toMs, sessions)
+  // The durable entities this day's evidence supports naming, intersected
+  // with the surviving blocks above so deleted evidence lends no entity time.
+  // The wrap's "what the day was about" scene reads these; a database without
+  // the entity ledger simply yields none.
+  let dayEntities: DayWrapEntity[] = []
+  try {
+    dayEntities = entitiesForDayWrap(db, dateStr, blocks)
+  } catch {
+    dayEntities = []
+  }
   // Invariant 7: the blocks are the canonical day facts. Every downstream
   // total (Timeline, Apps, AI, recap) reads this same partition instead of
   // independently summing raw sessions.
@@ -5729,6 +5741,7 @@ export function getTimelineDayPayload(
     appCount: new Set(sessions.map((session) => session.bundleId)).size,
     siteCount: websites.length,
     secondaryDisplay,
+    dayEntities,
   }
 }
 

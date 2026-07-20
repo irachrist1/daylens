@@ -8,7 +8,7 @@
 //
 // Pure (no React) so it can be unit-tested without the carousel.
 
-import type { AppCategory, DayTimelinePayload, WorkContextBlock } from '@shared/types'
+import type { AppCategory, DayTimelinePayload, DayWrapEntity, WorkContextBlock } from '@shared/types'
 import { blockActiveSeconds } from '@shared/blockDuration'
 import { effectiveBlockKind, type WorkKind } from '@shared/workKind'
 import { inferWorkIntent } from '@shared/workIntent'
@@ -149,6 +149,11 @@ export interface DayWrapFacts {
    *  suggest was being done in each app ("SPCS Build Proposal CCI, 9 sessions"),
    *  never the raw strings. */
   titleContext: AppTitleContext[]
+  /** The durable entities the day's evidence supports naming (projects,
+   *  clients, people, meetings, repositories), biggest first. Drives the
+   *  "what the day was about" scene. Empty or absent when the ledger has
+   *  nothing to say — the scene simply doesn't exist then. */
+  entities?: DayWrapEntity[]
 }
 
 // ─── Tunables ────────────────────────────────────────────────────────────────
@@ -374,6 +379,7 @@ export function buildDayWrapFacts(payload: DayTimelinePayload): DayWrapFacts {
     dayStory,
     mainStartClock,
     titleContext,
+    entities: payload.dayEntities ?? [],
   }
 }
 
