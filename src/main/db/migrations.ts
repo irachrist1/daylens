@@ -3,6 +3,8 @@ import { normalizeUrlForStorage, pageKeyForUrl, resolveCanonicalApp, resolveCano
 import { deriveClientAliasTokens } from '../lib/clientAliases'
 import { ensureAIMessageFeedbackSchema, ensureAIThreadSchema } from './aiThreadSchema'
 import { runEntityAdoptionBackfill } from '../services/entities/entityAdoption'
+import { dedupeAppIdentityTwins } from '../services/entities/appIdentityTwinDedupe'
+import { macBundleIdentifierForExecutablePath } from '../services/browserRegistry'
 import {
   migrateLegacyUserFactsToSupplied,
   reconcileSuppliedMemoryRecords,
@@ -2824,6 +2826,22 @@ const migrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_connector_records_connector ON connector_records (connector_id, tombstoned_at);
         CREATE INDEX IF NOT EXISTS idx_connector_records_date ON connector_records (date);
       `)
+    },
+  },
+  {
+    version: 57,
+    description:
+      'Same app, one entity (#22 / DEV-224): the poll capture backend keyed apps by executable path when the active-window module reported no bundle id, while macOS focus events keyed the same install by its CFBundleIdentifier — one install became two app_identities rows and two entities. Resolve each path-keyed identity to its real bundle id via the installed bundle\'s Info.plist, link the rows through canonical_app_id, merge twin entities through the reversible merge machinery (user renames and prior explicit merges outrank), and stamp the unified id onto historical app_sessions so Apps/Timeline group one app. Identities that no longer resolve are left for the Needs-attention review — display names alone never merge.',
+    up: () => {
+      const result = dedupeAppIdentityTwins(getDb(), macBundleIdentifierForExecutablePath)
+      if (result.pathIdentitiesResolved > 0) {
+        console.log(
+          `[migrations:v57] unified ${result.pathIdentitiesResolved} path-keyed app identit${result.pathIdentitiesResolved === 1 ? 'y' : 'ies'}: `
+          + `${result.entitiesMerged} entit${result.entitiesMerged === 1 ? 'y' : 'ies'} merged, `
+          + `${result.entitiesRekeyed} re-keyed, `
+          + `${result.sessionsRestamped} session row${result.sessionsRestamped === 1 ? '' : 's'} restamped`,
+        )
+      }
     },
   },
 ]
