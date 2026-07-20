@@ -29,6 +29,7 @@
 // Revoking a grant stops future disclosure immediately and deletes the derived
 // text in the same statement that marks the revocation.
 import { createHash, randomUUID } from 'node:crypto'
+import fs from 'node:fs'
 import path from 'node:path'
 import type Database from 'better-sqlite3'
 
@@ -94,13 +95,21 @@ export function addFileAccessGrant(
 ): FileAccessGrant {
   if (!path.isAbsolute(input.path)) throw new Error('Grants require an absolute path.')
   const id = `fag_${randomUUID().replace(/-/g, '').slice(0, 18)}`
+  // Resolve symlinks so stored paths match what resolveVisibleHomePath returns
+  // via fs.realpath (on macOS /var → /private/var, etc.).
+  let resolvedPath: string
+  try {
+    resolvedPath = fs.realpathSync(input.path)
+  } catch {
+    resolvedPath = path.resolve(input.path)
+  }
   db.prepare(`
     INSERT INTO file_access_grants (id, scope_kind, path, state, allow_high_sensitivity, source, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     input.scopeKind,
-    path.normalize(input.path),
+    resolvedPath,
     input.state,
     input.allowHighSensitivity ? 1 : 0,
     input.source ?? 'settings',
@@ -147,12 +156,20 @@ export function findCoveringGrant(
   realPath: string,
   state: FileAccessState,
 ): FileAccessGrant | null {
+  // Resolve symlinks so the lookup path matches the stored grant paths (which
+  // are always real-path-resolved by addFileAccessGrant).
+  let resolvedPath: string
+  try {
+    resolvedPath = fs.realpathSync(realPath)
+  } catch {
+    resolvedPath = path.resolve(realPath)
+  }
   const states = state === 'indexed' ? ['indexed', 'model_readable'] : ['model_readable']
   const grants = db.prepare(`
     SELECT * FROM file_access_grants
     WHERE revoked_at IS NULL AND state IN (${states.map(() => '?').join(', ')})
   `).all(...states) as FileAccessGrant[]
-  const covering = grants.filter((grant) => grantCovers(grant, path.normalize(realPath)))
+  const covering = grants.filter((grant) => grantCovers(grant, resolvedPath))
   if (covering.length === 0) return null
   // Prefer the most specific (longest) covering path.
   covering.sort((left, right) => right.path.length - left.path.length)

@@ -3,8 +3,9 @@
 // the EXISTING DEV-172 ledger (correction_undo_log), with the same three
 // verbs:
 //
-//   previewEntityCorrection — applies inside a SQLite savepoint, reads the
-//                             result, rolls back. Preview IS the apply.
+//   previewEntityCorrection — merge uses cheap COUNTs (no savepoint); other
+//                             kinds still apply inside a SQLite savepoint,
+//                             read the result, and roll back.
 //   applyEntityCorrection   — one transaction: snapshot the entity-ledger rows
 //                             the command touches, apply, record the undo
 //                             entry in correction_undo_log.
@@ -213,17 +214,48 @@ export function previewEntityCorrection(
   command: EntityCorrectionCommand,
 ): EntityCorrectionPreview {
   const description = describeEntityCommand(db, command)
+
+  // Merges are pointer updates — compute the union with COUNTs, no savepoint
+  // and no loading every evidence row (that path froze Settings on Review).
+  if (command.kind === 'entity-merge') {
+    const target = resolveMergeChain(db, entityById(db, command.targetId))
+    const source = resolveMergeChain(db, entityById(db, command.sourceId))
+    if (target.id === source.id) throw new Error('Those are already the same entity.')
+    if (target.entity_type !== source.entity_type) {
+      throw new Error('Only entities of the same type can merge.')
+    }
+    const groupIds = [...new Set([...mergeGroupIds(db, target.id), ...mergeGroupIds(db, source.id)])]
+    const marks = groupIds.map(() => '?').join(', ')
+    const aliases = (db.prepare(`
+      SELECT DISTINCT alias FROM entity_aliases WHERE entity_id IN (${marks}) ORDER BY alias
+    `).all(...groupIds) as Array<{ alias: string }>).map((row) => row.alias)
+    const evidenceCount = (db.prepare(`
+      SELECT COUNT(*) AS c FROM entity_evidence_refs WHERE entity_id IN (${marks})
+    `).get(...groupIds) as { c: number }).c
+    const displayAliases = aliases.filter(
+      (alias) => alias.toLowerCase() !== target.canonical_name.toLowerCase(),
+    )
+    return {
+      description,
+      entity: {
+        id: target.id,
+        name: target.canonical_name,
+        aliases: displayAliases,
+        evidenceCount,
+      },
+      surfaces: [
+        `Aliases carry over — "${target.canonical_name}" will answer to ${displayAliases.length} name${displayAliases.length === 1 ? '' : 's'}.`,
+        `Evidence combines: ${evidenceCount} linked item${evidenceCount === 1 ? '' : 's'} back the merged entity.`,
+        'Search, @-mentions, and AI answers resolve either name to the merged entity. Undo restores both.',
+      ],
+    }
+  }
+
   db.exec('SAVEPOINT entity_correction_preview')
   try {
     applyEntityCommand(db, command)
-    const survivorId = command.kind === 'entity-merge' ? command.targetId : command.entityId
-    const detail = getEntityDetail(db, survivorId)
+    const detail = getEntityDetail(db, command.entityId)
     const surfaces: string[] = []
-    if (command.kind === 'entity-merge' && detail) {
-      surfaces.push(`Aliases carry over — "${detail.name}" now answers to ${detail.aliases.length} name${detail.aliases.length === 1 ? '' : 's'}.`)
-      surfaces.push(`Evidence combines: ${detail.evidenceCount} linked item${detail.evidenceCount === 1 ? '' : 's'} back the merged entity.`)
-      surfaces.push('Search, @-mentions, and AI answers resolve either name to the merged entity. Undo restores both.')
-    }
     if (command.kind === 'entity-rename' && detail) {
       surfaces.push(`Search and the AI will know this as "${detail.name}". The rename survives every rebuild — later inference can never overwrite it.`)
     }

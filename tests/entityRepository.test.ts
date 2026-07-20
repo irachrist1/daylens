@@ -153,7 +153,7 @@ test('synthetic connected-source envelopes produce meeting, person, repository, 
   }
 })
 
-test('suggested merges surface same-type alias overlaps but never meetings', () => {
+test('suggested merges surface same-name entities but never meetings', () => {
   const db = createProductionTestDatabase()
   try {
     const a = upsertEntity(db, { type: 'repository', identityKey: 'local:daylens', name: 'daylens', origin: 'connected' })
@@ -166,7 +166,7 @@ test('suggested merges surface same-type alias overlaps but never meetings', () 
     resolveMeetingEntity(db, { sourceEventId: 'e2', title: 'Standup' })
 
     const suggestions = listSuggestedEntityMerges(db)
-    assert.ok(suggestions.some((item) => item.type === 'repository'), 'alias-overlapping repos are suggested')
+    assert.ok(suggestions.some((item) => item.type === 'repository'), 'same-name repos are suggested')
     assert.ok(!suggestions.some((item) => item.type === 'meeting'), 'meetings never merge by title similarity')
   } finally {
     db.close()

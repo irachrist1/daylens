@@ -2,7 +2,7 @@
 // Settings → Agent file access surface (DEV-184). Same handler patterns as
 // db.handlers.ts: thin, synchronous where possible, everything reads/writes
 // through the services.
-import { ipcMain } from 'electron'
+import { BrowserWindow, dialog, ipcMain } from 'electron'
 import { IPC } from '@shared/types'
 import { getDb } from '../services/database'
 import {
@@ -85,5 +85,26 @@ export function registerEntityHandlers(): void {
 
   ipcMain.handle(IPC.FILE_ACCESS.LIST_DISCLOSURES, (_e, payload: { limit?: number } = {}) => {
     return listFileDisclosures(getDb(), payload)
+  })
+
+  ipcMain.handle(IPC.FILE_ACCESS.PICK_PATH, async (
+    event,
+    payload: { scopeKind?: 'file' | 'folder' } = {},
+  ): Promise<{ path: string; scopeKind: 'file' | 'folder' } | null> => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+    const scopeKind = payload.scopeKind === 'file' ? 'file' : 'folder'
+    const options = {
+      properties: (scopeKind === 'folder'
+        ? ['openDirectory', 'createDirectory']
+        : ['openFile']) as Array<'openDirectory' | 'createDirectory' | 'openFile'>,
+      title: scopeKind === 'folder' ? 'Choose a folder for the AI' : 'Choose a file for the AI',
+    }
+    const result = window
+      ? await dialog.showOpenDialog(window, options)
+      : await dialog.showOpenDialog(options)
+    if (result.canceled || result.filePaths.length === 0) return null
+    const chosen = result.filePaths[0]
+    if (!chosen) return null
+    return { path: chosen, scopeKind }
   })
 }

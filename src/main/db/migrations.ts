@@ -2782,6 +2782,50 @@ const migrations: Migration[] = [
       reconcileSuppliedMemoryRecords(db)
     },
   },
+  {
+    version: 56,
+    description:
+      'Connector foundation (connectors.md, DEV-186): connector_connections (one row per connected external source; credential-free config, internal cursor) and connector_records (normalized-record ledger keyed by opaque source identity — idempotent re-syncs, explicit tombstones for provider deletions, entity_id back-references for disconnect cleanup). Credentials live only in the OS secure store, never here. LOCAL-ONLY tables — no sync-allowlist keys.',
+    up: () => {
+      const db = getDb()
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS connector_connections (
+          connector_id         TEXT PRIMARY KEY,
+          status               TEXT NOT NULL DEFAULT 'connected' CHECK(status IN ('connected', 'needs_attention', 'disconnected')),
+          account_label        TEXT,
+          config_json          TEXT NOT NULL DEFAULT '{}',
+          sync_cursor          TEXT,
+          connected_at         INTEGER NOT NULL,
+          last_sync_at         INTEGER,
+          last_sync_error      TEXT,
+          consecutive_failures INTEGER NOT NULL DEFAULT 0,
+          next_retry_at        INTEGER,
+          items_ingested       INTEGER NOT NULL DEFAULT 0,
+          updated_at           INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS connector_records (
+          id               TEXT PRIMARY KEY,
+          connector_id     TEXT NOT NULL,
+          source_record_id TEXT NOT NULL,
+          kind             TEXT NOT NULL,
+          entity_id        TEXT,
+          date             TEXT,
+          effective_at     INTEGER,
+          retrieved_at     INTEGER NOT NULL,
+          sensitivity      TEXT NOT NULL DEFAULT 'standard' CHECK(sensitivity IN ('standard', 'personal', 'high')),
+          permission_scope TEXT NOT NULL,
+          envelope_json    TEXT NOT NULL,
+          tombstoned_at    INTEGER,
+          created_at       INTEGER NOT NULL,
+          updated_at       INTEGER NOT NULL,
+          UNIQUE(connector_id, source_record_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_connector_records_connector ON connector_records (connector_id, tombstoned_at);
+        CREATE INDEX IF NOT EXISTS idx_connector_records_date ON connector_records (date);
+      `)
+    },
+  },
 ]
 
 export const LATEST_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0

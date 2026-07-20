@@ -30,6 +30,11 @@ import type {
   AIProviderMode,
   BrowserLinkResult,
   BillingAccessSnapshot,
+  ConnectorListing,
+  HistoryExportPlan,
+  HistoryExportProgress,
+  HistoryExportRunResult,
+  HistoryExportVerification,
   BillingUsageReport,
   IntercomIdentity,
   CategoryOverrideEffect,
@@ -507,6 +512,33 @@ const api = {
     revokeGrant: (grantId: string) => ipcRenderer.invoke(IPC.FILE_ACCESS.REVOKE_GRANT, grantId),
     listDisclosures: (payload: { limit?: number } = {}) =>
       ipcRenderer.invoke(IPC.FILE_ACCESS.LIST_DISCLOSURES, payload),
+    pickPath: (payload: { scopeKind?: 'file' | 'folder' } = {}): Promise<{ path: string; scopeKind: 'file' | 'folder' } | null> =>
+      ipcRenderer.invoke(IPC.FILE_ACCESS.PICK_PATH, payload),
+  },
+  connectors: {
+    // DEV-186: Settings → Connections listing. The renderer only ever
+    // receives the ConnectorListing projection — never credentials, cursors,
+    // or paths. Lifecycle IPC arrives with the first connectable provider.
+    list: (): Promise<ConnectorListing[]> => ipcRenderer.invoke(IPC.CONNECTORS.LIST),
+  },
+  export: {
+    // DEV-196: full-history export. Plans, progress, and verification reports
+    // only — raw rows go straight from the database to the person's disk.
+    plan: (payload: { includeHighSensitivity?: boolean } = {}): Promise<HistoryExportPlan> =>
+      ipcRenderer.invoke(IPC.EXPORT.PLAN, payload),
+    chooseDestination: (): Promise<{ canceled: boolean; dir?: string }> =>
+      ipcRenderer.invoke(IPC.EXPORT.CHOOSE_DESTINATION),
+    run: (payload: { destinationDir: string; includeHighSensitivity?: boolean }): Promise<HistoryExportRunResult> =>
+      ipcRenderer.invoke(IPC.EXPORT.RUN, payload),
+    verify: (payload: { exportDir?: string } = {}): Promise<
+      { canceled: true } | { canceled: false; exportDir: string; verification: HistoryExportVerification }
+    > =>
+      ipcRenderer.invoke(IPC.EXPORT.VERIFY, payload),
+    onProgress: (callback: (event: HistoryExportProgress) => void): (() => void) => {
+      const handler = (_e: Electron.IpcRendererEvent, event: HistoryExportProgress) => callback(event)
+      ipcRenderer.on(IPC.EXPORT.PROGRESS, handler)
+      return () => { ipcRenderer.removeListener(IPC.EXPORT.PROGRESS, handler) }
+    },
   },
   contextPackets: {
     // DEV-181: the recorded, deterministic bundle behind an AI exchange.

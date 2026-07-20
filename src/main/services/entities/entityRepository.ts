@@ -459,7 +459,7 @@ export function listEntities(
     ORDER BY e.last_observed_at IS NULL, e.last_observed_at DESC, e.canonical_name ASC
     LIMIT ?
   `).all(...params, options.limit ?? 200) as EntityRow[]
-  return rows.map((row) => entitySummary(db, row))
+  return summarizeEntitiesBatched(db, rows)
 }
 
 function entitySummary(db: Database.Database, row: EntityRow): EntitySummary {
@@ -484,6 +484,69 @@ function entitySummary(db: Database.Database, row: EntityRow): EntitySummary {
     aliases: aliases.filter((alias) => normalizeEntityLabel(alias) !== normalizeEntityLabel(row.canonical_name)),
     evidenceCount,
   }
+}
+
+/** One aliases query + one evidence-count query for the whole page — not N+1. */
+function summarizeEntitiesBatched(db: Database.Database, rows: EntityRow[]): EntitySummary[] {
+  if (rows.length === 0) return []
+  const ids = rows.map((row) => row.id)
+  const marks = ids.map(() => '?').join(', ')
+
+  // Direct merge children only (one hop). Enough for list counts; detail still
+  // walks the full chain via mergeGroupIds when you open an entity.
+  const children = db.prepare(`
+    SELECT id, merged_into_id AS parent_id FROM entities
+    WHERE status = 'merged' AND merged_into_id IN (${marks})
+  `).all(...ids) as Array<{ id: string; parent_id: string }>
+
+  const groupIdsBySurvivor = new Map<string, string[]>()
+  for (const id of ids) groupIdsBySurvivor.set(id, [id])
+  for (const child of children) {
+    groupIdsBySurvivor.get(child.parent_id)?.push(child.id)
+  }
+  const allGroupIds = [...new Set([...ids, ...children.map((child) => child.id)])]
+  const allMarks = allGroupIds.map(() => '?').join(', ')
+
+  const aliasesByEntity = new Map<string, string[]>()
+  for (const alias of db.prepare(`
+    SELECT entity_id, alias FROM entity_aliases WHERE entity_id IN (${allMarks}) ORDER BY alias
+  `).all(...allGroupIds) as Array<{ entity_id: string; alias: string }>) {
+    const list = aliasesByEntity.get(alias.entity_id)
+    if (list) list.push(alias.alias)
+    else aliasesByEntity.set(alias.entity_id, [alias.alias])
+  }
+
+  const evidenceByEntity = new Map<string, number>()
+  for (const row of db.prepare(`
+    SELECT entity_id, COUNT(*) AS c FROM entity_evidence_refs
+    WHERE entity_id IN (${allMarks}) GROUP BY entity_id
+  `).all(...allGroupIds) as Array<{ entity_id: string; c: number }>) {
+    evidenceByEntity.set(row.entity_id, row.c)
+  }
+
+  return rows.map((row) => {
+    const groupIds = groupIdsBySurvivor.get(row.id) ?? [row.id]
+    const aliasSet = new Set<string>()
+    let evidenceCount = 0
+    for (const groupId of groupIds) {
+      for (const alias of aliasesByEntity.get(groupId) ?? []) aliasSet.add(alias)
+      evidenceCount += evidenceByEntity.get(groupId) ?? 0
+    }
+    const canonical = normalizeEntityLabel(row.canonical_name)
+    return {
+      id: row.id,
+      type: row.entity_type,
+      name: row.canonical_name,
+      nameSource: row.name_source,
+      origin: row.origin,
+      sensitivity: row.sensitivity,
+      status: row.status,
+      firstObservedAt: row.first_observed_at,
+      lastObservedAt: row.last_observed_at,
+      aliases: [...aliasSet].filter((alias) => normalizeEntityLabel(alias) !== canonical),
+      evidenceCount,
+    }
+  })
 }
 
 export interface EntityDetail extends EntitySummary {
@@ -529,30 +592,38 @@ export interface SuggestedEntityMerge {
 }
 
 /** Low-confidence merge candidates stay SUGGESTED (spec): same-type active
- *  entities sharing a normalized alias or name. Never auto-applied. */
+ *  entities sharing a display name. Alias self-joins are too expensive on
+ *  large stores and froze Settings; name matches catch the real duplicates
+ *  users see (Canva/Canva, Traycer/Traycer). Never auto-applied. Meetings
+ *  stay out — identity is the source event id. */
 export function listSuggestedEntityMerges(db: Database.Database, limit = 20): SuggestedEntityMerge[] {
   const rows = db.prepare(`
-    SELECT a1.alias_normalized AS norm,
+    SELECT e1.entity_type AS type,
            e1.id AS left_id, e1.canonical_name AS left_name,
-           e2.id AS right_id, e2.canonical_name AS right_name,
-           e1.entity_type AS type
-    FROM entity_aliases a1
-    JOIN entity_aliases a2 ON a2.alias_normalized = a1.alias_normalized AND a2.entity_id > a1.entity_id
-    JOIN entities e1 ON e1.id = a1.entity_id AND e1.status = 'active'
-    JOIN entities e2 ON e2.id = a2.entity_id AND e2.status = 'active' AND e2.entity_type = e1.entity_type
-    GROUP BY e1.id, e2.id
+           e2.id AS right_id, e2.canonical_name AS right_name
+    FROM entities e1
+    JOIN entities e2
+      ON e2.entity_type = e1.entity_type
+     AND e2.status = 'active'
+     AND e2.id > e1.id
+     AND lower(e2.canonical_name) = lower(e1.canonical_name)
+    WHERE e1.status = 'active'
+      AND e1.entity_type != 'meeting'
+    ORDER BY e1.last_observed_at IS NULL, e1.last_observed_at DESC
     LIMIT ?
-  `).all(limit) as Array<{ norm: string; left_id: string; left_name: string; right_id: string; right_name: string; type: EntityType }>
-  // Meetings never merge by title+time similarity; identity is the source
-  // event id, so exclude them from the suggestion strip entirely.
-  return rows
-    .filter((row) => row.type !== 'meeting')
-    .map((row) => ({
-      type: row.type,
-      leftId: row.left_id,
-      leftName: row.left_name,
-      rightId: row.right_id,
-      rightName: row.right_name,
-      reason: `Both are known as "${row.norm}"`,
-    }))
+  `).all(limit) as Array<{
+    type: EntityType
+    left_id: string
+    left_name: string
+    right_id: string
+    right_name: string
+  }>
+  return rows.map((row) => ({
+    type: row.type,
+    leftId: row.left_id,
+    leftName: row.left_name,
+    rightId: row.right_id,
+    rightName: row.right_name,
+    reason: 'Same name — likely the same thing twice',
+  }))
 }

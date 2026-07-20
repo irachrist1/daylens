@@ -39,6 +39,8 @@ import {
   writeIgnoredBlockReviewBackstop,
 } from './workBlocks'
 import { deleteSuppliedFact } from './suppliedMemory'
+import { purgeConnectorDerivedData } from '../connectors/purge'
+import type { ConnectorId } from '@shared/types'
 
 // Backstop fields are optional so older {fromMs,toMs}-only journal lines still parse.
 export type PurgeBlockJournalParams = PurgeTimelineBlockSpanInput & {
@@ -60,6 +62,7 @@ export type DeletionJournalEntry =
   | { kind: 'purge-evidence'; recordedAtMs: number; params: PurgeTrackedEvidenceRowsInput }
   | { kind: 'purge-block'; recordedAtMs: number; params: PurgeBlockJournalParams }
   | { kind: 'supplied-fact'; recordedAtMs: number; params: { factId: string } }
+  | { kind: 'connector-purge'; recordedAtMs: number; params: { connectorId: ConnectorId } }
 
 // Distributive omit so each union member keeps its kind/params pairing.
 type WithoutStamp<T> = T extends { recordedAtMs: number } ? Omit<T, 'recordedAtMs'> : never
@@ -72,6 +75,7 @@ const JOURNAL_ENTRY_KINDS = new Set<DeletionJournalEntry['kind']>([
   'purge-evidence',
   'purge-block',
   'supplied-fact',
+  'connector-purge',
 ])
 
 export function deletionJournalPath(userDataPath: string): string {
@@ -203,6 +207,12 @@ function replayEntry(db: Database.Database, entry: DeletionJournalEntry): void {
     // the restored database never had (or already lost) the fact.
     case 'supplied-fact':
       deleteSuppliedFact(db, entry.params.factId)
+      break
+    // DEV-186: disconnect-with-delete removed every derivative a connector
+    // produced; replay re-purges so a backup restore cannot resurrect the
+    // source's records, entities, or day signals. Idempotent by construction.
+    case 'connector-purge':
+      purgeConnectorDerivedData(db, entry.params.connectorId)
       break
   }
 }
