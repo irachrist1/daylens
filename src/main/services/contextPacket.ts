@@ -47,6 +47,11 @@ import {
   type FileSensitivity,
 } from './fileAccess'
 import { getScopedMemoryProfile } from './workMemoryProfile'
+import {
+  browserPageCoverageNoteText,
+  getCorrectedPageFactsForRange,
+  hasMaterialPageCoverageShortfall,
+} from './activityFacts'
 
 /** Bump when the assembly rules change; part of every packet and fingerprint,
  *  so two packets are only comparable under the same policy. */
@@ -92,15 +97,17 @@ export interface ContextPacketOmission {
 }
 
 /** A material disagreement between sources, exposed instead of silently
- *  resolved (spec §Context assembly step 8). The only detector live today is
- *  correction authority: a person's correction outranking an automated label. */
+ *  resolved (spec §Context assembly step 8). Two detectors are live: a
+ *  person's correction outranking an automated label, and a browser whose
+ *  page-level detail explains materially less time than its own verified
+ *  foreground total (limited tab access — app time wins). */
 export interface EvidenceConflict {
-  kind: 'correction_overrides_inference'
+  kind: 'correction_overrides_inference' | 'page_detail_below_app_time'
   /** The disclosed item the conflict is about (e.g. block:<id>). */
   identity: string
   detail: string
   /** Who wins, per the information-authority order. */
-  resolvedBy: 'correction'
+  resolvedBy: 'correction' | 'foreground_time'
 }
 
 /** A stretch of a requested day with no capture signal — the packet says so
@@ -270,6 +277,27 @@ function dayFactItems(
     if (items.length >= MAX_DAY_FACTS_PER_DAY) break
   }
   return { items, conflicts }
+}
+
+// A browser whose page-level detail explains materially less time than its
+// own verified foreground total is a disclosed conflict, not a silent
+// undercount: the agent narrates "Dia foreground 3h42m, page detail 0h10m"
+// instead of quoting the thin page list as the day (issue #21).
+function pageCoverageConflicts(db: Database.Database, date: string): EvidenceConflict[] {
+  try {
+    const [fromMs, toMs] = localDayBounds(date)
+    return getCorrectedPageFactsForRange(db, fromMs, toMs).coverage
+      .filter(hasMaterialPageCoverageShortfall)
+      .map((entry) => ({
+        kind: 'page_detail_below_app_time' as const,
+        identity: `browser:${entry.canonicalBrowserId}:${date}`,
+        detail: `On ${date}: ${browserPageCoverageNoteText(entry)}`,
+        resolvedBy: 'foreground_time' as const,
+      }))
+  } catch (error) {
+    console.warn('[contextPacket] page coverage check failed', date, error)
+    return []
+  }
 }
 
 // ─── Gaps ────────────────────────────────────────────────────────────────────
@@ -623,8 +651,10 @@ export async function buildContextPacket(
 
   const dayResults = dates.map((date) => dayFactItems(db, date, input.dayPayloads?.[date]))
   const dayFacts = dayResults.flatMap((result) => result.items)
-  const conflicts = dayResults.flatMap((result) => result.conflicts)
-    .sort((a, b) => a.identity.localeCompare(b.identity))
+  const conflicts = [
+    ...dayResults.flatMap((result) => result.conflicts),
+    ...dates.flatMap((date) => pageCoverageConflicts(db, date)),
+  ].sort((a, b) => a.identity.localeCompare(b.identity))
   const gaps = dates.flatMap((date) => dayGaps(db, date))
   const permissions = consultedPermissions(db)
   const corrected = correctedFactItems(db, question)

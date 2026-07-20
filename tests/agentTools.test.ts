@@ -32,11 +32,22 @@ function localMs(year: number, month: number, day: number, hour: number, minute 
 
 test('list_page_visits aggregates repeat visits to the same page and matches domainContains', async () => {
   const db = setupDb()
+  // Page time is a breakdown of the browser's own foreground time — visits
+  // without an owning foreground browser session contribute no active time,
+  // so the fixture needs Chrome frontmost while the visits ran.
+  const insertSession = db.prepare(`
+    INSERT INTO app_sessions (bundle_id, app_name, start_time, end_time, duration_sec,
+      category, is_focused, window_title, raw_app_name, canonical_app_id, app_instance_id,
+      capture_source, capture_version)
+    VALUES ('com.google.Chrome', 'Google Chrome', ?, ?, ?, 'browsing', 0, NULL, 'Google Chrome', 'chrome', 'com.google.Chrome', 'test', 1)
+  `)
+  insertSession.run(localMs(2026, 6, 10, 9, 0), localMs(2026, 6, 10, 9, 5), 300)
+  insertSession.run(localMs(2026, 6, 10, 9, 30), localMs(2026, 6, 10, 9, 33), 180)
   const insertVisit = db.prepare(`
     INSERT INTO website_visits (
       domain, page_title, url, visit_time, visit_time_us, duration_sec,
-      browser_bundle_id, source
-    ) VALUES (?, ?, ?, ?, ?, ?, 'com.google.Chrome', 'history')
+      browser_bundle_id, canonical_browser_id, source
+    ) VALUES (?, ?, ?, ?, ?, ?, 'com.google.Chrome', 'chrome', 'history')
   `)
   const visitTimeA = localMs(2026, 6, 10, 9, 0)
   const visitTimeB = localMs(2026, 6, 10, 9, 30)

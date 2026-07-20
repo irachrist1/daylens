@@ -22,6 +22,7 @@ import type { AppCategory, AppSession, AppUsageSummary, LiveSession, WebsiteSumm
 import { FOCUSED_CATEGORIES } from '@shared/types'
 import {
   getReconciledDomainIntervals,
+  getReconciledWebsiteVisitsForRange,
   getWebsiteSummariesForRange,
   getWebsiteVisitsForRange,
   type CorrectionSpan,
@@ -497,6 +498,167 @@ export function getCorrectedWebsiteSummariesForRange(
     }
   }).filter((summary) => summary.totalSeconds > 0)
     .sort((a, b) => b.totalSeconds - a.totalSeconds)
+}
+
+// ─── Corrected page-level facts and browser coverage ─────────────────────────
+// Page-level answers must come from the same reconciled, corrected ledger as
+// domain and app totals — never from raw website_visits sums, whose stored
+// durations are navigation-gap guesses that double-count the two capture
+// paths. Alongside the pages, this reports how much of each browser's own
+// corrected foreground time the page detail actually explains, so consumers
+// can say "Dia was foreground 3h42m; page detail covers 0h10m" instead of
+// presenting a thin page list as the whole truth.
+
+export interface CorrectedPageAggregate {
+  domain: string
+  pageTitle: string | null
+  url: string | null
+  canonicalBrowserId: string | null
+  totalSeconds: number
+  visitCount: number
+  firstSeen: number
+  lastSeen: number
+}
+
+export interface BrowserPageCoverage {
+  canonicalBrowserId: string
+  appName: string
+  foregroundSeconds: number
+  pageCoveredSeconds: number
+}
+
+export interface CorrectedPageFacts {
+  pages: CorrectedPageAggregate[]
+  coverage: BrowserPageCoverage[]
+}
+
+const PAGE_FACTS_CHUNK_MS = 24 * 60 * 60 * 1000
+
+export function getCorrectedPageFactsForRange(
+  db: Database.Database,
+  fromMs: number,
+  toMs: number,
+): CorrectedPageFacts {
+  const ignored = getIgnoredBlockSpansForRange(db, fromMs, toMs)
+  const siteExclusions = getEvidenceExclusionsForRange(db, fromMs, toMs)
+    .filter((exclusion) => exclusion.kind === 'site' && exclusion.domain)
+
+  interface PageAccumulator extends CorrectedPageAggregate {
+    topTitleMs: number
+  }
+  const byPage = new Map<string, PageAccumulator>()
+  const coveredMsByBrowser = new Map<string, number>()
+
+  for (let chunkStart = fromMs; chunkStart < toMs; chunkStart += PAGE_FACTS_CHUNK_MS) {
+    const chunkEnd = Math.min(chunkStart + PAGE_FACTS_CHUNK_MS, toMs)
+    const sessions = getCorrectedSessionsForRange(db, chunkStart, chunkEnd)
+    for (const { visit, freeIntervals } of getReconciledWebsiteVisitsForRange(db, chunkStart, chunkEnd, sessions)) {
+      if (freeIntervals.length === 0) continue
+      const excludedForDomain = siteExclusions
+        .filter((exclusion) => exclusion.domain === visit.domain)
+        .map((exclusion) => ({ startMs: exclusion.startMs, endMs: exclusion.endMs }))
+      const spans = excludedForDomain.length > 0
+        ? mergeCorrectionSpans([...ignored, ...excludedForDomain])
+        : ignored
+      let creditedMs = 0
+      for (const interval of freeIntervals) {
+        for (const piece of subtractSpansFromInterval(interval.start, interval.end, spans)) {
+          creditedMs += piece.end - piece.start
+        }
+      }
+      if (creditedMs <= 0) continue
+
+      const browserKey = visit.canonicalBrowserId ?? visit.browserBundleId
+      if (browserKey) {
+        coveredMsByBrowser.set(browserKey, (coveredMsByBrowser.get(browserKey) ?? 0) + creditedMs)
+      }
+
+      const pageIdentity = visit.normalizedUrl ?? visit.pageKey ?? visit.url ?? visit.pageTitle ?? ''
+      const key = `${visit.domain} ${pageIdentity}`
+      let entry = byPage.get(key)
+      if (!entry) {
+        entry = {
+          domain: visit.domain,
+          pageTitle: null,
+          url: null,
+          canonicalBrowserId: visit.canonicalBrowserId,
+          totalSeconds: 0,
+          visitCount: 0,
+          firstSeen: visit.visitTime,
+          lastSeen: visit.visitTime,
+          topTitleMs: 0,
+        }
+        byPage.set(key, entry)
+      }
+      entry.url ??= visit.url
+      entry.totalSeconds += Math.round(creditedMs / 1000)
+      entry.visitCount += 1
+      entry.firstSeen = Math.min(entry.firstSeen, visit.visitTime)
+      entry.lastSeen = Math.max(entry.lastSeen, visit.visitTime)
+      if (visit.pageTitle && creditedMs > entry.topTitleMs) {
+        entry.pageTitle = visit.pageTitle
+        entry.topTitleMs = creditedMs
+      }
+    }
+  }
+
+  const pages = [...byPage.values()]
+    .filter((entry) => entry.totalSeconds > 0)
+    .map(({ topTitleMs: _topTitleMs, ...page }) => page)
+    .sort((a, b) => b.totalSeconds - a.totalSeconds)
+
+  // Every browser with corrected foreground time appears in the coverage
+  // report, page rows or not — a browser without tab access (zero page rows)
+  // is exactly the case the coverage note exists for.
+  const coverage: BrowserPageCoverage[] = []
+  for (const summary of getCorrectedAppSummariesForRange(db, fromMs, toMs)) {
+    const key = summary.canonicalAppId ?? summary.bundleId
+    const isBrowser = summary.category === 'browsing' || coveredMsByBrowser.has(key)
+    if (!isBrowser || summary.totalSeconds <= 0) continue
+    coverage.push({
+      canonicalBrowserId: key,
+      appName: summary.appName,
+      foregroundSeconds: summary.totalSeconds,
+      pageCoveredSeconds: Math.round((coveredMsByBrowser.get(key) ?? 0) / 1000),
+    })
+  }
+  coverage.sort((a, b) => b.foregroundSeconds - a.foregroundSeconds)
+
+  return { pages, coverage }
+}
+
+function formatHoursMinutes(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds))
+  const hours = Math.floor(total / 3600)
+  const minutes = Math.round((total % 3600) / 60)
+  if (hours === 0) return `${minutes}m`
+  return `${hours}h ${String(minutes).padStart(2, '0')}m`
+}
+
+// Coverage thresholds: only a material shortfall earns a note — page detail
+// under half the browser's foreground time AND at least 15 missing minutes.
+const COVERAGE_NOTE_MIN_FOREGROUND_SEC = 30 * 60
+const COVERAGE_NOTE_MIN_GAP_SEC = 15 * 60
+
+/** True when a browser's page detail explains materially less time than the
+ *  browser itself verifiably had in the foreground (limited tab access). */
+export function hasMaterialPageCoverageShortfall(entry: BrowserPageCoverage): boolean {
+  if (entry.foregroundSeconds < COVERAGE_NOTE_MIN_FOREGROUND_SEC) return false
+  if (entry.foregroundSeconds - entry.pageCoveredSeconds < COVERAGE_NOTE_MIN_GAP_SEC) return false
+  return entry.pageCoveredSeconds * 2 < entry.foregroundSeconds
+}
+
+export function browserPageCoverageNoteText(entry: BrowserPageCoverage): string {
+  return `${entry.appName} was foreground ${formatHoursMinutes(entry.foregroundSeconds)}; `
+    + `page-level detail covers ${formatHoursMinutes(entry.pageCoveredSeconds)} — `
+    + `page tracking for this browser is limited, so app time is the trustworthy total.`
+}
+
+/** Honest reconciliation notes for browsers with a material page-coverage
+ *  shortfall (e.g. Dia). One sentence per browser, ready for a tool result or
+ *  the context packet. */
+export function browserPageCoverageNotes(coverage: readonly BrowserPageCoverage[]): string[] {
+  return coverage.filter(hasMaterialPageCoverageShortfall).map(browserPageCoverageNoteText)
 }
 
 export interface CorrectedPeakHoursResult {
