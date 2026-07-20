@@ -12,6 +12,7 @@ import {
   type CommandSurfaceAction,
 } from '../../lib/commandSurface'
 import ConnectAI from '../../components/ConnectAI'
+import { ContextPacketInspector } from '../../components/ContextPacketInspector'
 import { consumePendingChatSeed } from '../../lib/aiSeed'
 import { AICompose, type AIComposeHandle } from './AICompose'
 import { ConversationSidebar } from './ConversationSidebar'
@@ -103,6 +104,17 @@ export default function AIWorkspace() {
       const next = !collapsed
       try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, next ? '1' : '0') } catch { /* ignore */ }
       return next
+    })
+  }, [])
+
+  // "What the AI saw" (DEV-183): which exchange's recorded context packet the
+  // inspector is open on. Opened from the citation chips or the per-answer
+  // affordance; the inspector itself is read-only.
+  const [inspectTarget, setInspectTarget] = useState<{ packetId: string | null; messageId: number | null } | null>(null)
+  const openPacketInspector = useCallback((message: ThreadMessage) => {
+    setInspectTarget({
+      packetId: message.agent?.contextPacketId ?? null,
+      messageId: typeof message.id === 'number' ? message.id : null,
     })
   }, [])
 
@@ -579,11 +591,19 @@ export default function AIWorkspace() {
                 onUndoActionWidget={undoActionWidget}
                 onDismissActionWidget={dismissActionWidget}
                 onFollowUpClick={onFollowUpClick}
+                onInspectPacket={openPacketInspector}
                 scrollToBottom={scrollToBottom}
                 hasEarlier={hasEarlierMessages}
                 loadingEarlier={loadingEarlier}
                 onLoadEarlier={onLoadEarlier}
               />
+              {inspectTarget && (
+                <ContextPacketInspector
+                  packetId={inspectTarget.packetId}
+                  messageId={inspectTarget.messageId}
+                  onClose={() => setInspectTarget(null)}
+                />
+              )}
               {agentQuestion && (
                 <AgentQuestionCard
                   question={agentQuestion}
