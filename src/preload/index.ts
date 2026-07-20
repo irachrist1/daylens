@@ -33,6 +33,8 @@ import type {
   BillingAccessSnapshot,
   ConnectorListing,
   HistoryExportPlan,
+  ScreenContextBacklogFrame,
+  ScreenContextStatus,
   HistoryExportProgress,
   HistoryExportRunResult,
   HistoryExportVerification,
@@ -523,6 +525,28 @@ const api = {
     // receives the ConnectorListing projection — never credentials, cursors,
     // or paths. Lifecycle IPC arrives with the first connectable provider.
     list: (): Promise<ConnectorListing[]> => ipcRenderer.invoke(IPC.CONNECTORS.LIST),
+  },
+  screenContext: {
+    // DEV-198: the screen-context experiment surface. Status, the explicit
+    // consent decision, pause/resume, revoke, backlog with Retry/Delete, the
+    // per-source deletion offers, and the full wipe. All local-only.
+    status: (): Promise<ScreenContextStatus> => ipcRenderer.invoke(IPC.SCREEN_CONTEXT.STATUS),
+    enable: (): Promise<{ ok: boolean; reason: string | null; status: ScreenContextStatus }> =>
+      ipcRenderer.invoke(IPC.SCREEN_CONTEXT.ENABLE),
+    setPaused: (paused: boolean): Promise<{ ok: boolean; reason: string | null; status: ScreenContextStatus }> =>
+      ipcRenderer.invoke(IPC.SCREEN_CONTEXT.SET_PAUSED, paused),
+    revoke: (payload: { wipeEverything?: boolean } = {}): Promise<{ ok: boolean; reason: string | null; status: ScreenContextStatus }> =>
+      ipcRenderer.invoke(IPC.SCREEN_CONTEXT.REVOKE, payload),
+    listBacklog: (): Promise<{ frames: ScreenContextBacklogFrame[]; totals: { frames: number; bytes: number } }> =>
+      ipcRenderer.invoke(IPC.SCREEN_CONTEXT.LIST_BACKLOG),
+    retryFrame: (frameId: string): Promise<{ ok: boolean; reason: string | null }> =>
+      ipcRenderer.invoke(IPC.SCREEN_CONTEXT.RETRY_FRAME, frameId),
+    deleteFrame: (frameId: string): Promise<{ ok: boolean; reason: string | null }> =>
+      ipcRenderer.invoke(IPC.SCREEN_CONTEXT.DELETE_FRAME, frameId),
+    deleteForSource: (source: string): Promise<{ ok: boolean; deleted: number }> =>
+      ipcRenderer.invoke(IPC.SCREEN_CONTEXT.DELETE_FOR_SOURCE, source),
+    wipe: (): Promise<{ ok: boolean; deleted: number }> =>
+      ipcRenderer.invoke(IPC.SCREEN_CONTEXT.WIPE),
   },
   export: {
     // DEV-196: full-history export. Plans, progress, and verification reports

@@ -135,6 +135,7 @@ import { startExternalSignalCollection, stopExternalSignalCollection } from './s
 import { startConnectorSyncSchedule, stopConnectorSyncSchedule } from './connectors/service'
 import { registerConnectorHandlers } from './ipc/connectors.handlers'
 import { registerExportHandlers } from './ipc/export.handlers'
+import { registerScreenContextHandlers } from './ipc/screenContext.handlers'
 import { getLinuxDesktopDiagnostics, syncLinuxLaunchOnLogin } from './services/linuxDesktop'
 import {
   performUninstallCleanup,
@@ -1309,6 +1310,7 @@ app.whenReady()
     registerNotificationHandlers()
     registerConnectorHandlers()
     registerExportHandlers()
+    registerScreenContextHandlers()
 
     // IPC: renderer drains any pending notification-route the main process
     // queued before the renderer's listener was attached.
