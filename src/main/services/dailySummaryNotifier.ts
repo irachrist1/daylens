@@ -19,6 +19,7 @@ import {
   setDailySummaryNavigationWindow,
 } from './dailySummaryNavigation'
 import { deliverNotification } from './notificationDelivery'
+import { getNotificationPermissionState } from './notificationPermissions'
 
 import {
   decideDailySummary,
@@ -157,6 +158,19 @@ function secondsTrackedInWeekEnding(anchorDate: string): number {
   return total
 }
 
+// Notification consent (briefs.md): no brief fires before the person has
+// consented to notifications in onboarding. Consent means onboarding is done
+// AND the OS permission is granted — on macOS 'not-determined' is "not asked
+// yet", which is not consent; on other platforms a supported notification
+// system reports 'granted'. Delivery has its own denied-block; this gate
+// keeps a brief from even being decided (and from spending an AI call)
+// before consent exists.
+function briefsConsented(): boolean {
+  const settings = getSettings()
+  if (!(settings.onboardingComplete ?? false)) return false
+  return getNotificationPermissionState() === 'granted'
+}
+
 // Activity-free notification text (briefs.md §Notification content and
 // privacy): the person can choose lock-screen-safe copy that names no
 // activity at all — without losing the brief. The gate still runs the full
@@ -196,6 +210,7 @@ async function checkDailySummary(): Promise<void> {
     state,
     todaySecondsTracked: secondsTrackedOn(today),
     dailySummaryEnabled: settings.dailySummaryEnabled ?? true,
+    notificationsConsented: briefsConsented(),
     todayDateString: today,
     eveningWrapHour: windows.eveningWrapHour,
   })
@@ -256,6 +271,7 @@ async function checkYesterdayRecap(): Promise<void> {
     state,
     yesterdaySecondsTracked: secondsTrackedOn(yesterday),
     morningNudgeEnabled: settings.morningNudgeEnabled ?? true,
+    notificationsConsented: briefsConsented(),
     todayDateString: today,
     yesterdayDateString: yesterday,
     morningStartHour: windows.morningStartHour,
@@ -330,6 +346,7 @@ async function checkWeeklyBrief(): Promise<void> {
     state,
     weekSecondsTracked: secondsTrackedInWeekEnding(anchor),
     weeklyBriefEnabled: settings.weeklyBriefEnabled ?? true,
+    notificationsConsented: briefsConsented(),
     weekAnchorDate: anchor,
     morningStartHour: windows.morningStartHour,
     morningEndHour: windows.morningEndHour,

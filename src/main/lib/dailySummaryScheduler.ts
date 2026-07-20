@@ -142,12 +142,17 @@ export interface DailySummaryDecisionInput {
   state: DailyNotifierState
   todaySecondsTracked: number
   dailySummaryEnabled: boolean
+  /** Notification consent (briefs.md): no brief fires before the person has
+   *  consented to notifications — onboarding done AND the OS permission
+   *  granted. The notifier computes this once per check. */
+  notificationsConsented: boolean
   todayDateString: string
   /** Earliest hour the wrap may fire; defaults to the standard 18:00. */
   eveningWrapHour?: number
 }
 
 export function decideDailySummary(input: DailySummaryDecisionInput): SchedulerDecision {
+  if (!input.notificationsConsented) return { fire: false, reason: 'no-notification-consent' }
   if (!input.dailySummaryEnabled) return { fire: false, reason: 'disabled' }
   if (input.state.lastDailySummaryDate === input.todayDateString) {
     return { fire: false, reason: 'already-fired-today' }
@@ -169,6 +174,8 @@ export interface YesterdayRecapDecisionInput {
   state: DailyNotifierState
   yesterdaySecondsTracked: number
   morningNudgeEnabled: boolean
+  /** Notification consent — see DailySummaryDecisionInput. */
+  notificationsConsented: boolean
   todayDateString: string
   yesterdayDateString: string
   /** Morning-recap window; defaults to the standard 05:00–noon. */
@@ -177,6 +184,7 @@ export interface YesterdayRecapDecisionInput {
 }
 
 export function decideYesterdayRecap(input: YesterdayRecapDecisionInput): SchedulerDecision {
+  if (!input.notificationsConsented) return { fire: false, reason: 'no-notification-consent' }
   if (!input.morningNudgeEnabled) return { fire: false, reason: 'disabled' }
   if (input.state.lastYesterdayRecapDate === input.todayDateString) {
     return { fire: false, reason: 'already-fired-today' }
@@ -215,6 +223,8 @@ export interface WeeklyBriefDecisionInput {
   /** Total tracked seconds across the completed week (anchor-6 … anchor). */
   weekSecondsTracked: number
   weeklyBriefEnabled: boolean
+  /** Notification consent — see DailySummaryDecisionInput. */
+  notificationsConsented: boolean
   /** The completed week's last day (yesterday when today is Monday) — the
    *  anchor date the week wrap opens on, and the once-per-week state key. */
   weekAnchorDate: string
@@ -224,6 +234,7 @@ export interface WeeklyBriefDecisionInput {
 }
 
 export function decideWeeklyBrief(input: WeeklyBriefDecisionInput): SchedulerDecision {
+  if (!input.notificationsConsented) return { fire: false, reason: 'no-notification-consent' }
   if (!input.weeklyBriefEnabled) return { fire: false, reason: 'disabled' }
   // The week boundary: local Monday. Clock changes and timezone travel resolve
   // through the same local calendar every other gate uses, so a re-crossed

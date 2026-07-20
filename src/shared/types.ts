@@ -2137,6 +2137,13 @@ export interface AppSettings {
    *  ("Your evening wrap is ready") — no activity content on the lock screen —
    *  without losing the brief itself. */
   activityFreeNotificationText?: boolean
+  /** The interpretation-agent live switch (agent-runtime-and-context.md,
+   *  DEV-206): OFF by default. Turning it on routes automatic day analysis
+   *  through the packet-based interpretation agent instead of the direct
+   *  regroup/relabel pipeline — allowed only once the offline fixture eval
+   *  (interpretationEval) passes for the packaged runtime. Until that runtime
+   *  lands, the flag is honored but the direct pipeline still runs (logged). */
+  interpretationAgentEnabled?: boolean
   distractionAlertThresholdMinutes?: number
   distractionAlertsEnabled?: boolean
   notificationPermissionState?: NotificationPermissionState

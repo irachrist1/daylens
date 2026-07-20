@@ -33,6 +33,7 @@ test('daily summary does not fire when disabled', () => {
     state: {},
     todaySecondsTracked: NOTIFY_MIN_SECONDS + 1,
     dailySummaryEnabled: false,
+    notificationsConsented: true,
     todayDateString: TODAY,
   })
   assert.deepEqual(decision, { fire: false, reason: 'disabled' })
@@ -45,6 +46,7 @@ test('daily summary does not fire before 18:00 even with enough activity', () =>
       state: {},
       todaySecondsTracked: NOTIFY_MIN_SECONDS * 4,
       dailySummaryEnabled: true,
+    notificationsConsented: true,
       todayDateString: TODAY,
     })
     assert.deepEqual(decision, { fire: false, reason: 'before-18' }, `hour=${hour}`)
@@ -57,6 +59,7 @@ test('daily summary fires at exactly 18:00 with enough activity', () => {
     state: {},
     todaySecondsTracked: NOTIFY_MIN_SECONDS,
     dailySummaryEnabled: true,
+    notificationsConsented: true,
     todayDateString: TODAY,
   })
   assert.deepEqual(decision, { fire: true, targetDate: TODAY })
@@ -68,6 +71,7 @@ test('daily summary does not fire when already fired today', () => {
     state: { lastDailySummaryDate: TODAY },
     todaySecondsTracked: NOTIFY_MIN_SECONDS * 10,
     dailySummaryEnabled: true,
+    notificationsConsented: true,
     todayDateString: TODAY,
   })
   assert.deepEqual(decision, { fire: false, reason: 'already-fired-today' })
@@ -79,6 +83,7 @@ test('daily summary fires when last fire was a different day', () => {
     state: { lastDailySummaryDate: YESTERDAY },
     todaySecondsTracked: NOTIFY_MIN_SECONDS,
     dailySummaryEnabled: true,
+    notificationsConsented: true,
     todayDateString: TODAY,
   })
   assert.deepEqual(decision, { fire: true, targetDate: TODAY })
@@ -90,6 +95,7 @@ test('daily summary does not fire with insufficient activity', () => {
     state: {},
     todaySecondsTracked: NOTIFY_MIN_SECONDS - 1,
     dailySummaryEnabled: true,
+    notificationsConsented: true,
     todayDateString: TODAY,
   })
   assert.deepEqual(decision, { fire: false, reason: 'insufficient-activity' })
@@ -101,6 +107,7 @@ test('daily summary fires at the exact activity threshold', () => {
     state: {},
     todaySecondsTracked: NOTIFY_MIN_SECONDS,
     dailySummaryEnabled: true,
+    notificationsConsented: true,
     todayDateString: TODAY,
   })
   assert.deepEqual(decision, { fire: true, targetDate: TODAY })
@@ -112,6 +119,7 @@ test('daily summary fires deep in the evening', () => {
     state: {},
     todaySecondsTracked: NOTIFY_MIN_SECONDS * 6,
     dailySummaryEnabled: true,
+    notificationsConsented: true,
     todayDateString: TODAY,
   })
   assert.deepEqual(decision, { fire: true, targetDate: TODAY })
@@ -122,6 +130,7 @@ test('daily summary fires deep in the evening', () => {
 const MORNING_BASE = {
   state: {},
   morningNudgeEnabled: true,
+  notificationsConsented: true,
   todayDateString: TODAY,
   yesterdayDateString: YESTERDAY,
 }
@@ -185,11 +194,11 @@ test('yesterday recap does not fire twice in one day', () => {
   assert.deepEqual(decision, { fire: false, reason: 'already-fired-today' })
 })
 
-// ─── decideWeeklyBrief (briefs.md) ───────────────────────────────────────────
+// ─── decideWeeklyBrief ────────────────────────────────────────────────────────
 // Fires at the week boundary — Monday morning — for the completed week
 // (anchored on Sunday). Missed windows skip; restarts never duplicate.
 
-// 2026-05-11 is a Monday; the completed week it recaps ends Sunday 2026-05-10.
+// The fixed test Monday; the completed week it recaps ends the Sunday before.
 const MONDAY = '2026-05-11'
 const SUNDAY_ANCHOR = '2026-05-10'
 
@@ -200,6 +209,7 @@ function mondayAt(hour: number, minute = 0): Date {
 const WEEKLY_BASE = {
   state: {} as DailyNotifierState,
   weeklyBriefEnabled: true,
+  notificationsConsented: true,
   weekAnchorDate: SUNDAY_ANCHOR,
   weekSecondsTracked: WEEKLY_NOTIFY_MIN_SECONDS,
 }
@@ -293,6 +303,93 @@ test('the weekly-brief AI attempt budget is its own kind', () => {
   assert.equal(canAttemptAiNarrative(state, 'yesterday-recap', SUNDAY_ANCHOR, t0 + 6 * 3_600_000), true)
 })
 
+// ─── Notification consent (briefs.md: no brief before consent) ───────────────
+
+test('no brief fires before notification consent — all three kinds', () => {
+  assert.deepEqual(
+    decideDailySummary({
+      now: at(20),
+      state: {},
+      todaySecondsTracked: NOTIFY_MIN_SECONDS * 4,
+      dailySummaryEnabled: true,
+      notificationsConsented: false,
+      todayDateString: TODAY,
+    }),
+    { fire: false, reason: 'no-notification-consent' },
+  )
+  assert.deepEqual(
+    decideYesterdayRecap({
+      ...MORNING_BASE,
+      now: at(9),
+      yesterdaySecondsTracked: NOTIFY_MIN_SECONDS * 4,
+      notificationsConsented: false,
+    }),
+    { fire: false, reason: 'no-notification-consent' },
+  )
+  assert.deepEqual(
+    decideWeeklyBrief({ ...WEEKLY_BASE, now: mondayAt(9), notificationsConsented: false }),
+    { fire: false, reason: 'no-notification-consent' },
+  )
+})
+
+// ─── Clock changes and timezone travel never duplicate or misfire ────────────
+// State is keyed by the LOCAL date (day) / completed-week anchor (week), so a
+// clock rolled back across the window boundary on the same local date, or a
+// timezone hop that re-enters the window, can only ever hit the
+// already-fired gate — never a second notification for the same period.
+
+test('a clock rolled back across the window on the same date cannot refire any brief', () => {
+  // Evening: fired at 19:00, clocks moved back to 18:05 the same date.
+  assert.deepEqual(
+    decideDailySummary({
+      now: at(18, 5),
+      state: { lastDailySummaryDate: TODAY },
+      todaySecondsTracked: NOTIFY_MIN_SECONDS * 4,
+      dailySummaryEnabled: true,
+      notificationsConsented: true,
+      todayDateString: TODAY,
+    }),
+    { fire: false, reason: 'already-fired-today' },
+  )
+  // Morning: fired at 09:00, clocks moved back to 06:00 the same date.
+  assert.deepEqual(
+    decideYesterdayRecap({
+      ...MORNING_BASE,
+      now: at(6),
+      state: { lastYesterdayRecapDate: TODAY },
+      yesterdaySecondsTracked: NOTIFY_MIN_SECONDS * 4,
+    }),
+    { fire: false, reason: 'already-fired-today' },
+  )
+  // Weekly: fired Monday 08:00, clocks moved back into the window again.
+  assert.deepEqual(
+    decideWeeklyBrief({
+      ...WEEKLY_BASE,
+      now: mondayAt(5, 30),
+      state: { lastWeeklyBriefAnchor: SUNDAY_ANCHOR },
+    }),
+    { fire: false, reason: 'already-fired-this-week' },
+  )
+})
+
+test('timezone travel to a new local date only fires inside that date\'s own window', () => {
+  // Landing where it is already past noon: the morning window is over —
+  // skipped, never delivered late into an unrelated part of the day.
+  assert.deepEqual(
+    decideYesterdayRecap({
+      ...MORNING_BASE,
+      now: at(14),
+      yesterdaySecondsTracked: NOTIFY_MIN_SECONDS * 4,
+    }),
+    { fire: false, reason: 'after-noon' },
+  )
+  // Landing where it is not yet Monday morning: holds until the window.
+  assert.deepEqual(
+    decideWeeklyBrief({ ...WEEKLY_BASE, now: mondayAt(3) }),
+    { fire: false, reason: 'before-5' },
+  )
+})
+
 // ─── The carryover nudge is removed ─────────────────────────────────────────
 // Removed with the brief rebuild, not migrated: the scheduler exposes no
 // carryover decision, no carryover window, and no carryover state.
@@ -314,6 +411,7 @@ test('once fired, the same call does not fire again until state resets', () => {
     state,
     todaySecondsTracked: NOTIFY_MIN_SECONDS,
     dailySummaryEnabled: true,
+    notificationsConsented: true,
     todayDateString: TODAY,
   })
   assert.equal(firstDecision.fire, true)
@@ -324,6 +422,7 @@ test('once fired, the same call does not fire again until state resets', () => {
     state,
     todaySecondsTracked: NOTIFY_MIN_SECONDS * 2,
     dailySummaryEnabled: true,
+    notificationsConsented: true,
     todayDateString: TODAY,
   })
   assert.deepEqual(secondDecision, { fire: false, reason: 'already-fired-today' })

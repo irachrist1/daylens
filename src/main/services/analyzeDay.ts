@@ -22,6 +22,8 @@ import { generateWorkBlockInsight, generateDayRegroupPlan } from './ai'
 import { absenceSpannedBy, formatAbsenceRange, partitionAtRealAbsences } from '../lib/absenceGuard'
 import { buildDaySnapshot } from '../lib/daySnapshot'
 import { appendDayAnalysisVersion } from '../db/dayAnalysisVersions'
+import { interpretationAgentEnabled } from '../lib/interpretationEval'
+import { getSettings } from './settings'
 
 export type BlockInsightTrigger = 'user' | 'background' | 'system'
 
@@ -97,6 +99,16 @@ export async function analyzeTimelineDay(
   const userHint = deps.userHint?.trim() || undefined
   const resolveLiveSession = deps.resolveLiveSession ?? (() => null)
   const triggerSource = deps.triggerSource ?? 'user'
+
+  // The interpretation-agent live switch (DEV-206): OFF by default, and gated
+  // on the offline fixture eval (lib/interpretationEval). The packet-based
+  // runtime is not wired yet, so an early flip is honored honestly: say so
+  // and run the direct pipeline — never silently pretend the agent ran.
+  try {
+    if (interpretationAgentEnabled(getSettings())) {
+      console.warn('[timeline] interpretationAgentEnabled is set, but the packet-based interpretation runtime is not wired yet; running the direct regroup/relabel pipeline')
+    }
+  } catch { /* settings unavailable in some harnesses — the direct pipeline is the default either way */ }
   // The models that actually wrote this run's regroup plan and relabels —
   // recorded on the analysis version row (DEV-206) so an old analysis stays
   // attributable to the model and prompt that produced it.
@@ -283,6 +295,22 @@ export async function analyzeTimelineDay(
             .filter((block) => !block.isLive)
             .slice(0, 30)
             .map((block) => block.label.current.slice(0, 80)),
+          // Versioned inference (agent-runtime spec): each proposed piece of
+          // understanding with its source evidence refs and confidence, so an
+          // old version answers "what did it claim, from what, how surely".
+          inferences: refreshed.blocks
+            .filter((block) => !block.isLive)
+            .slice(0, 30)
+            .map((block) => ({
+              blockId: block.id,
+              label: block.label.current.slice(0, 80),
+              labelSource: block.label.source,
+              confidence: block.label.confidence,
+              evidenceSessionIds: block.sessions
+                .map((session) => session.id)
+                .filter((id) => id >= 0)
+                .slice(0, 12),
+            })),
         },
       })
     } catch (versionError) {
