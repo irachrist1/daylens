@@ -73,11 +73,13 @@ test('real-world range queries aggregate the same day payload inputs', () => {
   assert.equal(appTotals.get('Zoom'), 1_800)
 
   const websites = getWebsiteSummariesForRange(db, fromMs, toMs)
+  // react.dev holds 10:16–10:35: its stored 18 minutes plus the corroborated
+  // fill of Chrome's foreground minute until the GitHub navigation.
   assert.deepEqual(
     websites.map((site) => [site.domain, site.totalSeconds]),
     [
       ['youtube.com', 1_800],
-      ['react.dev', 1_080],
+      ['react.dev', 1_140],
       ['github.com', 600],
     ],
   )

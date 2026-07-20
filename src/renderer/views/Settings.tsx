@@ -987,6 +987,30 @@ function CaptureHealthContent({
                 control={<StatusPill label={captureHealth.captureHelperRunning ? 'Running' : 'Not running'} tone={captureHealth.captureHelperRunning ? 'success' : 'warning'} />}
               />
             )}
+            {platform === 'darwin' && captureHealth.displays && (
+              <SettingsRow
+                title="Full-screen and second displays"
+                description={
+                  captureHealth.displays.status === 'unavailable'
+                    ? 'No display-visibility samples yet — a full-screen app on another monitor would currently be invisible to capture. This fills in once the capture helper is running.'
+                    : captureHealth.displays.status === 'visible'
+                      ? `A full-screen app is visible right now (${captureHealth.displays.distinctDisplays} display${captureHealth.displays.distinctDisplays === 1 ? '' : 's'} watched). That time counts as visible/playing, separately from what you're typing in.`
+                      : `Watching ${captureHealth.displays.distinctDisplays} display${captureHealth.displays.distinctDisplays === 1 ? '' : 's'} — nothing is full-screen at the moment.`
+                }
+                control={
+                  <StatusPill
+                    label={
+                      captureHealth.displays.status === 'unavailable'
+                        ? 'No signal'
+                        : captureHealth.displays.status === 'visible'
+                          ? 'Visible'
+                          : 'Watching'
+                    }
+                    tone={captureHealth.displays.status === 'unavailable' ? 'warning' : 'success'}
+                  />
+                }
+              />
+            )}
           </div>
         </details>
       </div>

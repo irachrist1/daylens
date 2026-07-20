@@ -13,7 +13,7 @@ import {
   clearCategoryOverride,
   getCategoryOverrides,
 } from '../db/queries'
-import { getNativeCaptureTitleStats } from '../db/focusEventRepository'
+import { getDisplayVisibilityStats, getNativeCaptureTitleStats } from '../db/focusEventRepository'
 import {
   getWorkMemoryProfile,
   updateWorkMemoryFact,
@@ -1023,6 +1023,22 @@ export function registerDbHandlers(): void {
     const browserStatus = getBrowserStatus()
     const captureHelperRunning = process.platform === 'win32' ? isWindowsFocusCaptureRunning() : null
 
+    // Second-monitor / full-screen visibility health (macOS stream). Counts
+    // only — the honest answer to "can Daylens see my other display?".
+    const displayStats = process.platform === 'darwin' ? getDisplayVisibilityStats(db, since) : null
+    const displays = displayStats
+      ? {
+          status: displayStats.recentSamples === 0
+            ? 'unavailable' as const
+            : displayStats.samplesWithApp > 0
+              ? 'visible' as const
+              : 'none' as const,
+          recentSamples: displayStats.recentSamples,
+          distinctDisplays: displayStats.distinctDisplays,
+          lastSampleAt: displayStats.lastSampleAtMs,
+        }
+      : undefined
+
     return {
       platform: process.platform,
       trackingStatus: { ...trackingStatus },
@@ -1044,6 +1060,7 @@ export function registerDbHandlers(): void {
           safariHistoryAccess: browserStatus.safariHistoryAccess,
         },
         captureHelperRunning,
+        displays,
         rejectedEvents: getCaptureEventRejections(),
       },
       linuxTracking: getLinuxTrackingDiagnostics(),

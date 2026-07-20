@@ -2828,15 +2828,147 @@ const migrations: Migration[] = [
       `)
     },
   },
+  // v57 is intentionally skipped: it was reserved for the app-identity twin
+  // dedupe (#22), but v58 shipped on main first and runMigrations() filters on
+  // MAX(applied version) — a database already at v58 would never gap-fill a
+  // later-added v57. The dedupe therefore landed as v59 below.
   {
-    version: 57,
+    version: 58,
     description:
-      'Same app, one entity (#22 / DEV-224): the poll capture backend keyed apps by executable path when the active-window module reported no bundle id, while macOS focus events keyed the same install by its CFBundleIdentifier — one install became two app_identities rows and two entities. Resolve each path-keyed identity to its real bundle id via the installed bundle\'s Info.plist, link the rows through canonical_app_id, merge twin entities through the reversible merge machinery (user renames and prior explicit merges outrank), and stamp the unified id onto historical app_sessions so Apps/Timeline group one app. Identities that no longer resolve are left for the Needs-attention review — display names alone never merge.',
+      'Per-display visibility evidence (#21 part 2): admit the cg_display_visibility adapter and its display_visible_changed / display_visible_sampled events into canonical focus_events, with a display_id column so a full-screen app on a second monitor is evidence, not a blind spot',
+    up: () => {
+      const db = getDb()
+      db.exec(`
+        CREATE TABLE focus_events_v58 (
+          id                INTEGER PRIMARY KEY AUTOINCREMENT,
+          evidence_id       TEXT    NOT NULL DEFAULT (lower(hex(randomblob(16)))) UNIQUE,
+          ts_ms             INTEGER NOT NULL,
+          mono_ns           INTEGER NOT NULL,
+          event_type        TEXT    NOT NULL CHECK(event_type IN (
+            'app_activated',
+            'app_deactivated',
+            'window_changed',
+            'space_changed',
+            'sleep',
+            'wake',
+            'lock',
+            'unlock',
+            'idle_started',
+            'idle_ended',
+            'capture_started',
+            'capture_stopped',
+            'capture_paused',
+            'capture_resumed',
+            'capture_failed',
+            'capture_recovered',
+            'tab_changed',
+            'tab_sampled',
+            'display_visible_changed',
+            'display_visible_sampled'
+          )),
+          app_bundle_id     TEXT,
+          app_name          TEXT,
+          pid               INTEGER,
+          window_title      TEXT,
+          url               TEXT,
+          page_title        TEXT,
+          source            TEXT    NOT NULL CHECK(source IN (
+            'nsworkspace_event',
+            'apple_events_tab',
+            'uia_foreground',
+            'uia_tab',
+            'capture_supervisor',
+            'foreground_poll',
+            'cg_display_visibility'
+          )),
+          confidence        TEXT    NOT NULL CHECK(confidence IN ('observed', 'corroborated', 'inferred', 'unknown')),
+          platform          TEXT    NOT NULL DEFAULT 'darwin',
+          display_id        INTEGER,
+          sensitivity       TEXT    NOT NULL DEFAULT 'standard' CHECK(sensitivity IN ('standard', 'personal', 'high')),
+          provenance_method TEXT    NOT NULL DEFAULT 'unknown',
+          permission_scope  TEXT    NOT NULL DEFAULT 'unknown',
+          policy_version    INTEGER NOT NULL DEFAULT 0,
+          schema_ver        INTEGER NOT NULL DEFAULT 2 CHECK(schema_ver = 2),
+          CHECK(confidence <> 'unknown' OR (url IS NULL AND page_title IS NULL)),
+          CHECK(source NOT IN ('nsworkspace_event', 'uia_foreground', 'foreground_poll', 'cg_display_visibility') OR (url IS NULL AND page_title IS NULL)),
+          CHECK(source NOT IN ('apple_events_tab', 'uia_tab') OR confidence <> 'observed' OR url IS NOT NULL),
+          CHECK(source NOT IN ('apple_events_tab', 'uia_tab') OR event_type IN ('tab_changed', 'tab_sampled')),
+          CHECK(source NOT IN ('nsworkspace_event', 'uia_foreground', 'foreground_poll') OR event_type IN (
+            'app_activated',
+            'app_deactivated',
+            'window_changed',
+            'space_changed',
+            'sleep',
+            'wake',
+            'lock',
+            'unlock'
+          )),
+          CHECK(source <> 'capture_supervisor' OR event_type IN (
+            'idle_started',
+            'idle_ended',
+            'capture_started',
+            'capture_stopped',
+            'capture_paused',
+            'capture_resumed',
+            'capture_failed',
+            'capture_recovered'
+          )),
+          CHECK(event_type NOT IN (
+            'idle_started',
+            'idle_ended',
+            'capture_started',
+            'capture_stopped',
+            'capture_paused',
+            'capture_resumed',
+            'capture_failed',
+            'capture_recovered'
+          ) OR source = 'capture_supervisor'),
+          CHECK(source <> 'capture_supervisor' OR (
+            app_bundle_id IS NULL AND app_name IS NULL AND window_title IS NULL
+            AND url IS NULL AND page_title IS NULL
+          )),
+          CHECK(source <> 'cg_display_visibility' OR event_type IN ('display_visible_changed', 'display_visible_sampled')),
+          CHECK(event_type NOT IN ('display_visible_changed', 'display_visible_sampled') OR source = 'cg_display_visibility'),
+          CHECK(source <> 'cg_display_visibility' OR display_id IS NOT NULL),
+          CHECK(source = 'cg_display_visibility' OR display_id IS NULL)
+        );
+
+        INSERT INTO focus_events_v58 (
+          id, evidence_id, ts_ms, mono_ns, event_type, app_bundle_id, app_name, pid,
+          window_title, url, page_title, source, confidence, platform,
+          sensitivity, provenance_method, permission_scope, policy_version, schema_ver
+        )
+        SELECT
+          id, evidence_id, ts_ms, mono_ns, event_type, app_bundle_id, app_name, pid,
+          window_title, url, page_title, source, confidence, platform,
+          sensitivity, provenance_method, permission_scope, policy_version, schema_ver
+        FROM focus_events
+        ORDER BY id;
+
+        DROP TABLE focus_events;
+        ALTER TABLE focus_events_v58 RENAME TO focus_events;
+
+        CREATE UNIQUE INDEX idx_focus_events_identity ON focus_events (
+          source, event_type, ts_ms, mono_ns,
+          COALESCE(app_bundle_id, ''), COALESCE(app_name, ''),
+          COALESCE(pid, -1), COALESCE(window_title, ''), COALESCE(url, ''),
+          COALESCE(page_title, ''), COALESCE(display_id, -1), confidence, platform
+        );
+        CREATE INDEX IF NOT EXISTS idx_focus_events_ts ON focus_events(ts_ms);
+        CREATE INDEX IF NOT EXISTS idx_focus_events_type ON focus_events(event_type);
+        CREATE INDEX IF NOT EXISTS idx_focus_events_platform ON focus_events(platform);
+      `)
+    },
+  },
+  {
+    version: 59,
+    description:
+      'Same app, one entity (#22 / DEV-224): the poll capture backend keyed apps by executable path when the active-window module reported no bundle id, while macOS focus events keyed the same install by its CFBundleIdentifier — one install became two app_identities rows and two entities. Resolve each path-keyed identity to its real bundle id via the installed bundle\'s Info.plist, link the rows through canonical_app_id, merge twin entities through the reversible merge machinery (user renames and prior explicit merges outrank), and stamp the unified id onto historical app_sessions so Apps/Timeline group one app. Identities that no longer resolve are left for the Needs-attention review — display names alone never merge. (Numbered v59, not the reserved v57: v58 shipped first and the runner never revisits versions below MAX(applied).)',
     up: () => {
       const result = dedupeAppIdentityTwins(getDb(), macBundleIdentifierForExecutablePath)
       if (result.pathIdentitiesResolved > 0) {
         console.log(
-          `[migrations:v57] unified ${result.pathIdentitiesResolved} path-keyed app identit${result.pathIdentitiesResolved === 1 ? 'y' : 'ies'}: `
+          `[migrations:v59] unified ${result.pathIdentitiesResolved} path-keyed app identit${result.pathIdentitiesResolved === 1 ? 'y' : 'ies'}: `
           + `${result.entitiesMerged} entit${result.entitiesMerged === 1 ? 'y' : 'ies'} merged, `
           + `${result.entitiesRekeyed} re-keyed, `
           + `${result.sessionsRestamped} session row${result.sessionsRestamped === 1 ? '' : 's'} restamped`,

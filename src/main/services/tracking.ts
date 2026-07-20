@@ -35,7 +35,7 @@ import { isCategoryFocused } from '../lib/focusScore'
 import { resolveCanonicalApp } from '../lib/appIdentity'
 import { stripBrowserUrlFromTitle } from '@shared/aiSanitize'
 import { localDateString, localDayBounds } from '../lib/localDate'
-import { looksLikePassivePresenceSession } from '../lib/passivePresence'
+import { passivePresenceHoldKind, READING_HOLD_MAX_SEC, type PassiveHoldKind } from '../lib/passivePresence'
 import { capture, captureException, captureRateLimited, captureTrackingPauseTransition } from './analytics'
 import { resolveLinuxDesktopIdentity } from './linuxDesktop'
 import { flushActiveBrowserContext, recordActiveBrowserContextSample } from './browserContext'
@@ -76,6 +76,7 @@ interface InFlightSession {
   startTime: number
   category: AppCategory
   passivePresence: boolean
+  passiveHold?: PassiveHoldKind | null
   windowTitles?: { title: string | null; ticks: number }[]
   // Set when the session's start was stamped from the true input time on a
   // return from away/provisional_idle. Lets the MIN_SESSION_SEC floor log why a
@@ -1233,12 +1234,26 @@ function isDaylensSelfIdentity(bundleId: string, appName: string, rawAppName?: s
   return false
 }
 
-// A watched video, a live call, or an online class is presence, not idle. See
-// `passivePresence.ts`. Held open through a no-input stretch so a 2-hour Meet
-// class is not flushed away at the 5-minute idle cutoff; a real walk-away still
-// ends on screen sleep/lock.
+// A watched video, a live call, an online class, or a long course/reading page
+// is presence, not idle. See `passivePresence.ts`. Held open through a no-input
+// stretch so a 2-hour Meet class or a Coursera morning is not flushed away at
+// the 5-minute idle cutoff. 'media' holds are open-ended (playback proves
+// presence) and end at the lock/sleep event itself; 'reading' holds are bounded
+// by READING_HOLD_MAX_SEC and end back at the last real input, because reading
+// cannot prove the user stayed.
+function sessionPassiveHoldKind(session: InFlightSession): PassiveHoldKind | null {
+  return passivePresenceHoldKind(session)
+}
+
 function looksLikePassiveMediaSession(session: InFlightSession): boolean {
-  return looksLikePassivePresenceSession(session)
+  return sessionPassiveHoldKind(session) === 'media'
+}
+
+// Whether a no-input stretch of `idleSec` should keep the session open.
+function passiveHoldActive(session: InFlightSession, idleSec: number): boolean {
+  const kind = sessionPassiveHoldKind(session)
+  if (kind === 'media') return true
+  return kind === 'reading' && idleSec < READING_HOLD_MAX_SEC
 }
 
 function trackedForegroundSessionExclusionReason(
@@ -1773,13 +1788,14 @@ async function poll(): Promise<void> {
     // ── Idle detection ───────────────────────────────────────────────────────
     const idleSec = getIdleSeconds()
     if (idleSec >= AWAY_THRESHOLD_SEC) {
-      if (currentSession && looksLikePassiveMediaSession(currentSession)) {
+      if (currentSession && passiveHoldActive(currentSession, idleSec)) {
+        const holdKind = sessionPassiveHoldKind(currentSession)
         if (idleState === 'active') {
           provisionalIdleStart = nowMs() - Math.round(idleSec) * 1_000
           idleState = 'provisional_idle'
-          provisionalIdleEventId = recordActivityEvent('idle_start', { idleSeconds: Math.round(idleSec), heldForMediaPlayback: true })
+          provisionalIdleEventId = recordActivityEvent('idle_start', { idleSeconds: Math.round(idleSec), heldForMediaPlayback: true, holdKind })
           provisionalIdleHeldForMedia = true
-          console.log(`[tracking] idle ${Math.round(idleSec)}s during media playback — session held open`)
+          console.log(`[tracking] idle ${Math.round(idleSec)}s during passive ${holdKind} presence — session held open`)
         } else if (idleState === 'provisional_idle' && !provisionalIdleHeldForMedia) {
           // Production reaches the away threshold via provisional_idle (the
           // 2-minute branch below fires first), so the plain idle_start is
@@ -1789,13 +1805,13 @@ async function poll(): Promise<void> {
             if (provisionalIdleEventId != null) {
               markActivityStateEventHeldForMediaPlayback(getDb(), provisionalIdleEventId)
             } else {
-              provisionalIdleEventId = recordActivityEvent('idle_start', { idleSeconds: Math.round(idleSec), heldForMediaPlayback: true }, provisionalIdleStart ?? undefined)
+              provisionalIdleEventId = recordActivityEvent('idle_start', { idleSeconds: Math.round(idleSec), heldForMediaPlayback: true, holdKind }, provisionalIdleStart ?? undefined)
             }
             provisionalIdleHeldForMedia = true
           } catch (err) {
-            console.warn('[tracking] failed to mark idle_start as media hold:', err)
+            console.warn('[tracking] failed to mark idle_start as passive-presence hold:', err)
           }
-          console.log(`[tracking] idle ${Math.round(idleSec)}s during media playback — provisional idle upgraded to media hold`)
+          console.log(`[tracking] idle ${Math.round(idleSec)}s during passive ${holdKind} presence — provisional idle upgraded to hold`)
         }
       } else {
         if (idleState !== 'away' && currentSession) {
@@ -1910,7 +1926,7 @@ async function poll(): Promise<void> {
       // capture is exactly what the evidence contract forbids on Linux.
       if (!win && support?.supportLevel === 'unsupported') {
         flushActiveBrowserContext(getDb())
-        if (currentSession) currentSession.passivePresence = false
+        if (currentSession) { currentSession.passivePresence = false; currentSession.passiveHold = null }
         setPollHealth(support.supportMessage)
         trackingStatus.lastRawWindow = null
         trackingStatus.lastResolvedWindow = null
@@ -1923,7 +1939,7 @@ async function poll(): Promise<void> {
         backend = win ? 'focus_events' : backend
         if (!win) {
           flushActiveBrowserContext(getDb())
-          if (currentSession) currentSession.passivePresence = false
+          if (currentSession) { currentSession.passivePresence = false; currentSession.passiveHold = null }
           return
         }
       }
@@ -1949,7 +1965,7 @@ async function poll(): Promise<void> {
             backend = 'focus_events'
           } else {
             flushActiveBrowserContext(getDb())
-            if (currentSession) currentSession.passivePresence = false
+            if (currentSession) { currentSession.passivePresence = false; currentSession.passiveHold = null }
             setPollHealth(formatError(err))
             captureRateLimited(ANALYTICS_EVENT.TRACKING_ENGINE_HEALTH, 'tracking:get-active-window', {
               failure_kind: classifyFailureKind(err),
@@ -1965,7 +1981,7 @@ async function poll(): Promise<void> {
 
     if (!win) {
       flushActiveBrowserContext(getDb())
-      if (currentSession) currentSession.passivePresence = false
+      if (currentSession) { currentSession.passivePresence = false; currentSession.passiveHold = null }
       setPollHealth(null)
       trackingStatus.lastRawWindow = null
       trackingStatus.lastResolvedWindow = null
@@ -2108,6 +2124,12 @@ async function poll(): Promise<void> {
       return
     }
 
+    // Unverifiable window mode (capture spec, private-window rule): only
+    // browser identity and timing may persist. The raw title stays available
+    // above for incognito detection and exclusion checks, but nothing past
+    // this point may store it — not the session, not focus events.
+    const persistedWindowTitle = browserSample.windowModeUnverified ? null : resolvedWindowTitle
+
     // Consume the one-shot return-from-idle signal set earlier this poll. It
     // applies only to a session that starts on this same poll; anything that
     // doesn't start a session (excluded/noise apps returned above, or a session
@@ -2135,7 +2157,7 @@ async function poll(): Promise<void> {
       currentSession = {
         bundleId,
         appName: identity.displayName,
-        windowTitle: resolvedWindowTitle,
+        windowTitle: persistedWindowTitle,
         rawAppName: appName,
         canonicalAppId: identity.canonicalAppId,
         appInstanceId: identity.appInstanceId,
@@ -2145,8 +2167,9 @@ async function poll(): Promise<void> {
         startTime: startedAt,
         category,
         passivePresence: browserSample.passivePresence,
+        passiveHold: browserSample.passiveHold ?? null,
         bornOnIdleReturn,
-        windowTitles: [{ title: resolvedWindowTitle, ticks: 1 }],
+        windowTitles: [{ title: persistedWindowTitle, ticks: 1 }],
       }
       // Canonical mirror of this observation. Daylens' own windows are
       // rejected before persistence on the legacy path (flush time); reject
@@ -2154,7 +2177,7 @@ async function poll(): Promise<void> {
       if (!trackedForegroundSessionExclusionReason({
         bundleId,
         appName: identity.displayName,
-        windowTitle: resolvedWindowTitle,
+        windowTitle: persistedWindowTitle,
         rawAppName: appName,
         executablePath: resolvedWin.path?.trim() || null,
       })) {
@@ -2163,7 +2186,7 @@ async function poll(): Promise<void> {
           bundleId,
           appName: identity.displayName,
           pid: resolvedWin.pid ?? null,
-          windowTitle: resolvedWindowTitle,
+          windowTitle: persistedWindowTitle,
         }, trackingPlatform())
       }
       upsertAppIdentityObservation(getDb(), {
@@ -2182,11 +2205,11 @@ async function poll(): Promise<void> {
     } else {
       // A title change is visible-context evidence; it never adds time. Emit
       // only on a real change so per-tick sampling stays out of the store.
-      if (currentSession.windowTitle !== resolvedWindowTitle
+      if (currentSession.windowTitle !== persistedWindowTitle
         && !trackedForegroundSessionExclusionReason({
           bundleId,
           appName: currentSession.appName,
-          windowTitle: resolvedWindowTitle,
+          windowTitle: persistedWindowTitle,
           rawAppName: currentSession.rawAppName,
           executablePath: resolvedWin.path?.trim() || null,
         })) {
@@ -2195,19 +2218,20 @@ async function poll(): Promise<void> {
           bundleId,
           appName: currentSession.appName,
           pid: resolvedWin.pid ?? null,
-          windowTitle: resolvedWindowTitle,
+          windowTitle: persistedWindowTitle,
         }, trackingPlatform())
       }
-      currentSession.windowTitle = resolvedWindowTitle
+      currentSession.windowTitle = persistedWindowTitle
       currentSession.passivePresence = browserSample.passivePresence
+      currentSession.passiveHold = browserSample.passiveHold ?? null
       if (!currentSession.windowTitles) {
-        currentSession.windowTitles = [{ title: resolvedWindowTitle, ticks: 1 }]
+        currentSession.windowTitles = [{ title: persistedWindowTitle, ticks: 1 }]
       } else {
-        const existing = currentSession.windowTitles.find((t) => t.title === resolvedWindowTitle)
+        const existing = currentSession.windowTitles.find((t) => t.title === persistedWindowTitle)
         if (existing) {
           existing.ticks++
         } else {
-          currentSession.windowTitles.push({ title: resolvedWindowTitle, ticks: 1 })
+          currentSession.windowTitles.push({ title: persistedWindowTitle, ticks: 1 })
         }
       }
       persistLiveSnapshot()
@@ -2217,7 +2241,7 @@ async function poll(): Promise<void> {
       idleSec >= AWAY_THRESHOLD_SEC
       && idleState === 'provisional_idle'
       && currentSession
-      && !looksLikePassiveMediaSession(currentSession)
+      && !passiveHoldActive(currentSession, idleSec)
     ) {
       flushCurrent(nowMs(), 'away')
       flushActiveBrowserContext(getDb(), nowMs())

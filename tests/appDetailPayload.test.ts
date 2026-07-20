@@ -115,27 +115,32 @@ test('browser detail reconciles overlapping visits into deduped pages under thei
   const activity = detail.browserActivity
   assert.ok(activity, 'a browser app must carry browserActivity')
 
-  // The two overlapping YouTube visits (raw 1200s + 600s) claim disjoint
-  // slices of Safari's hour — 1200s together, never 1800s. That was the whole
-  // bug: raw sums let a background tab outgrow the browser itself.
+  // The overlapping YouTube visits claim disjoint slices of Safari's hour —
+  // never each other's seconds. That was the whole bug: raw sums let a
+  // background tab outgrow the browser itself. As history-sourced visits they
+  // also fill forward: the first video owns its two minutes until the second
+  // video's navigation, and the second — the last recorded navigation — fills
+  // Safari's remaining foreground time.
   const youtube = activity.domains.find((d) => d.domain === 'youtube.com')
   assert.ok(youtube)
-  assert.equal(youtube.totalSeconds, 1200)
+  assert.equal(youtube.totalSeconds, 3360)
   assert.equal(youtube.pages.length, 2)
   const youtubeUrls = youtube.pages.map((p) => p.normalizedUrl).sort()
   assert.deepEqual(youtubeUrls, [youtubeUrl, secondYoutubeUrl].sort())
 
-  // The repeated GitHub visit dedupes into one page carrying both visits.
+  // The repeated GitHub visit dedupes into one page carrying both visits,
+  // each filling only up to the next recorded navigation.
   const github = activity.domains.find((d) => d.domain === 'github.com')
   assert.ok(github)
   assert.equal(github.pages.length, 1)
   assert.equal(github.pages[0].visitCount, 2)
-  assert.equal(github.totalSeconds, 120)
+  assert.equal(github.totalSeconds, 240)
 
-  // The full hour reconciles: 1320s attributed + 2280s with no page recorded.
+  // The full hour reconciles exactly — every foreground second belongs to
+  // exactly one page, and pages never exceed the browser's own hour.
   assert.equal(activity.totalSeconds, 3600)
-  assert.equal(activity.attributedSeconds, 1320)
-  assert.equal(activity.unattributedSeconds, 2280)
+  assert.equal(activity.attributedSeconds, 3600)
+  assert.equal(activity.unattributedSeconds, 0)
   db.close()
 })
 

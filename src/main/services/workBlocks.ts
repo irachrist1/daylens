@@ -79,6 +79,7 @@ import { isBrowserApplication } from './browserRegistry'
 import { getBackgroundProcessEvidence } from './backgroundProcessEvidence'
 import { filterExcludedWebsiteSummaries, getCorrectedWebsiteSummariesForRange } from './activityFacts'
 import { queryCorrectedActivityFactsForRange } from '../core/query/activityFactsQuery'
+import { getSecondaryDisplayVisibleSpansForRange } from '../core/projections/displayVisibility'
 
 /**
  * Sanitize a label that might be a raw file path or bundle path.
@@ -5677,6 +5678,11 @@ export function getTimelineDayPayload(
   const blocks = builtBlocks.filter(isTrustedTimelineBlock)
   const focusSessions = getFocusSessionsForDateRange(db, fromMs, toMs)
   const segments = buildSegmentsForDay(db, dateStr, blocks, [fromMs, toMs])
+  // What secondary displays showed while focus was elsewhere (full-screen
+  // course on monitor 2 during Notion on monitor 1). Presence evidence with
+  // its own honest label — deliberately NOT added to totalSeconds/blocks,
+  // which stay input-focused foreground truth.
+  const secondaryDisplay = getSecondaryDisplayVisibleSpansForRange(db, fromMs, toMs, sessions)
   // Invariant 7: the blocks are the canonical day facts. Every downstream
   // total (Timeline, Apps, AI, recap) reads this same partition instead of
   // independently summing raw sessions.
@@ -5703,6 +5709,7 @@ export function getTimelineDayPayload(
     focusPct: totalSeconds > 0 ? Math.round((focusSeconds / totalSeconds) * 100) : 0,
     appCount: new Set(sessions.map((session) => session.bundleId)).size,
     siteCount: websites.length,
+    secondaryDisplay,
   }
 }
 

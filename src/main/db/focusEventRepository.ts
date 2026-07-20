@@ -17,6 +17,7 @@ import { recordCaptureEventRejection } from '../lib/captureRejections'
 export interface StoredFocusEvent extends FocusEvent {
   id: number
   evidence_id: string
+  display_id: number | null
   sensitivity: EvidenceSensitivity
   provenance_method: string
   permission_scope: string
@@ -37,17 +38,17 @@ export interface InsertFocusEventsResult {
 const INSERT_FOCUS_EVENT = `
   INSERT OR IGNORE INTO focus_events
     (evidence_id, ts_ms, mono_ns, event_type, app_bundle_id, app_name, pid, window_title,
-     url, page_title, source, confidence, platform, sensitivity,
+     url, page_title, source, confidence, platform, display_id, sensitivity,
      provenance_method, permission_scope, policy_version, schema_ver)
   VALUES
     (@evidence_id, @ts_ms, @mono_ns, @event_type, @app_bundle_id, @app_name, @pid, @window_title,
-     @url, @page_title, @source, @confidence, @platform, @sensitivity,
+     @url, @page_title, @source, @confidence, @platform, @display_id, @sensitivity,
      @provenance_method, @permission_scope, @policy_version, @schema_ver)
 `
 
 const STORED_COLUMNS = `
   id, evidence_id, ts_ms, mono_ns, event_type, app_bundle_id, app_name, pid,
-  window_title, url, page_title, source, confidence, platform, sensitivity,
+  window_title, url, page_title, source, confidence, platform, display_id, sensitivity,
   provenance_method, permission_scope, policy_version, schema_ver
 `
 
@@ -68,6 +69,7 @@ function canonicalRow(event: FocusEventInsert): StoredFocusEvent {
     source: event.source,
     confidence: event.confidence,
     platform: event.platform,
+    display_id: event.display_id ?? null,
     sensitivity: event.sensitivity ?? 'standard',
     provenance_method: event.provenance_method ?? provenance.method,
     permission_scope: event.permission_scope ?? provenance.permissionScope,
@@ -205,6 +207,62 @@ export function getNativeCaptureTitleStats(
   }
 }
 
+/** Display-visibility samples plus the machine-state boundaries that bound
+ *  them, chronological. The projection needs both in one ordered stream so a
+ *  sleep or lock closes a visible span exactly where it happened. */
+export function listDisplayVisibilityEventsInRange(
+  db: Database.Database,
+  fromMs: number,
+  toMs: number,
+): StoredFocusEvent[] {
+  return db.prepare(`
+    SELECT ${STORED_COLUMNS}
+      FROM focus_events
+     WHERE ts_ms >= ? AND ts_ms < ?
+       AND (
+         source = 'cg_display_visibility'
+         OR event_type IN ('sleep', 'lock', 'capture_stopped', 'capture_paused', 'capture_failed')
+       )
+     ORDER BY ts_ms ASC, id ASC
+  `).all(fromMs, toMs) as StoredFocusEvent[]
+}
+
+export interface DisplayVisibilityStats {
+  recentSamples: number
+  distinctDisplays: number
+  samplesWithApp: number
+  lastSampleAtMs: number | null
+}
+
+/** Capture-health counts for the per-display visibility stream. Counts only —
+ *  no app identities or titles leave the repository. */
+export function getDisplayVisibilityStats(
+  db: Database.Database,
+  sinceMs: number,
+): DisplayVisibilityStats {
+  const row = db.prepare(`
+    SELECT
+      COUNT(*) AS recent_samples,
+      COUNT(DISTINCT display_id) AS distinct_displays,
+      SUM(CASE WHEN app_bundle_id IS NOT NULL OR app_name IS NOT NULL THEN 1 ELSE 0 END) AS with_app,
+      MAX(ts_ms) AS last_sample_at
+    FROM focus_events
+    WHERE source = 'cg_display_visibility'
+      AND ts_ms >= ?
+  `).get(sinceMs) as {
+    recent_samples: number
+    distinct_displays: number | null
+    with_app: number | null
+    last_sample_at: number | null
+  }
+  return {
+    recentSamples: row.recent_samples,
+    distinctDisplays: row.distinct_displays ?? 0,
+    samplesWithApp: row.with_app ?? 0,
+    lastSampleAtMs: row.last_sample_at,
+  }
+}
+
 export interface FocusEvidencePayload {
   eventType: FocusEvent['event_type']
   appBundleId: string | null
@@ -214,6 +272,8 @@ export interface FocusEvidencePayload {
   url: string | null
   pageTitle: string | null
   platform: string
+  // Set only on display-visibility evidence: which display showed the window.
+  displayId: number | null
 }
 
 export type FocusEvidenceEnvelope = EvidenceEnvelope<FocusEvidenceKind, FocusEvidencePayload>
@@ -249,6 +309,7 @@ export function toFocusEvidenceEnvelope(
       url: row.url,
       pageTitle: row.page_title,
       platform: row.platform,
+      displayId: row.display_id ?? null,
     },
   }
 }

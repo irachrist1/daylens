@@ -23,6 +23,7 @@
 // reasoning, credentials, or security instructions — everything here comes
 // from the packet the person's own data produced (spec §Context inspection).
 import type Database from 'better-sqlite3'
+import { aggregateToolsConsulted } from '@shared/agentTrail'
 import type {
   AIThreadMessageMetadata,
   ContextPacketEvidenceState,
@@ -211,17 +212,7 @@ export function toolsConsultedForMessage(
   } catch {
     return null
   }
-  const trace = metadata.agent?.toolTrace
-  if (!Array.isArray(trace)) return null
-  const byTool = new Map<string, ContextPacketToolConsulted>()
-  for (const entry of trace) {
-    const tool = typeof entry?.tool === 'string' ? entry.tool : null
-    if (!tool) continue
-    const existing = byTool.get(tool)
-    if (existing) existing.calls += 1
-    else byTool.set(tool, { tool, calls: 1, source: tool.startsWith('mcp_') ? 'mcp' : 'daylens' })
-  }
-  return [...byTool.values()]
+  return aggregateToolsConsulted(metadata.agent?.toolTrace)
 }
 
 // ─── Assembly ────────────────────────────────────────────────────────────────

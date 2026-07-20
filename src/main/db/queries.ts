@@ -95,6 +95,12 @@ const ENGAGEMENT_RETURN_GAP_MS = 2 * 60_000
 // into the window while cutting the previous 48h over-scan by 4x.
 const SESSION_OVERLAP_LOOKBACK_MS = 12 * 60 * 60 * 1000
 
+// How far a single history-corroborated visit may fill its browser's verified
+// foreground time past its stored duration when no later navigation bounds it
+// (see reconcileWebsiteVisits). Long enough for a whole morning on one course
+// page; anything beyond stays an honest "no page recorded" remainder.
+const HISTORY_FILL_MAX_MS = 4 * 60 * 60 * 1000
+
 // Columns hydrated into AppSessionRow / clipRowToRange. Selecting them
 // explicitly (instead of SELECT *) keeps these hot range reads from pulling
 // unused or future wide columns across the boundary.
@@ -3045,9 +3051,30 @@ function reconcileWebsiteVisits(
     // but contributes no active time — page totals can never exceed the
     // browser's own total). The raw path keeps the untracked-gap allowance
     // for legacy surfaces that reconcile spotty early capture.
-    const allowed = mergeIntervals(
-      foregroundSessions ? foregroundPieces : [...foregroundPieces, ...untracked],
-    )
+    const foregroundOnly = mergeIntervals(foregroundPieces)
+    const allowed = foregroundSessions
+      ? foregroundOnly
+      : mergeIntervals([...foregroundPieces, ...untracked])
+    // History-corroborated fill (capture spec: page detail attaches to an
+    // unverifiable-mode browser only via its own non-private history, and an
+    // active page interval is clipped to its owning foreground interval). A
+    // history row's stored duration is a navigation-gap guess — a browser
+    // whose tabs can't be read live (Dia) records ONE row for a two-hour
+    // single-page stay, so summing stored durations loses the morning. The
+    // last known page in a browser may instead fill that browser's own
+    // verified foreground time until the next recorded navigation, bounded by
+    // HISTORY_FILL_MAX_MS. Live active-tab samples still claim their seconds
+    // first, so this only fills time no better evidence owns.
+    const ascendingHistory = [...browserVisits].sort((a, b) => a.visit_time - b.visit_time || a.id - b.id)
+    const historyFillEnd = new Map<number, number>()
+    for (let index = 0; index < ascendingHistory.length; index++) {
+      const visit = ascendingHistory[index]
+      if (visit.source === 'active_browser_context') continue
+      const storedEndMs = visit.visit_time + visit.duration_sec * 1000
+      const nextStartMs = ascendingHistory[index + 1]?.visit_time ?? Number.POSITIVE_INFINITY
+      const fillEnd = Math.min(nextStartMs, storedEndMs + HISTORY_FILL_MAX_MS)
+      if (fillEnd > storedEndMs) historyFillEnd.set(visit.id, fillEnd)
+    }
     // The observed active tab beats a history record; among equals the later
     // navigation supersedes the earlier one.
     const ordered = [...browserVisits].sort((a, b) => {
@@ -3066,7 +3093,8 @@ function reconcileWebsiteVisits(
     for (const visit of ordered) {
       const start = Math.max(visit.visit_time, fromMs)
       const end = Math.min(visit.visit_time + visit.duration_sec * 1000, toMs)
-      if (end <= start) {
+      const fillEnd = Math.min(historyFillEnd.get(visit.id) ?? end, toMs)
+      if (end <= start && fillEnd <= start) {
         credits.push({ visit, freeIntervals: [] })
         continue
       }
@@ -3076,6 +3104,18 @@ function reconcileWebsiteVisits(
         const overlapStart = Math.max(start, window.start)
         const overlapEnd = Math.min(end, window.end)
         if (overlapEnd > overlapStart) clipped.push({ start: overlapStart, end: overlapEnd })
+      }
+      // The fill window past the stored duration clips to verified foreground
+      // time only — never to untracked gaps, which would invent activity
+      // inside an honest capture hole.
+      if (fillEnd > Math.max(end, start)) {
+        const fillStart = Math.max(end, start)
+        for (const window of foregroundOnly) {
+          const overlapStart = Math.max(fillStart, window.start)
+          const overlapEnd = Math.min(fillEnd, window.end)
+          if (overlapEnd > overlapStart) clipped.push({ start: overlapStart, end: overlapEnd })
+        }
+        clipped.sort((a, b) => a.start - b.start)
       }
       const free: { start: number; end: number }[] = []
       for (const piece of clipped) {
@@ -3337,8 +3377,11 @@ export function getReconciledWebsiteVisitsForRange(
   db: Database.Database,
   fromMs: number,
   toMs: number,
+  // Corrected-read callers pass shared-query sessions so page credit clips to
+  // the same foreground ownership their app totals are built from.
+  foregroundSessions?: readonly AppSession[],
 ): ReconciledPageVisit[] {
-  return reconcileWebsiteVisits(db, fromMs, toMs).map(({ visit, freeIntervals }) => ({
+  return reconcileWebsiteVisits(db, fromMs, toMs, undefined, foregroundSessions).map(({ visit, freeIntervals }) => ({
     visit: {
       id: visit.id,
       domain: visit.domain,

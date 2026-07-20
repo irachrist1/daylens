@@ -31,6 +31,9 @@ struct FocusEvent: Encodable {
   let confidence: String
   let platform: String
   let schema_ver: Int
+  // Present only on cg_display_visibility events (synthesized Encodable omits
+  // a nil optional, so every other event keeps its existing wire shape).
+  var display_id: Int? = nil
 }
 
 let encoder = JSONEncoder()
@@ -223,6 +226,190 @@ func axFocusedWindowTitle(pid: pid_t) -> String? {
   let t = titleRef as? String
   // Empty in full-screen is a successful read of a genuinely empty title -> NULL.
   return (t?.isEmpty ?? true) ? nil : t
+}
+
+// MARK: per-display visibility (main thread only)
+//
+// The frontmost stream above answers "what owns input focus". This sampler
+// answers a different question: "what does each display SHOW" — so a
+// full-screen course or video on a second monitor is evidence even while the
+// user types elsewhere. Deliberately narrow: per display, only the identity
+// of the top window that occupies (effectively) the whole display is read via
+// CGWindowListCopyWindowInfo. Never a general enumeration of open windows.
+//
+// Titles degrade honestly with permissions: kCGWindowName needs Screen
+// Recording; without it we try the Accessibility full-screen window title;
+// without that the title is NULL — identity only, never a guess.
+//
+// Gated behind DAYLENS_CAPTURE_DISPLAY_VISIBILITY so an older app that does
+// not understand display_visible_* events never receives them.
+
+let displayVisibilityEnabled =
+  ProcessInfo.processInfo.environment["DAYLENS_CAPTURE_DISPLAY_VISIBILITY"] == "1"
+let DISPLAY_POLL_SECONDS = 5.0
+let DISPLAY_HEARTBEAT_NS: UInt64 = 10_000_000_000
+// Identity-free "still watching this display, nothing full-screen" proof so
+// capture health can tell 'stream healthy, nothing to report' apart from
+// 'stream dead'. Content-free by construction.
+let DISPLAY_IDLE_HEARTBEAT_NS: UInt64 = 300_000_000_000
+let DISPLAY_COVERAGE_THRESHOLD: CGFloat = 0.9
+
+struct DisplayVisibleState {
+  var key: String
+  var lastEmitMono: UInt64
+}
+var displayVisible: [CGDirectDisplayID: DisplayVisibleState] = [:]
+var displaySamplingSuspended = false
+
+func axFullScreenWindowTitle(pid: pid_t) -> String? {
+  let appElem = AXUIElementCreateApplication(pid)
+  var winsRef: CFTypeRef?
+  guard AXUIElementCopyAttributeValue(appElem, "AXWindows" as CFString, &winsRef) == .success,
+        let wins = winsRef as? [AXUIElement] else { return nil }
+  for win in wins {
+    var fsRef: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(win, "AXFullScreen" as CFString, &fsRef) == .success,
+          (fsRef as? Bool) == true else { continue }
+    var titleRef: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(win, kAXTitleAttribute as CFString, &titleRef) == .success,
+          let t = titleRef as? String, !t.isEmpty else { continue }
+    return t
+  }
+  return nil
+}
+
+struct DisplayVisibleWindow {
+  let pid: pid_t
+  let ownerName: String?
+  let title: String?
+}
+
+struct DisplaySample {
+  let displays: [CGDirectDisplayID]
+  let byDisplay: [CGDirectDisplayID: DisplayVisibleWindow]
+}
+
+// Topmost layer-0 window covering >= DISPLAY_COVERAGE_THRESHOLD of a display.
+// CGWindowListCopyWindowInfo returns windows front-to-back, so the first
+// match per display is the one the person actually sees.
+func visibleFullScreenWindowsByDisplay() -> DisplaySample {
+  var result: [CGDirectDisplayID: DisplayVisibleWindow] = [:]
+
+  var displayCount: UInt32 = 0
+  guard CGGetActiveDisplayList(0, nil, &displayCount) == .success, displayCount > 0 else {
+    return DisplaySample(displays: [], byDisplay: [:])
+  }
+  var displays = [CGDirectDisplayID](repeating: 0, count: Int(displayCount))
+  guard CGGetActiveDisplayList(displayCount, &displays, &displayCount) == .success else {
+    return DisplaySample(displays: [], byDisplay: [:])
+  }
+
+  guard let info = CGWindowListCopyWindowInfo(
+    [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+    return DisplaySample(displays: displays, byDisplay: [:])
+  }
+
+  let selfPid = ProcessInfo.processInfo.processIdentifier
+  for window in info {
+    guard (window[kCGWindowLayer as String] as? Int) == 0 else { continue }
+    if let alpha = window[kCGWindowAlpha as String] as? Double, alpha <= 0 { continue }
+    guard let ownerPid = window[kCGWindowOwnerPID as String] as? Int, ownerPid != Int(selfPid) else { continue }
+    guard let boundsDict = window[kCGWindowBounds as String] as? NSDictionary,
+          let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary) else { continue }
+
+    for display in displays where result[display] == nil {
+      let frame = CGDisplayBounds(display)
+      let displayArea = frame.width * frame.height
+      guard displayArea > 0 else { continue }
+      let overlap = bounds.intersection(frame)
+      guard !overlap.isNull else { continue }
+      let coverage = (overlap.width * overlap.height) / displayArea
+      if coverage >= DISPLAY_COVERAGE_THRESHOLD {
+        result[display] = DisplayVisibleWindow(
+          pid: pid_t(ownerPid),
+          ownerName: window[kCGWindowOwnerName as String] as? String,
+          // kCGWindowName is present only with Screen Recording permission.
+          title: (window[kCGWindowName as String] as? String).flatMap { $0.isEmpty ? nil : $0 })
+      }
+    }
+    if result.count == displays.count { break }
+  }
+  return DisplaySample(displays: displays, byDisplay: result)
+}
+
+func emitDisplayVisible(_ type: String, display: CGDirectDisplayID,
+                        pid: pid_t?, name: String?, bundle: String?, title: String?) {
+  emit(FocusEvent(
+    ts_ms: wallMs(), mono_ns: monoNow(), event_type: type,
+    app_bundle_id: bundle, app_name: name, pid: pid.map { Int($0) },
+    window_title: title, url: nil, page_title: nil,
+    source: "cg_display_visibility", confidence: "observed",
+    platform: "darwin", schema_ver: 1,
+    display_id: Int(display)))
+}
+
+func sampleDisplayVisibility() {
+  guard !displaySamplingSuspended else { return }
+  let now = monoNow()
+  let sample = visibleFullScreenWindowsByDisplay()
+  let active = Set(sample.displays)
+
+  // A display that vanished (unplugged) closes its span with an identity-free
+  // change event.
+  for (display, state) in displayVisible where !active.contains(display) {
+    if state.key != "" {
+      emitDisplayVisible("display_visible_changed", display: display,
+                         pid: nil, name: nil, bundle: nil, title: nil)
+    }
+    displayVisible.removeValue(forKey: display)
+  }
+
+  for display in sample.displays {
+    guard let window = sample.byDisplay[display] else {
+      // Nothing occupies this display. Emit an identity-free change when a
+      // span was open (or on first sighting, so downstream health knows the
+      // display is watched), then a sparse identity-free heartbeat.
+      if let state = displayVisible[display] {
+        if state.key != "" {
+          emitDisplayVisible("display_visible_changed", display: display,
+                             pid: nil, name: nil, bundle: nil, title: nil)
+          displayVisible[display] = DisplayVisibleState(key: "", lastEmitMono: now)
+        } else if now - state.lastEmitMono >= DISPLAY_IDLE_HEARTBEAT_NS {
+          emitDisplayVisible("display_visible_sampled", display: display,
+                             pid: nil, name: nil, bundle: nil, title: nil)
+          displayVisible[display] = DisplayVisibleState(key: "", lastEmitMono: now)
+        }
+      } else {
+        emitDisplayVisible("display_visible_changed", display: display,
+                           pid: nil, name: nil, bundle: nil, title: nil)
+        displayVisible[display] = DisplayVisibleState(key: "", lastEmitMono: now)
+      }
+      continue
+    }
+
+    let app = NSRunningApplication(processIdentifier: window.pid)
+    let bundle = app?.bundleIdentifier
+    let name = app?.localizedName ?? window.ownerName
+    let title = window.title ?? axFullScreenWindowTitle(pid: window.pid)
+    let key = "\(window.pid)|\(bundle ?? name ?? "")"
+
+    if let state = displayVisible[display], state.key == key {
+      if now - state.lastEmitMono >= DISPLAY_HEARTBEAT_NS {
+        emitDisplayVisible("display_visible_sampled", display: display,
+                           pid: window.pid, name: name, bundle: bundle, title: title)
+        displayVisible[display] = DisplayVisibleState(key: key, lastEmitMono: now)
+      }
+      continue
+    }
+    emitDisplayVisible("display_visible_changed", display: display,
+                       pid: window.pid, name: name, bundle: bundle, title: title)
+    displayVisible[display] = DisplayVisibleState(key: key, lastEmitMono: now)
+  }
+}
+
+func pollDisplayVisibility() {
+  sampleDisplayVisibility()
+  DispatchQueue.main.asyncAfter(deadline: .now() + DISPLAY_POLL_SECONDS) { pollDisplayVisibility() }
 }
 
 // MARK: automation permission
@@ -595,19 +782,27 @@ func pollFocusedWindowTitle() {
   DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { pollFocusedWindowTitle() }
 }
 
+// Sleep/lock close every open visibility span downstream (the projection cuts
+// at the machine-state event); suspending the sampler and dropping its state
+// means nothing is emitted for a lock screen and the first post-wake sample
+// re-opens spans with fresh change events.
 wsNc.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { _ in
   emitSystem("sleep"); tabQueue.async { stopPolling() }
+  displaySamplingSuspended = true; displayVisible.removeAll()
 }
 wsNc.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
   emitSystem("wake")
+  displaySamplingSuspended = false
 }
 
 let dnc = DistributedNotificationCenter.default()
 dnc.addObserver(forName: Notification.Name("com.apple.screenIsLocked"), object: nil, queue: .main) { _ in
   emitSystem("lock"); tabQueue.async { stopPolling() }
+  displaySamplingSuspended = true; displayVisible.removeAll()
 }
 dnc.addObserver(forName: Notification.Name("com.apple.screenIsUnlocked"), object: nil, queue: .main) { _ in
   emitSystem("unlock")
+  displaySamplingSuspended = false
 }
 
 // Exit cleanly when the parent process closes our stdin pipe.
@@ -629,5 +824,15 @@ if isBrowser(seed.pid, seed.bundle) {
 }
 pollFocusedWindowTitle()
 
-logErr("started (ax_trusted=\(AXIsProcessTrusted()))")
+if displayVisibilityEnabled {
+  // Identity (owner pid/app) needs no permission; full-screen titles need
+  // Screen Recording (kCGWindowName) or Accessibility (AX fallback). Preflight
+  // only — never prompt from a background helper.
+  if !CGPreflightScreenCaptureAccess() {
+    logErr("display visibility: screen recording not granted; full-screen titles fall back to accessibility or NULL")
+  }
+  pollDisplayVisibility()
+}
+
+logErr("started (ax_trusted=\(AXIsProcessTrusted()) display_visibility=\(displayVisibilityEnabled))")
 nsApp.run()

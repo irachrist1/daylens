@@ -9,7 +9,7 @@
 // Covered here:
 //   - mint-time unification: both backends reporting the same install produce
 //     ONE identity and ONE entity (through the real poll FSM),
-//   - the v57 dedupe: path-keyed twins collapse onto their bundle-keyed
+//   - the v59 dedupe: path-keyed twins collapse onto their bundle-keyed
 //     counterpart through the reversible merge machinery; user renames and
 //     prior explicit merges outrank; equivalence is ONLY the resolved
 //     bundle-id/path mapping — never a shared display name,
@@ -203,7 +203,7 @@ test('without bundle resolution the path fallback still stands (last resort, and
   }
 })
 
-// ─── The dedupe (migration v57 body) ─────────────────────────────────────────
+// ─── The dedupe (migration v59 body) ─────────────────────────────────────────
 
 const RESOLVER_MAP: Record<string, string> = {
   [TRAYCER_PATH]: TRAYCER_BUNDLE,

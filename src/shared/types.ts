@@ -348,6 +348,22 @@ interface TimelineBlockSegment {
 
 export type TimelineSegment = TimelineBlockSegment | TimelineGapSegment
 
+// An app that was full-screen-visible on a display while input focus lived
+// elsewhere (e.g. a course playing on monitor 2 while notes were typed on
+// monitor 1). presence is the honesty label: this is visible/playing time,
+// NOT input-focused foreground time — it never adds to totalSeconds, and any
+// surface that reports it must say what it is. Time where the same app also
+// owned focus is already subtracted, so a minute is never counted twice.
+export interface SecondaryDisplayVisibleSpan {
+  displayId: number
+  bundleId: string | null
+  appName: string | null
+  windowTitle: string | null
+  startTime: number
+  endTime: number
+  presence: 'visible'
+}
+
 export interface DayTimelinePayload {
   date: string
   sessions: AppSession[]
@@ -362,6 +378,9 @@ export interface DayTimelinePayload {
   focusPct: number
   appCount: number
   siteCount: number
+  // Additive: what secondary displays showed while focus was elsewhere.
+  // Absent on payloads that predate multi-display capture.
+  secondaryDisplay?: SecondaryDisplayVisibleSpan[]
 }
 
 export type HistoryDayPayload = DayTimelinePayload
@@ -762,12 +781,28 @@ export interface AISurfaceSummary {
   stale?: boolean
 }
 
+/** One step of the live activity trail while an agent turn runs. `id` is
+ *  stable per tool call, so the renderer settles an active row in place when
+ *  its result (or failure) arrives. `label` is always a short human one-liner
+ *  — never raw tool arguments, payloads, or file paths. */
+export type AIAgentStepState = 'active' | 'done' | 'failed'
+
+export interface AIAgentStep {
+  id: string
+  label: string
+  state: AIAgentStepState
+  startedAt: number
+}
+
 export interface AIChatStreamEvent {
   requestId: string
   delta: string
   snapshot: string
   /** Short human status line while the agent works ("Searching for…"). */
   status?: string
+  /** Structured step for the live activity trail. Rides alongside `status`,
+   *  which stays populated for consumers of the plain status line. */
+  step?: AIAgentStep
 }
 
 /** The agent's one clarifying question, pushed to the renderer. */
@@ -907,7 +942,7 @@ export interface ContextPacketListEntry {
 export interface AIThreadMessageMetadata {
   /** Agent-turn evidence: which tools ran and what they returned. */
   agent?: {
-    toolTrace: Array<{ tool: string; input: unknown; output: string }>
+    toolTrace: Array<{ tool: string; input: unknown; output: string; failed?: boolean }>
     stepCount: number
     groundingRetried: boolean
     fileDisclosures?: AIMessageFileDisclosure[]
@@ -2289,6 +2324,16 @@ export interface TrackingDiagnosticsPayload {
       safariHistoryAccess: SafariHistoryAccessStatus
     }
     captureHelperRunning?: boolean | null
+    // Per-display visibility stream health (macOS). Counts only — no app
+    // names, titles, or identities. 'visible' = a display currently shows a
+    // full-screen app; 'none' = the stream reports but nothing is full-screen;
+    // 'unavailable' = no samples (helper too old, not running, or not macOS).
+    displays?: {
+      status: 'visible' | 'none' | 'unavailable'
+      recentSamples: number
+      distinctDisplays: number
+      lastSampleAt: number | null
+    }
     // Events dropped before persistence (malformed payloads, unsupported
     // schema versions), keyed by adapter. Counts only — never event content.
     rejectedEvents?: Record<string, { total: number; byReason: Record<string, number> }>
