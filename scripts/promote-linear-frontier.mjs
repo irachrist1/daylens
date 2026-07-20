@@ -89,7 +89,17 @@ export function createLinearClient(apiKey, fetchImpl = fetch) {
     })
 
     if (!response.ok) {
-      throw new Error(`Linear API request failed with HTTP ${response.status}`)
+      let detail = ''
+      try {
+        detail = (await response.text()).slice(0, 500)
+      } catch {
+        // Body unavailable; the status code alone will have to do.
+      }
+      const error = new Error(
+        `Linear API request failed with HTTP ${response.status}${detail ? `: ${detail}` : ''}`,
+      )
+      error.status = response.status
+      throw error
     }
 
     const payload = await response.json()
@@ -104,18 +114,72 @@ export function createLinearClient(apiKey, fetchImpl = fetch) {
   }
 }
 
+export async function verifyLinearAuth(request) {
+  let data
+  try {
+    data = await request('query AuthCheck { viewer { id } }')
+  } catch (error) {
+    if (error?.status === 401) {
+      throw new Error(
+        'Linear rejected LINEAR_API_KEY (HTTP 401): the key is missing, malformed, or revoked. Rotate the repository secret.',
+      )
+    }
+    throw new Error(
+      `Linear auth check failed before promotion started: ${error instanceof Error ? error.message : error}`,
+    )
+  }
+  if (!data.viewer?.id) throw new Error('Linear auth check returned no viewer')
+}
+
+async function fetchRemainingInverseRelations(request, issue) {
+  const query = `
+    query IssueInverseRelations($issueId: String!, $after: String) {
+      issue(id: $issueId) {
+        inverseRelations(first: 50, after: $after) {
+          nodes {
+            type
+            issue {
+              id
+              identifier
+              state { type }
+            }
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+        }
+      }
+    }
+  `
+
+  let { hasNextPage, endCursor } = issue.inverseRelations.pageInfo
+
+  while (hasNextPage) {
+    const data = await request(query, { issueId: issue.id, after: endCursor })
+    if (!data.issue) {
+      throw new Error(`Linear issue ${issue.identifier} was not found while paging its relations`)
+    }
+    const connection = data.issue.inverseRelations
+    issue.inverseRelations.nodes.push(...connection.nodes)
+    ;({ hasNextPage, endCursor } = connection.pageInfo)
+  }
+
+  issue.inverseRelations.pageInfo = { hasNextPage: false }
+}
+
 export async function fetchProjectIssues(request, projectId) {
   const query = `
     query ProjectIssues($projectId: String!, $after: String) {
       project(id: $projectId) {
-        issues(first: 50, after: $after) {
+        issues(first: 25, after: $after) {
           nodes {
             id
             identifier
             title
             description
             state { type }
-            inverseRelations(first: 250) {
+            inverseRelations(first: 50) {
               nodes {
                 type
                 issue {
@@ -124,7 +188,10 @@ export async function fetchProjectIssues(request, projectId) {
                   state { type }
                 }
               }
-              pageInfo { hasNextPage }
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
             }
           }
           pageInfo {
@@ -142,7 +209,12 @@ export async function fetchProjectIssues(request, projectId) {
   do {
     const data = await request(query, { projectId, after })
     if (!data.project) throw new Error(`Linear project ${projectId} was not found`)
-    issues.push(...data.project.issues.nodes)
+    for (const issue of data.project.issues.nodes) {
+      if (issue.inverseRelations.pageInfo?.hasNextPage) {
+        await fetchRemainingInverseRelations(request, issue)
+      }
+      issues.push(issue)
+    }
     after = data.project.issues.pageInfo.hasNextPage ? data.project.issues.pageInfo.endCursor : null
   } while (after)
 
@@ -227,6 +299,8 @@ async function main() {
   const teamId = process.env.LINEAR_TEAM_ID
   if (!projectId) throw new Error('LINEAR_PROJECT_ID is required')
   if (!teamId) throw new Error('LINEAR_TEAM_ID is required')
+
+  await verifyLinearAuth(request)
 
   const dryRun = process.argv.includes('--dry-run')
   const issueIdentifier = readArgument('--issue')

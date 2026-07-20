@@ -228,3 +228,85 @@ test('surfaces Linear GraphQL errors from successful HTTP responses', async () =
 
   await assert.rejects(request('query', {}), /Linear API error: invalid query/)
 })
+
+test('includes the response body when Linear rejects a request', async () => {
+  const request = pipeline.createLinearClient('secret', async () => ({
+    ok: false,
+    status: 400,
+    text: async () => '{"errors":[{"message":"Query too complex to execute"}]}',
+  }))
+
+  await assert.rejects(request('query', {}), /HTTP 400: .*Query too complex to execute/)
+})
+
+test('auth check distinguishes a rejected key from other failures', async () => {
+  const unauthorized = pipeline.createLinearClient('secret', async () => ({
+    ok: false,
+    status: 401,
+    text: async () => 'Authentication required',
+  }))
+  await assert.rejects(
+    pipeline.verifyLinearAuth(unauthorized),
+    /rejected LINEAR_API_KEY \(HTTP 401\)/,
+  )
+
+  const broken = pipeline.createLinearClient('secret', async () => ({
+    ok: false,
+    status: 500,
+    text: async () => 'upstream exploded',
+  }))
+  await assert.rejects(
+    pipeline.verifyLinearAuth(broken),
+    /auth check failed.*HTTP 500.*upstream exploded/,
+  )
+
+  const healthy = async () => ({ viewer: { id: 'user-1' } })
+  await assert.doesNotReject(pipeline.verifyLinearAuth(healthy))
+})
+
+test('follows relation cursors so truncated blocker lists become complete', async () => {
+  const relationRequests: Array<{ issueId: string; after: string | null }> = []
+  const request = async (query: string, variables: Record<string, string | null>) => {
+    if (query.includes('ProjectIssues')) {
+      return {
+        project: {
+          issues: {
+            nodes: [
+              issue({
+                inverseRelations: {
+                  nodes: [
+                    {
+                      type: 'blocks',
+                      issue: { identifier: 'DEV-1', state: { type: 'completed' } },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: true, endCursor: 'cursor-1' },
+                },
+              }),
+            ],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      }
+    }
+    if (query.includes('IssueInverseRelations')) {
+      relationRequests.push({ issueId: variables.issueId as string, after: variables.after })
+      return {
+        issue: {
+          inverseRelations: {
+            nodes: [{ type: 'blocks', issue: { identifier: 'DEV-2', state: { type: 'started' } } }],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      }
+    }
+    throw new Error('Unexpected query')
+  }
+
+  const issues = await pipeline.fetchProjectIssues(request, 'project-id')
+
+  assert.deepEqual(relationRequests, [{ issueId: 'target-id', after: 'cursor-1' }])
+  assert.equal(issues[0].inverseRelations.nodes.length, 2)
+  assert.deepEqual(issues[0].inverseRelations.pageInfo, { hasNextPage: false })
+  assert.equal(pipeline.hasOpenBlockers(issues[0]), true)
+})
