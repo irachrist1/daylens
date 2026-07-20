@@ -85,6 +85,7 @@ test('active media domains produce only a privacy-safe passive-presence signal',
   assert.deepEqual(tracker.sample(db, snapshot()), {
     isPrivate: false,
     passivePresence: true,
+    passiveHold: 'media',
   })
 
   current = {

@@ -11,7 +11,7 @@ import { localDateString } from '../lib/localDate'
 import { getBrowserEntries, type BrowserEntry } from './browser'
 import { getSettings } from './settings'
 import { decideSiteCapture, detectIncognitoFromTitle, trackingControlsStateFromSettings, type CaptureBlockReason } from '@shared/trackingControls'
-import { categoryForDomain } from '@shared/domainCategories'
+import { passiveHoldKindForDomain, type PassiveHoldKind } from '@shared/domainCategories'
 import {
   resolveBrowserApplication,
   type BrowserApplication,
@@ -53,6 +53,13 @@ export type ActiveBrowserTabReader = (snapshot: ActiveBrowserWindowSnapshot) => 
 export interface ActiveBrowserContextSample {
   isPrivate: boolean
   passivePresence: boolean
+  /** Set when passivePresence is true: 'media' holds open-ended through
+   *  no-input stretches, 'reading' holds up to an explicit cap. */
+  passiveHold?: PassiveHoldKind
+  /** True when the window mode could not be verified. The caller must not
+   *  persist the window title for this foreground stretch — only browser
+   *  identity and timing survive until history corroborates the page. */
+  windowModeUnverified?: boolean
   captureBlockReason?: CaptureBlockReason
 }
 
@@ -78,14 +85,17 @@ function extractDomain(url: string): string | null {
   }
 }
 
-function passivePresenceForDomain(domain: string, snapshot: ActiveBrowserWindowSnapshot): boolean {
+function passiveHoldForDomain(domain: string, snapshot: ActiveBrowserWindowSnapshot): PassiveHoldKind | null {
   const decision = decideSiteCapture(
     trackingControlsStateFromSettings(getSettings()),
     { domain, windowTitle: snapshot.windowTitle },
   )
-  if (!decision.capture) return false
-  const category = categoryForDomain(domain)
-  return category === 'entertainment' || category === 'meetings'
+  if (!decision.capture) return null
+  return passiveHoldKindForDomain(domain)
+}
+
+function passiveSampleFields(hold: PassiveHoldKind | null): { passivePresence: boolean; passiveHold?: PassiveHoldKind } {
+  return hold ? { passivePresence: true, passiveHold: hold } : { passivePresence: false }
 }
 
 function browserAppIdFor(snapshot: ActiveBrowserWindowSnapshot): string | null {
@@ -486,7 +496,7 @@ export class ActiveBrowserContextTracker {
       const domain = cached ? extractDomain(cached.tab.url) : null
       return {
         isPrivate: false,
-        passivePresence: domain ? passivePresenceForDomain(domain, snapshot) : false,
+        ...passiveSampleFields(domain ? passiveHoldForDomain(domain, snapshot) : null),
       }
     }
 
@@ -535,7 +545,8 @@ export class ActiveBrowserContextTracker {
       this.lastWindowTitle = snapshot.windowTitle ?? null
       return {
         isPrivate: false,
-        passivePresence: passivePresenceForDomain(domain, snapshot),
+        ...passiveSampleFields(passiveHoldForDomain(domain, snapshot)),
+        windowModeUnverified: true,
       }
     }
 
@@ -545,7 +556,7 @@ export class ActiveBrowserContextTracker {
     this.observeTab(db, snapshot, tab, normalizedUrl)
     return {
       isPrivate: false,
-      passivePresence: passivePresenceForDomain(domain, snapshot),
+      ...passiveSampleFields(passiveHoldForDomain(domain, snapshot)),
     }
   }
 
