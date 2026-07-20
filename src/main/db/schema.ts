@@ -951,7 +951,7 @@ CREATE INDEX IF NOT EXISTS idx_file_disclosures_thread ON file_disclosures (thre
 -- they can never serialize into a remote payload (tests/syncAllowlist.test.ts).
 CREATE TABLE IF NOT EXISTS memory_records (
   id                TEXT PRIMARY KEY,
-  record_kind       TEXT NOT NULL CHECK(record_kind IN ('session', 'meeting', 'artifact', 'supplied_fact')),
+  record_kind       TEXT NOT NULL CHECK(record_kind IN ('session', 'meeting', 'artifact', 'supplied_fact', 'connected_activity')),
   memory_type       TEXT NOT NULL CHECK(memory_type IN ('observed', 'connected', 'supplied', 'inferred')),
   statement         TEXT NOT NULL,
   exact_text        TEXT NOT NULL DEFAULT '',

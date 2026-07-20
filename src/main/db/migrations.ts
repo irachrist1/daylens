@@ -2976,6 +2976,50 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 60,
+    description:
+      'GitHub connector (connectors.md §GitHub, DEV-191): widen the memory_records record_kind CHECK to admit connected_activity rows — the per-day projection of connector repository activity (commits, pull requests, reviews, issues) into searchable memory with connected origin. SQLite cannot alter a CHECK in place; projection rows are wiped and the table rebuilt — days re-project lazily through the fingerprint check and the background backfill. Supplied facts are re-mirrored from their canonical supplied_memory_facts store, so nothing explicitly confirmed is lost. LOCAL-ONLY, no sync-allowlist keys.',
+    up: () => {
+      const db = getDb()
+      const memoryRecordsSql = getTableSql('memory_records') ?? ''
+      if (!memoryRecordsSql || memoryRecordsSql.includes('connected_activity')) return
+      db.exec(`
+        DELETE FROM memory_record_vectors;
+        DELETE FROM memory_record_entities;
+        DELETE FROM memory_records;
+        DELETE FROM memory_index_days;
+        DROP TABLE memory_records;
+        CREATE TABLE memory_records (
+          id                TEXT PRIMARY KEY,
+          record_kind       TEXT NOT NULL CHECK(record_kind IN ('session', 'meeting', 'artifact', 'supplied_fact', 'connected_activity')),
+          memory_type       TEXT NOT NULL CHECK(memory_type IN ('observed', 'connected', 'supplied', 'inferred')),
+          statement         TEXT NOT NULL,
+          exact_text        TEXT NOT NULL DEFAULT '',
+          semantic_text     TEXT,
+          date              TEXT NOT NULL,
+          start_ms          INTEGER NOT NULL,
+          end_ms            INTEGER NOT NULL,
+          app_bundle_id     TEXT,
+          app_name          TEXT,
+          title             TEXT,
+          primary_entity_id TEXT,
+          source_refs_json  TEXT NOT NULL DEFAULT '[]',
+          confidence        TEXT NOT NULL DEFAULT 'observed',
+          provenance        TEXT NOT NULL DEFAULT 'capture',
+          sensitivity       TEXT NOT NULL DEFAULT 'standard' CHECK(sensitivity IN ('standard', 'personal', 'high')),
+          embedding_model   TEXT,
+          embedding_version INTEGER,
+          created_at        INTEGER NOT NULL,
+          deleted_at        INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_memory_records_date ON memory_records (date);
+        CREATE INDEX IF NOT EXISTS idx_memory_records_kind_start ON memory_records (record_kind, start_ms DESC);
+      `)
+      ensureMemorySearchSchema(db)
+      reconcileSuppliedMemoryRecords(db)
+    },
+  },
 ]
 
 export const LATEST_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0

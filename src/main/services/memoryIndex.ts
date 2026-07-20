@@ -36,9 +36,9 @@ import { mergeGroupIds, resolveMergeChain, type EntityRow } from './entities/ent
 
 /** Bump to force a full reindex on upgrade (the version is part of every
  *  day fingerprint, so stale-format days re-project lazily). */
-export const MEMORY_INDEX_VERSION = 1
+export const MEMORY_INDEX_VERSION = 2
 
-export type MemoryRecordKind = 'session' | 'meeting' | 'artifact'
+export type MemoryRecordKind = 'session' | 'meeting' | 'artifact' | 'connected_activity'
 
 function tableExists(db: Database.Database, name: string): boolean {
   return db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(name) != null
@@ -82,6 +82,9 @@ export function memoryIndexDayFingerprint(db: Database.Database, date: string): 
       JOIN entities e ON e.id = r.entity_id AND e.entity_type = 'meeting'
       WHERE r.span_start_ms >= ? AND r.span_start_ms < ?`, fromMs, toMs)}`,
     `art:${countAndMax(db, `SELECT COUNT(*) AS c, MAX(start_time) AS m FROM artifact_mentions WHERE start_time >= ? AND start_time < ?`, fromMs, toMs)}`,
+    `cnr:${tableExists(db, 'connector_records')
+      ? countAndMax(db, `SELECT COUNT(*) AS c, MAX(updated_at) AS m FROM connector_records WHERE date = ? AND kind = 'repository_activity'`, date)
+      : '0:0'}`,
   ]
   return parts.join('|')
 }
@@ -345,6 +348,126 @@ function artifactRecords(
   return [...byArtifact.values()]
 }
 
+// ─── Connected repository activity ───────────────────────────────────────────
+// One record per non-tombstoned connector ledger row about this day's coding
+// work (commits, pull requests, reviews, issues). The statement names the
+// provider, so search results, packets, and agent answers always show WHERE
+// the claim comes from — connected context, not observed activity.
+
+const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
+  github: 'GitHub',
+}
+
+interface ConnectedActivityEnvelope {
+  entity?: {
+    kind?: string
+    provider?: string
+    owner?: string
+    repo?: string
+    activity?: { kind?: string; title?: string; state?: string | null; actorLogin?: string | null }
+    people?: Array<{ connectorId?: string; displayName?: string }>
+  }
+}
+
+function connectedActivityStatement(
+  provider: string,
+  repoFullName: string,
+  activity: { kind?: string; title?: string; state?: string | null; actorLogin?: string | null },
+): string {
+  const title = activity.title ?? 'untitled'
+  switch (activity.kind) {
+    case 'commit':
+      return `${provider}: committed "${title}" in ${repoFullName}`
+    case 'pull_request': {
+      const verb = activity.state === 'merged' ? 'merged'
+        : activity.state === 'closed' ? 'closed'
+          : activity.state === 'draft' ? 'drafted'
+            : 'opened'
+      return `${provider}: ${verb} pull request "${title}" in ${repoFullName}`
+    }
+    case 'review': {
+      const outcome = activity.state ? ` (${activity.state})` : ''
+      return activity.actorLogin
+        ? `${provider}: review by ${activity.actorLogin} on "${title}"${outcome} in ${repoFullName}`
+        : `${provider}: reviewed "${title}"${outcome} in ${repoFullName}`
+    }
+    case 'issue': {
+      const state = activity.state ? ` (${activity.state})` : ''
+      return `${provider}: issue "${title}"${state} in ${repoFullName}`
+    }
+    default:
+      return `${provider}: activity in ${repoFullName}`
+  }
+}
+
+function connectedActivityRecords(
+  db: Database.Database,
+  date: string,
+  ignoredSpans: readonly CorrectionSpan[],
+): PendingRecord[] {
+  if (!tableExists(db, 'connector_records')) return []
+  const rows = db.prepare(`
+    SELECT id, connector_id, source_record_id, entity_id, effective_at, retrieved_at, envelope_json
+    FROM connector_records
+    WHERE date = ? AND kind = 'repository_activity' AND tombstoned_at IS NULL
+  `).all(date) as Array<{
+    id: string
+    connector_id: string
+    source_record_id: string
+    entity_id: string | null
+    effective_at: number | null
+    retrieved_at: number
+    envelope_json: string
+  }>
+  const records: PendingRecord[] = []
+  for (const row of rows) {
+    let envelope: ConnectedActivityEnvelope
+    try {
+      envelope = JSON.parse(row.envelope_json) as ConnectedActivityEnvelope
+    } catch {
+      continue
+    }
+    const entity = envelope.entity
+    if (!entity?.activity?.title || !entity.provider || !entity.repo) continue
+    const startMs = row.effective_at ?? row.retrieved_at
+    if (startsInsideSpans(startMs, ignoredSpans)) continue
+    const provider = PROVIDER_DISPLAY_NAMES[entity.provider] ?? entity.provider
+    const repoFullName = entity.owner ? `${entity.owner}/${entity.repo}` : entity.repo
+
+    const entityIds = new Set<string>()
+    if (row.entity_id) {
+      const repoEntityId = activeEntityId(db, row.entity_id)
+      if (repoEntityId) entityIds.add(repoEntityId)
+    }
+    for (const person of entity.people ?? []) {
+      if (!person.connectorId) continue
+      const personRow = db.prepare(
+        `SELECT * FROM entities WHERE entity_type = 'person' AND identity_key = ?`,
+      ).get(`connector:${person.connectorId}`) as EntityRow | undefined
+      if (!personRow) continue
+      const personId = activeEntityId(db, personRow.id)
+      if (personId) entityIds.add(personId)
+    }
+
+    records.push({
+      id: newRecordId(),
+      kind: 'connected_activity',
+      memoryType: 'connected',
+      statement: connectedActivityStatement(provider, repoFullName, entity.activity),
+      exactText: `${entity.activity.title} ${repoFullName}`,
+      startMs,
+      endMs: startMs,
+      appBundleId: null,
+      appName: null,
+      title: entity.activity.title,
+      primaryEntityId: null,
+      sourceRefs: [`connector:${row.connector_id}:${row.source_record_id}`],
+      entityIds,
+    })
+  }
+  return records
+}
+
 // ─── Index maintenance ───────────────────────────────────────────────────────
 
 export interface IndexDayResult {
@@ -362,6 +485,7 @@ export function indexMemoryForDay(db: Database.Database, date: string): IndexDay
   applyAttributionTags(db, records, fromMs, toMs)
   records.push(...meetingRecords(db, fromMs, toMs, ignoredSpans))
   records.push(...artifactRecords(db, fromMs, toMs, ignoredSpans))
+  records.push(...connectedActivityRecords(db, date, ignoredSpans))
 
   const insertRecord = db.prepare(`
     INSERT INTO memory_records (
