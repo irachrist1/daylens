@@ -1,7 +1,6 @@
 import { ipcMain } from 'electron'
 import { getDb } from '../services/database'
 import {
-  searchAll,
   searchArtifacts,
   searchBlocks,
   searchBrowser,
@@ -9,6 +8,9 @@ import {
   type SearchOptions,
 } from '../db/queries'
 import { searchNatural } from '../services/naturalSearch'
+import { searchExact } from '../services/exactSearch'
+import { ensureDayMemoryIndexed } from '../services/memoryIndex'
+import { localDateString } from '../lib/localDate'
 
 const SEARCH_CHANNELS = {
   ALL: 'search:all',
@@ -32,14 +34,25 @@ function normalizePayload(payload: { query?: string; opts?: SearchOptions } | st
   }
 }
 
+function freshenLiveDayIndex(): void {
+  try {
+    ensureDayMemoryIndexed(getDb(), localDateString())
+  } catch (error) {
+    console.error('[search] live-day index refresh failed', error)
+  }
+}
+
 export function registerSearchHandlers(): void {
+  // DEV-178: the palette's shared query is the exact retrieval path —
+  // entities (alias-aware) + corrected memory records + FTS, one ranked list.
   ipcMain.handle(SEARCH_CHANNELS.ALL, (_event, payload: { query?: string; opts?: SearchOptions } | string) => {
     const { query, opts } = normalizePayload(payload)
-    return searchAll(getDb(), query, opts)
+    return searchExact(getDb(), query, opts)
   })
 
   ipcMain.handle(SEARCH_CHANNELS.SESSIONS, (_event, payload: { query?: string; opts?: SearchOptions } | string) => {
     const { query, opts } = normalizePayload(payload)
+    freshenLiveDayIndex()
     return searchSessions(getDb(), query, opts)
   })
 

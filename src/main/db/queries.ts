@@ -792,6 +792,76 @@ export function getSessionsForRange(
   ).filter((session) => session.durationSeconds >= (options.minimumDurationSeconds ?? MIN_DISPLAY_SEC))
 }
 
+function memorySearchAvailable(db: Database.Database): boolean {
+  return db.prepare(
+    `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_index_days'`,
+  ).get() != null
+}
+
+// Belt-and-braces correction filters shared by the memory-record readers. The
+// index is built FROM corrected facts, so these normally match nothing — they
+// only matter when a correction landed through a path that did not refresh the
+// day yet (the fingerprint check catches it on the next search).
+const MEMORY_RECORD_CORRECTION_FILTERS = `
+      AND NOT EXISTS (
+        SELECT 1
+        FROM timeline_block_reviews review
+        WHERE review.review_state = 'ignored'
+          AND memory_records.start_ms >= json_extract(review.original_block_json, '$.startTime')
+          AND memory_records.start_ms < json_extract(review.original_block_json, '$.endTime')
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM evidence_exclusions exclusion
+        WHERE exclusion.kind = 'app'
+          AND (exclusion.bundle_id = memory_records.app_bundle_id OR exclusion.app_name = memory_records.app_name)
+          AND memory_records.start_ms >= exclusion.span_start_ms
+          AND memory_records.start_ms < exclusion.span_end_ms
+      )`
+
+interface MemoryMomentRow {
+  id: number
+  record_kind: 'session' | 'meeting' | 'artifact'
+  app_bundle_id: string | null
+  app_name: string | null
+  title: string | null
+  statement: string
+  primary_name: string | null
+  start_ms: number
+  end_ms: number
+  date: string
+  excerpt: string | null
+}
+
+function mapMemoryMomentRow(row: MemoryMomentRow): SessionSearchResult {
+  // Entity-named records (meetings, adopted artifacts) show the entity's
+  // CURRENT canonical name — a rename reaches search results without reindex.
+  const displayTitle = row.record_kind === 'session'
+    ? row.title
+    : (row.primary_name ?? row.title ?? row.statement)
+  const appName = row.record_kind === 'session'
+    ? resolveDisplayName(row.app_bundle_id ?? '', row.app_name ?? 'Unknown app')
+    : row.record_kind === 'meeting' ? 'Meeting' : 'File'
+  return {
+    type: 'session',
+    id: row.id,
+    appName,
+    windowTitle: displayTitle,
+    startTime: row.start_ms,
+    endTime: row.end_ms,
+    date: row.date,
+    excerpt: row.excerpt ?? displayTitle ?? row.statement,
+  }
+}
+
+/**
+ * Exact search over session moments (DEV-178, issue #7 item 1). The primary
+ * path reads memory_records — the per-day projection of CORRECTED canonical
+ * facts — instead of raw app_sessions. Days the background indexer has not
+ * reached yet keep serving through the legacy app_sessions_fts join with the
+ * same correction filters, so no query that worked before goes dark during
+ * the transition.
+ */
 export function searchSessions(
   db: Database.Database,
   query: string,
@@ -800,8 +870,42 @@ export function searchSessions(
   const ftsQuery = toFtsQuery(query)
   if (!ftsQuery) return []
   const { fromMs, toMs, limit } = searchBounds(opts)
+  const memoryAvailable = memorySearchAvailable(db)
 
-  const rows = db.prepare(`
+  const memoryResults: SessionSearchResult[] = !memoryAvailable ? [] : (db.prepare(`
+    SELECT
+      memory_records.rowid AS id,
+      memory_records.record_kind,
+      memory_records.app_bundle_id,
+      memory_records.app_name,
+      memory_records.title,
+      memory_records.statement,
+      entities.canonical_name AS primary_name,
+      memory_records.start_ms,
+      memory_records.end_ms,
+      memory_records.date,
+      snippet(memory_records_fts, -1, ?, ?, '...', 18) AS excerpt
+    FROM memory_records_fts
+    JOIN memory_records ON memory_records.rowid = memory_records_fts.rowid
+    LEFT JOIN entities ON entities.id = memory_records.primary_entity_id
+    WHERE memory_records_fts MATCH ?
+      AND memory_records.deleted_at IS NULL
+      AND memory_records.start_ms >= ?
+      AND memory_records.start_ms < ?
+      ${MEMORY_RECORD_CORRECTION_FILTERS}
+    ORDER BY memory_records.start_ms DESC
+    LIMIT ?
+  `).all(SEARCH_HIGHLIGHT_START, SEARCH_HIGHLIGHT_END, ftsQuery, fromMs, toMs, limit) as MemoryMomentRow[])
+    .map(mapMemoryMomentRow)
+
+  // Legacy fallback, restricted to days without a memory-index projection.
+  const unindexedDayFilter = memoryAvailable
+    ? `AND NOT EXISTS (
+        SELECT 1 FROM memory_index_days
+        WHERE memory_index_days.date = strftime('%Y-%m-%d', app_sessions.start_time / 1000, 'unixepoch', 'localtime')
+      )`
+    : ''
+  const legacyRows = db.prepare(`
     SELECT
       app_sessions.id,
       app_sessions.bundle_id,
@@ -815,6 +919,7 @@ export function searchSessions(
     WHERE app_sessions_fts MATCH ?
       AND app_sessions.start_time >= ?
       AND app_sessions.start_time < ?
+      ${unindexedDayFilter}
       AND NOT EXISTS (
         SELECT 1
         FROM timeline_block_reviews review
@@ -842,7 +947,7 @@ export function searchSessions(
     excerpt: string | null
   }[]
 
-  return rows.map((row) => ({
+  const legacyResults: SessionSearchResult[] = legacyRows.map((row) => ({
     type: 'session',
     id: row.id,
     appName: resolveDisplayName(row.bundle_id, row.app_name),
@@ -852,6 +957,72 @@ export function searchSessions(
     date: localDateString(new Date(row.start_time)),
     excerpt: row.excerpt ?? row.window_title ?? row.app_name,
   }))
+
+  return [...memoryResults, ...legacyResults]
+    .sort((left, right) => right.startTime - left.startTime)
+    .slice(0, limit)
+}
+
+/**
+ * Moments tagged with the given entity ids (alias-aware retrieval, DEV-178):
+ * the caller resolves a query to entities through canonical names + aliases,
+ * then this returns every corrected moment those entities were part of —
+ * which is how searching "acme" finds Acme Corp's days even when no window
+ * title ever contained the word.
+ */
+export function searchEntityMoments(
+  db: Database.Database,
+  entityIds: readonly string[],
+  opts: SearchOptions = {},
+): SessionSearchResult[] {
+  if (entityIds.length === 0 || !memorySearchAvailable(db)) return []
+  const { fromMs, toMs, limit } = searchBounds(opts)
+  const marks = entityIds.map(() => '?').join(', ')
+  const rows = db.prepare(`
+    SELECT
+      memory_records.rowid AS id,
+      memory_records.record_kind,
+      memory_records.app_bundle_id,
+      memory_records.app_name,
+      memory_records.title,
+      memory_records.statement,
+      entities.canonical_name AS primary_name,
+      memory_records.start_ms,
+      memory_records.end_ms,
+      memory_records.date,
+      NULL AS excerpt
+    FROM memory_record_entities tags
+    JOIN memory_records ON memory_records.id = tags.record_id
+    LEFT JOIN entities ON entities.id = memory_records.primary_entity_id
+    WHERE tags.entity_id IN (${marks})
+      AND memory_records.deleted_at IS NULL
+      AND memory_records.start_ms >= ?
+      AND memory_records.start_ms < ?
+      ${MEMORY_RECORD_CORRECTION_FILTERS}
+    GROUP BY memory_records.rowid
+    ORDER BY memory_records.start_ms DESC
+    LIMIT ?
+  `).all(...entityIds, fromMs, toMs, limit) as MemoryMomentRow[]
+  return rows.map(mapMemoryMomentRow)
+}
+
+/** Most recent indexed moment for any of the entity ids — used to point an
+ *  entity search result at the day where it was last seen. */
+export function latestEntityMomentDate(
+  db: Database.Database,
+  entityIds: readonly string[],
+): { date: string; startMs: number } | null {
+  if (entityIds.length === 0 || !memorySearchAvailable(db)) return null
+  const marks = entityIds.map(() => '?').join(', ')
+  const row = db.prepare(`
+    SELECT memory_records.date, MAX(memory_records.start_ms) AS start_ms
+    FROM memory_record_entities tags
+    JOIN memory_records ON memory_records.id = tags.record_id
+    WHERE tags.entity_id IN (${marks})
+      AND memory_records.deleted_at IS NULL
+  `).get(...entityIds) as { date: string | null; start_ms: number | null } | undefined
+  if (!row?.date || row.start_ms == null) return null
+  return { date: row.date, startMs: row.start_ms }
 }
 
 export function searchBlocks(
