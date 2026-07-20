@@ -337,6 +337,7 @@ CREATE TABLE IF NOT EXISTS artifact_mentions (
 
 CREATE INDEX IF NOT EXISTS idx_artifact_mentions_source ON artifact_mentions (source_type, source_id);
 CREATE INDEX IF NOT EXISTS idx_artifact_mentions_artifact ON artifact_mentions (artifact_id, start_time);
+CREATE INDEX IF NOT EXISTS idx_artifact_mentions_time ON artifact_mentions (start_time);
 
 -- app_profile_cache was removed in migration v14. Cache is
 -- recomputed in-memory by workBlocks.ts; no persistent cache is required.
@@ -876,6 +877,7 @@ CREATE TABLE IF NOT EXISTS entity_evidence_refs (
 );
 CREATE INDEX IF NOT EXISTS idx_entity_evidence_refs_source ON entity_evidence_refs (source_type, source_id);
 CREATE INDEX IF NOT EXISTS idx_entity_evidence_refs_entity ON entity_evidence_refs (entity_id);
+CREATE INDEX IF NOT EXISTS idx_entity_evidence_refs_span ON entity_evidence_refs (span_start_ms);
 
 -- Suggested vs confirmed relationships between entities. source='user' rows
 -- are confirmed; 'inferred' rows stay suggestions until accepted.

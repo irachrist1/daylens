@@ -2637,6 +2637,10 @@ const migrations: Migration[] = [
           indexed_at   INTEGER NOT NULL,
           record_count INTEGER NOT NULL DEFAULT 0
         );
+
+        -- The per-day input fingerprint scans these by time range.
+        CREATE INDEX IF NOT EXISTS idx_entity_evidence_refs_span ON entity_evidence_refs (span_start_ms);
+        CREATE INDEX IF NOT EXISTS idx_artifact_mentions_time ON artifact_mentions (start_time);
       `)
       ensureMemorySearchSchema(db)
     },

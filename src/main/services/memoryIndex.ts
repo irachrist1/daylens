@@ -423,18 +423,27 @@ export interface BackfillProgress {
 }
 
 /** One bounded backfill step: ensure up to `daysPerStep` stale days, newest
- *  first. Returns done=true when every candidate day is current. */
+ *  first. Already-indexed historical days are skipped without re-computing
+ *  their fingerprint — corrections refresh their day synchronously and the
+ *  most recent days are always fingerprint-checked, so the steady-state step
+ *  is a handful of indexed lookups. Returns done=true when current. */
 export function memoryIndexBackfillStep(
   db: Database.Database,
-  options: { maxDays?: number; daysPerStep?: number } = {},
+  options: { maxDays?: number; daysPerStep?: number; recentDaysAlwaysChecked?: number } = {},
 ): BackfillProgress {
   if (!memoryIndexAvailable(db)) return { scanned: 0, indexed: 0, done: true }
   const maxDays = options.maxDays ?? 730
   const daysPerStep = options.daysPerStep ?? 5
+  const recentDaysAlwaysChecked = options.recentDaysAlwaysChecked ?? 3
   const candidates = listMemoryIndexCandidateDates(db, maxDays)
+  const alreadyIndexed = new Set(
+    (db.prepare(`SELECT date FROM memory_index_days`).all() as Array<{ date: string }>)
+      .map((row) => row.date),
+  )
   let scanned = 0
   let indexed = 0
-  for (const date of candidates) {
+  for (const [position, date] of candidates.entries()) {
+    if (position >= recentDaysAlwaysChecked && alreadyIndexed.has(date)) continue
     scanned += 1
     if (ensureDayMemoryIndexed(db, date)) {
       indexed += 1
