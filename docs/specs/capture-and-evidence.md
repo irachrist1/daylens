@@ -196,6 +196,7 @@ The existing `website_visits_pending` approach is not part of the V2 contract be
 - History duration does not overrule foreground ownership.
 - A history visit with no foreground overlap may support retrieval but contributes no active time.
 - An active page interval is clipped to its owning foreground browser interval.
+- A history visit's own recorded duration is a navigation-gap estimate. When reconciling, the last corroborated page in a browser may fill that browser's verified foreground time until the next recorded navigation, bounded by an explicit per-visit cap and never crossing into untracked gaps. A live active-tab observation always outranks this fill. This is what keeps a two-hour single-page stay in a browser without live tab access from collapsing to a thirty-second guess.
 
 ## Idle, pause, and missing time
 
