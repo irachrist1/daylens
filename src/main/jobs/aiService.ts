@@ -138,7 +138,7 @@ interface AnswerEnvelope {
   sourceKind: AIConversationSourceKind
   conversationState: AIConversationState | null
   agent?: {
-    toolTrace: Array<{ tool: string; input: unknown; output: string }>
+    toolTrace: Array<{ tool: string; input: unknown; output: string; failed?: boolean }>
     stepCount: number
     groundingRetried: boolean
     fileDisclosures?: import('@shared/types').AIMessageFileDisclosure[]
@@ -3401,7 +3401,7 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
       config: agentConfig,
       model: options.model,
       onStreamEvent: requestId && options.onStreamEvent
-        ? (event) => options.onStreamEvent?.({ requestId, delta: event.delta, snapshot: event.snapshot, status: event.status })
+        ? (event) => options.onStreamEvent?.({ requestId, delta: event.delta, snapshot: event.snapshot, status: event.status, step: event.step })
         : undefined,
       askUser: options.onAgentQuestion
         ?? (async () => '(No answer is available right now — pick the most defensible reading, answer it, and say in one clause what you assumed.)'),
