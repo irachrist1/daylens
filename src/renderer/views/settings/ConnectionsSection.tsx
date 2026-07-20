@@ -64,14 +64,23 @@ function ConnectorCard({ listing, onChanged }: { listing: ConnectorListing; onCh
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false)
   const [clientId, setClientId] = useState('')
   const [clientSecret, setClientSecret] = useState('')
+  const [repositories, setRepositories] = useState('')
+
+  // GitHub authorizes with the device flow: only a client ID (no secret),
+  // and the person picks exactly which repositories are read.
+  const usesDeviceFlow = listing.id === 'github'
+  const choosesRepositories = listing.id === 'github'
 
   // Honest progress for the bounded initial import: "waiting for your
-  // browser" and "importing your last N days" are different states.
+  // browser" and "importing your last N days" are different states. A notice
+  // (a device flow's "enter this code" prompt) takes precedence — it is the
+  // only way the person learns their code.
   useEffect(() => ipc.connectors.onConnectProgress((event) => {
     if (event.connectorId !== listing.id) return
-    setActionNote(event.phase === 'authorizing'
-      ? 'Waiting for authorization in your browser…'
-      : `Authorized. Importing your last ${listing.lookbackDays} days of events…`)
+    setActionNote(event.notice
+      ?? (event.phase === 'authorizing'
+        ? 'Waiting for authorization in your browser…'
+        : `Authorized. Importing the last ${listing.lookbackDays} days…`))
   }), [listing.id, listing.lookbackDays])
 
   const run = useCallback(async (
@@ -94,6 +103,7 @@ function ConnectorCard({ listing, onChanged }: { listing: ConnectorListing; onCh
     const config: Record<string, unknown> = {}
     if (clientId.trim()) config.clientId = clientId.trim()
     if (clientSecret.trim()) config.clientSecret = clientSecret.trim()
+    if (choosesRepositories && repositories.trim()) config.repositories = repositories.trim()
     const summary = await ipc.connectors.connect(listing.id, config)
     setClientSecret('')
     return summarizeAction(summary)
@@ -158,19 +168,30 @@ function ConnectorCard({ listing, onChanged }: { listing: ConnectorListing; onCh
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
               <input
                 style={inputStyle}
-                placeholder="OAuth client ID (Desktop app)"
+                placeholder={usesDeviceFlow ? 'GitHub App client ID (device flow)' : 'OAuth client ID (Desktop app)'}
                 value={clientId}
                 onChange={(event) => setClientId(event.target.value)}
                 spellCheck={false}
               />
-              <input
-                style={inputStyle}
-                type="password"
-                placeholder="Client secret (optional)"
-                value={clientSecret}
-                onChange={(event) => setClientSecret(event.target.value)}
-                spellCheck={false}
-              />
+              {!usesDeviceFlow && (
+                <input
+                  style={inputStyle}
+                  type="password"
+                  placeholder="Client secret (optional)"
+                  value={clientSecret}
+                  onChange={(event) => setClientSecret(event.target.value)}
+                  spellCheck={false}
+                />
+              )}
+              {choosesRepositories && (
+                <input
+                  style={inputStyle}
+                  placeholder="Repositories to sync (owner/repo, comma-separated)"
+                  value={repositories}
+                  onChange={(event) => setRepositories(event.target.value)}
+                  spellCheck={false}
+                />
+              )}
             </div>
           )}
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -179,7 +200,9 @@ function ConnectorCard({ listing, onChanged }: { listing: ConnectorListing; onCh
             </button>
             {listing.authKind === 'oauth' && (
               <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>
-                Opens your browser to grant exactly the read-only scopes listed above — nothing more.
+                {usesDeviceFlow
+                  ? 'Shows a one-time code to enter on github.com — only the repositories you list are read.'
+                  : 'Opens your browser to grant exactly the read-only scopes listed above — nothing more.'}
               </span>
             )}
           </div>
