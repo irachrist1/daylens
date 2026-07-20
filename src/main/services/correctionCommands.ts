@@ -47,6 +47,7 @@ import {
   isEntityCorrectionSnapshot,
   restoreEntityCorrectionSnapshot,
 } from './entities/entityCorrections'
+import { refreshMemoryIndexForDay } from './memoryIndex'
 
 const MIN_SPLIT_EDGE_MS = 60_000
 
@@ -482,6 +483,9 @@ export function applyCorrection(
     `).run(correctionId, command.date, command.kind, description, JSON.stringify(snapshot), Date.now())
   })
   commit()
+  // Corrections must reach exact search immediately (DEV-178): re-project the
+  // day's memory records from the corrected facts the command just changed.
+  refreshMemoryIndexForDay(db, command.date)
   return { correctionId, description }
 }
 
@@ -523,5 +527,7 @@ export function undoCorrection(db: Database.Database, correctionId: string): Cor
     invalidateTimelineDayBlocks(db, row.date)
   })
   commit()
+  // Undo restores what the correction removed — including in exact search.
+  refreshMemoryIndexForDay(db, row.date)
   return { undone: true, description: row.description }
 }

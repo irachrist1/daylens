@@ -8,11 +8,15 @@ import {
   searchSessions as dbSearchSessions,
   searchBrowser as dbSearchBrowser,
   searchArtifacts as dbSearchArtifacts,
+  searchEntityMoments,
   getWebsiteVisitsForRange,
   listDistinctVisitDomains,
   listRecentSessionWindowTitles,
   listSessionActivityDays,
 } from '../db/queries'
+import { ensureDayMemoryIndexed } from './memoryIndex'
+import { resolveQueryEntityMatches } from './exactSearch'
+import { mergeGroupIds } from './entities/entityRepository'
 import { blockActiveSeconds } from '@shared/blockDuration'
 // AI facts read the corrected activity truth (invariant 7): a Timeline block
 // the user deleted is subtracted from every total the AI quotes, so the AI
@@ -534,6 +538,11 @@ function tokenizeForBroadenedSearch(query: string): string[] {
 export function execSearchSessions(params: SearchSessionsParams, db: Database.Database): SearchSessionsResult {
   const limit = params.limit ?? 25
   const searchOpts = { startDate: params.startDate, endDate: params.endDate, limit }
+  // DEV-178: AI search reads the same exact-retrieval index as the palette.
+  // Keep the live day's projection fresh so "just now" moments are findable.
+  try {
+    ensureDayMemoryIndexed(db, localDateString())
+  } catch { /* search stays available on the already-indexed days */ }
   const ignoredFrom = params.startDate ? localDayBounds(params.startDate)[0] : 0
   const ignoredTo = params.endDate ? localDayBounds(params.endDate)[1] : Date.now()
   const ignoredSpans = getIgnoredBlockSpansForRange(db, ignoredFrom, ignoredTo)
@@ -608,12 +617,34 @@ export function execSearchSessions(params: SearchSessionsParams, db: Database.Da
     return visible.slice(0, wanted)
   }
 
-  // B2: search both app_sessions_fts and website_visits_fts so the AI can
-  // cite specific page titles (e.g. Coursera lesson names), not just app names.
+  // DEV-178: alias-aware entity retrieval joins the strict phase. The query
+  // resolves through durable-entity canonical names AND aliases ("acme" →
+  // Acme Corp, merge-aware), and every corrected moment tagged with those
+  // entities counts as a strict hit — meetings, attributed client/project
+  // stretches, and renamed things that no window title ever spelled out.
+  const entityMatches = resolveQueryEntityMatches(db, params.query)
+  const entityGroupIds = [...new Set(entityMatches.flatMap((match) => mergeGroupIds(db, match.entity.id)))]
+  const entityHits = searchEntityMoments(db, entityGroupIds, searchOpts)
+    .map(mapSessionHit)
+    .filter(isVisibleHit)
+
+  // B2: search both the exact memory index and website_visits_fts so the AI
+  // can cite specific page titles (e.g. Coursera lesson names), not just app
+  // names.
+  const seenStrict = new Set<string>()
   const strictHits = [
     ...collectVisibleSessions(params.query, limit),
     ...collectVisiblePages(params.query, limit),
-  ].sort((a, b) => b.startTime - a.startTime).slice(0, limit)
+    ...entityHits,
+  ]
+    .sort((a, b) => b.startTime - a.startTime)
+    .filter((hit) => {
+      const key = `${hit.kind}:${hit.id}:${hit.startTime}`
+      if (seenStrict.has(key)) return false
+      seenStrict.add(key)
+      return true
+    })
+    .slice(0, limit)
 
   if (strictHits.length > 0) {
     return {

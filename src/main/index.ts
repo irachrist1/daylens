@@ -121,6 +121,7 @@ import { ensureProcessMonitor } from './services/processMonitor'
 import { getBrowserStatus, startBrowserTracking, stopBrowserTracking } from './services/browser'
 import { prewarmBrowserRegistry } from './services/browserRegistry'
 import { startSync, stopSync, finalizePreviousDay, syncNowForQuit } from './services/syncUploader'
+import { startMemoryIndexBackfill, stopMemoryIndexBackfill } from './services/memoryIndex'
 import { backfillWindowsHistory } from './services/windowsHistory'
 import { createTray, destroyTray, getTrayDiagnostics, hasTray } from './tray'
 import { cancelPendingAutoInstall, getUpdaterState, initUpdater, isInstallingUpdate, registerUpdaterShutdown, getUpdateAvailable } from './services/updater'
@@ -598,6 +599,11 @@ function startBackgroundServices(): void {
       setTimeout(() => {
         setTimeout(() => finalizePreviousDay(), 0)
       }, 10_000)
+
+      // DEV-178: project history into the exact-search memory index a few
+      // days per tick, newest first, until every captured day is current.
+      // Until a day is reached, its searches serve through the legacy path.
+      setTimeout(() => startMemoryIndexBackfill(getDb), 15_000)
     }
   }
 
@@ -805,6 +811,7 @@ async function shutdownApp(options?: { awaitFinalSync?: boolean; backupBeforeExi
   stopMcpServer()
   stopCaptureServices()
   stopSync()
+  stopMemoryIndexBackfill()
   stopAIUsageRetentionSchedule()
   unregisterCommandPaletteShortcut()
 
