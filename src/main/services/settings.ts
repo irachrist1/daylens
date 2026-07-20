@@ -69,6 +69,9 @@ const DEFAULTS: AppSettings = {
   billingInstallationId: '',
   activityColorOverrides: {},
   dimLeisureBlocks: true,
+  // DEV-186: connected sources are allowed by default, but nothing syncs until
+  // a connector is explicitly connected AND capture consent is current.
+  connectedSourcesEnabled: true,
 }
 
 // M1: model ids that have been shut down at the provider and now 404. Existing
@@ -142,6 +145,7 @@ export function getSettings(): AppSettings {
     billingInstallationId: (_store.get('billingInstallationId', '') as string),
     activityColorOverrides: sanitizeActivityColorOverrides(_store.get('activityColorOverrides', {})),
     dimLeisureBlocks: (_store.get('dimLeisureBlocks', true) as boolean),
+    connectedSourcesEnabled: (_store.get('connectedSourcesEnabled', true) as boolean),
   }
 }
 
