@@ -2645,6 +2645,26 @@ const migrations: Migration[] = [
       ensureMemorySearchSchema(db)
     },
   },
+  {
+    version: 53,
+    description:
+      'Semantic search by meaning (memory-and-entities.md §Local semantic search, DEV-180): memory_record_vectors bookkeeping keyed to memory record ids with ON DELETE CASCADE, so embeddings die with day re-projection and deletions/corrections propagate for free. The float vectors live in the sqlite-vec vec0 virtual table created at runtime by the semantic index (the extension may be absent here); rows without a bookkeeping entry are invisible to queries and garbage-collected in the background. No backfill — records embed in bounded background batches.',
+    up: () => {
+      const db = getDb()
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS memory_record_vectors (
+          vec_rowid     INTEGER PRIMARY KEY AUTOINCREMENT,
+          record_id     TEXT NOT NULL UNIQUE REFERENCES memory_records(id) ON DELETE CASCADE,
+          date          TEXT NOT NULL,
+          model         TEXT NOT NULL,
+          model_version INTEGER NOT NULL,
+          dims          INTEGER NOT NULL,
+          created_at    INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_memory_record_vectors_date ON memory_record_vectors (date);
+      `)
+    },
+  },
 ]
 
 export const LATEST_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0

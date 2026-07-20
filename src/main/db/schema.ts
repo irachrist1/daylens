@@ -994,4 +994,29 @@ CREATE TABLE IF NOT EXISTS memory_index_days (
   indexed_at   INTEGER NOT NULL,
   record_count INTEGER NOT NULL DEFAULT 0
 );
+
+-- ─── Semantic-search vector bookkeeping (memory-and-entities.md §Local
+-- semantic search, DEV-180) ──────────────────────────────────────────────────
+-- One row per embedded memory record. The float vectors themselves live in the
+-- sqlite-vec vec0 virtual table (memory_semantic_vec, created at runtime by the
+-- semantic index when the extension loads — virtual tables cannot be created
+-- here because the extension may be absent). This table is the authority on
+-- which embeddings are valid: vec_rowid is AUTOINCREMENT so a vec0 rowid is
+-- never reused, and record_id cascades with memory_records — when a day
+-- re-projects (correction, deletion, MEMORY_INDEX_VERSION bump) the records
+-- are deleted and their embeddings die with them in the same transaction.
+-- vec0 rows whose bookkeeping row is gone are invisible to every query (the
+-- join is the filter) and are garbage-collected by the background indexer.
+-- LOCAL-ONLY: no sync-allowlist keys; embeddings never leave the device
+-- (tests/syncAllowlist.test.ts).
+CREATE TABLE IF NOT EXISTS memory_record_vectors (
+  vec_rowid     INTEGER PRIMARY KEY AUTOINCREMENT,
+  record_id     TEXT NOT NULL UNIQUE REFERENCES memory_records(id) ON DELETE CASCADE,
+  date          TEXT NOT NULL,
+  model         TEXT NOT NULL,
+  model_version INTEGER NOT NULL,
+  dims          INTEGER NOT NULL,
+  created_at    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_memory_record_vectors_date ON memory_record_vectors (date);
 `
