@@ -1090,4 +1090,53 @@ CREATE TABLE IF NOT EXISTS context_packets (
 CREATE INDEX IF NOT EXISTS idx_context_packets_message ON context_packets (message_id);
 CREATE INDEX IF NOT EXISTS idx_context_packets_thread ON context_packets (thread_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_context_packets_scope ON context_packets (exchange_kind, scope_key, created_at DESC);
+
+-- ─── Connectors (connectors.md, DEV-186) ─────────────────────────────────────
+-- One row per connected external source. config_json is adapter-specific and
+-- CREDENTIAL-FREE by contract — tokens live only in the OS secure store
+-- (src/main/connectors/credentials.ts). sync_cursor is internal bookkeeping
+-- and never crosses IPC. LOCAL-ONLY: no sync-allowlist keys; connections,
+-- cursors, and connector records never serialize into a remote payload
+-- (tests/syncAllowlist.test.ts, tests/connectorPrivacy.test.ts).
+CREATE TABLE IF NOT EXISTS connector_connections (
+  connector_id         TEXT PRIMARY KEY,
+  status               TEXT NOT NULL DEFAULT 'connected' CHECK(status IN ('connected', 'needs_attention', 'disconnected')),
+  account_label        TEXT,
+  config_json          TEXT NOT NULL DEFAULT '{}',
+  sync_cursor          TEXT,
+  connected_at         INTEGER NOT NULL,
+  last_sync_at         INTEGER,
+  last_sync_error      TEXT,
+  consecutive_failures INTEGER NOT NULL DEFAULT 0,
+  next_retry_at        INTEGER,
+  items_ingested       INTEGER NOT NULL DEFAULT 0,
+  updated_at           INTEGER NOT NULL
+);
+
+-- The normalized-record ledger: one row per source record a connector ever
+-- ingested, keyed by opaque source identity so re-syncs are idempotent and
+-- provider deletions become explicit local tombstones. entity_id points at
+-- what the record minted through the entity repository, which is exactly what
+-- disconnect-with-delete must clean up. envelope_json is the full normalized
+-- envelope (provenance + entity payload) — quarantined records are NEVER
+-- stored here, not even partially (connectors.md §Failure behavior).
+CREATE TABLE IF NOT EXISTS connector_records (
+  id               TEXT PRIMARY KEY,
+  connector_id     TEXT NOT NULL,
+  source_record_id TEXT NOT NULL,
+  kind             TEXT NOT NULL,
+  entity_id        TEXT,
+  date             TEXT,
+  effective_at     INTEGER,
+  retrieved_at     INTEGER NOT NULL,
+  sensitivity      TEXT NOT NULL DEFAULT 'standard' CHECK(sensitivity IN ('standard', 'personal', 'high')),
+  permission_scope TEXT NOT NULL,
+  envelope_json    TEXT NOT NULL,
+  tombstoned_at    INTEGER,
+  created_at       INTEGER NOT NULL,
+  updated_at       INTEGER NOT NULL,
+  UNIQUE(connector_id, source_record_id)
+);
+CREATE INDEX IF NOT EXISTS idx_connector_records_connector ON connector_records (connector_id, tombstoned_at);
+CREATE INDEX IF NOT EXISTS idx_connector_records_date ON connector_records (date);
 `

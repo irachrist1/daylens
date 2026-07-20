@@ -1446,6 +1446,49 @@ export interface MeetingNotesSignal {
   notes: MeetingNoteSignal[]
 }
 
+// ─── Connectors (connectors.md, DEV-186) ────────────────────────────────────
+// The connected-sources foundation. Every provider registers a manifest; only
+// providers with a working adapter are `available` today. The renderer sees
+// ONLY this listing shape — credentials, cursors, and raw provider errors
+// never cross the IPC boundary (spec: "The interface does not display raw
+// tokens, internal cursors, or provider errors that reveal secrets").
+
+export type ConnectorId =
+  | 'ics_calendar'
+  | 'google_calendar'
+  | 'outlook_calendar'
+  | 'github'
+  | 'linear'
+  | 'granola'
+
+export type ConnectorAuthState = 'disconnected' | 'connected' | 'needs_attention'
+
+/** One connector as Settings → Connections shows it. */
+export interface ConnectorListing {
+  id: ConnectorId
+  displayName: string
+  providerKind: 'calendar' | 'code' | 'issues' | 'meetings'
+  /** direct = Daylens-owned adapter; brokered = via an intermediary;
+   *  local = reads a file/store on this machine, no account at all. */
+  integration: 'direct' | 'brokered' | 'local'
+  authKind: 'oauth' | 'token' | 'local_file'
+  /** Plain-language "what data this brings" copy shown before connecting. */
+  whatItBrings: string
+  /** Exact read-only scopes, each with plain-language meaning. */
+  scopes: Array<{ scope: string; grants: string }>
+  /** True when a working adapter ships today; false = listed for the wave. */
+  available: boolean
+  authState: ConnectorAuthState
+  /** Human account/source label ("work.ics", "you@example.com"). Never a path, token, or cursor. */
+  accountLabel: string | null
+  connectedAt: number | null
+  lastSyncAt: number | null
+  /** Sanitized error summary — never a provider body that could carry secrets. */
+  lastSyncError: string | null
+  nextRetryAt: number | null
+  itemsIngested: number
+}
+
 /** The day's external signals, RESOLVED for the wrap writer: sanitized,
  *  humanized, pre-formatted, and stripped of anything the model must never
  *  echo (raw paths, branches, clock times it can't ground). Each block is
@@ -1820,6 +1863,11 @@ export interface AppSettings {
   // MCP servers ("mcp:notion") and focus apps ("focus:Session"). Discovery
   // is free; nothing is called until enabled AND the enrichment is wired up.
   enrichmentSources?: Record<string, boolean>
+  // Connected sources master switch (DEV-186). Default ON, but it only opens
+  // the gate together with current capture consent — turning it OFF stops
+  // every connector sync and ingest immediately, same shape as the capture
+  // consent gate. Per-connector connect/disconnect lives on the connection.
+  connectedSourcesEnabled?: boolean
 }
 
 export type BillingAccessMode = 'free_credit' | 'subscription' | 'local_pass' | 'own_key' | 'none' | 'unavailable'
@@ -2408,6 +2456,13 @@ export const IPC = {
     ADD_GRANT: 'file-access:add-grant',
     REVOKE_GRANT: 'file-access:revoke-grant',
     LIST_DISCLOSURES: 'file-access:list-disclosures',
+  },
+  CONNECTORS: {
+    LIST: 'connectors:list',
+    CONNECT: 'connectors:connect',
+    DISCONNECT: 'connectors:disconnect',
+    SYNC_NOW: 'connectors:sync-now',
+    PICK_ICS_FILE: 'connectors:pick-ics-file',
   },
   CONTEXT_PACKETS: {
     GET: 'context-packets:get',
