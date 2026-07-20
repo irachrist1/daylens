@@ -265,7 +265,10 @@ export function useAIChat() {
           patterns_hit: report.patternsHit,
         })
       }
-      setStreamingSnapshot(`assistant:${event.requestId}`, safeSnapshot, event.status)
+      const safeStep = event.step
+        ? { ...event.step, label: sanitizeForRender(event.step.label).text }
+        : undefined
+      setStreamingSnapshot(`assistant:${event.requestId}`, safeSnapshot, event.status, safeStep)
     })
   }, [])
 
