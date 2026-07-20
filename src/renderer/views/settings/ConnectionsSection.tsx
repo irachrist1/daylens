@@ -66,9 +66,10 @@ function ConnectorCard({ listing, onChanged }: { listing: ConnectorListing; onCh
   const [clientSecret, setClientSecret] = useState('')
   const [repositories, setRepositories] = useState('')
 
-  // GitHub authorizes with the device flow: only a client ID (no secret),
-  // and the person picks exactly which repositories are read.
-  const usesDeviceFlow = listing.id === 'github'
+  // GitHub and Outlook authorize with the device flow: only a client ID (no
+  // secret) and a one-time code shown here. GitHub additionally lets the
+  // person pick exactly which repositories are read.
+  const usesDeviceFlow = listing.id === 'github' || listing.id === 'outlook_calendar'
   const choosesRepositories = listing.id === 'github'
 
   // Honest progress for the bounded initial import: "waiting for your
@@ -168,7 +169,11 @@ function ConnectorCard({ listing, onChanged }: { listing: ConnectorListing; onCh
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
               <input
                 style={inputStyle}
-                placeholder={usesDeviceFlow ? 'GitHub App client ID (device flow)' : 'OAuth client ID (Desktop app)'}
+                placeholder={usesDeviceFlow
+                  ? listing.id === 'outlook_calendar'
+                    ? 'Microsoft application (client) ID (device code flow)'
+                    : 'GitHub App client ID (device flow)'
+                  : 'OAuth client ID (Desktop app)'}
                 value={clientId}
                 onChange={(event) => setClientId(event.target.value)}
                 spellCheck={false}
@@ -201,7 +206,9 @@ function ConnectorCard({ listing, onChanged }: { listing: ConnectorListing; onCh
             {listing.authKind === 'oauth' && (
               <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>
                 {usesDeviceFlow
-                  ? 'Shows a one-time code to enter on github.com — only the repositories you list are read.'
+                  ? listing.id === 'outlook_calendar'
+                    ? 'Shows a one-time code to enter at microsoft.com/devicelogin — exactly the read-only scopes listed above.'
+                    : 'Shows a one-time code to enter on github.com — only the repositories you list are read.'
                   : 'Opens your browser to grant exactly the read-only scopes listed above — nothing more.'}
               </span>
             )}

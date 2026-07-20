@@ -40,10 +40,11 @@ const UPCOMING_MANIFESTS: ConnectorManifest[] = [
     authKind: 'oauth',
     readOnly: true,
     scopes: [
-      { scope: 'Calendars.Read', grants: 'Reads your Outlook calendars and events through Microsoft Graph. Read-only.' },
+      { scope: 'Calendars.Read', grants: 'Reads your Outlook calendars and events through Microsoft Graph. Never creates, edits, or deletes anything.' },
+      { scope: 'User.Read', grants: 'Reads your name and email address, only to label the connected account in Settings.' },
     ],
     whatItBrings:
-      'Meetings from your Outlook or Microsoft 365 calendar — titles, times, attendees — synced automatically alongside everything Daylens observes locally.',
+      'Meetings from your Outlook or Microsoft 365 calendar — titles, times, attendees, and responses — kept in sync automatically. A scheduled event only becomes "you met" when your day\'s activity supports it.',
     sensitivity: 'standard',
     syncCadenceMs: HOUR,
     lookbackDays: 90,
