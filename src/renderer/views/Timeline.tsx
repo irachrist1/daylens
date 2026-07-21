@@ -72,6 +72,18 @@ function blockNarrative(block: WorkContextBlock): string | null {
 const DAY_HOUR_HEIGHT = 88
 const WEEK_HOUR_HEIGHT = 52
 const TIME_GUTTER_WIDTH = 56
+// Day/week zoom (DEV-235): the base hour heights above scale by this factor so
+// the calendar densifies or opens up like a standard calendar app. Persisted
+// per user so the chosen density sticks across sessions.
+const TIMELINE_ZOOM_MIN = 0.6
+const TIMELINE_ZOOM_MAX = 1.8
+const TIMELINE_ZOOM_STEP = 0.2
+const TIMELINE_ZOOM_KEY = 'daylens.timeline.zoom'
+function loadTimelineZoom(): number {
+  if (typeof localStorage === 'undefined') return 1
+  const stored = Number(localStorage.getItem(TIMELINE_ZOOM_KEY))
+  return Number.isFinite(stored) && stored >= TIMELINE_ZOOM_MIN && stored <= TIMELINE_ZOOM_MAX ? stored : 1
+}
 // Smallest drawable card. The engine's 15-minute floor means a real block at
 // the day scale is ≥ 22px; this only catches meetings and edge-case slivers,
 // and 22px is the least height at which a one-line title still reads.
@@ -236,7 +248,7 @@ function CalendarBlockCard({
   // True when a tag filter is active and this block isn't in it. Filtered
   // blocks fade but stay in place — the shape of the day never lies.
   dimmed?: boolean
-  onClick?: () => void
+  onClick?: (event: ReactMouseEvent) => void
   onContextMenu?: (event: ReactMouseEvent) => void
 }) {
   // timeline.md §3.4 rule 4: color coding is universal — every block is drawn
@@ -453,7 +465,7 @@ function CalendarDayTrack({
   nowMs?: number | null
   // When set, blocks outside the active tag filter render dimmed.
   dimBlock?: (block: WorkContextBlock) => boolean
-  onBlockClick?: (block: WorkContextBlock) => void
+  onBlockClick?: (block: WorkContextBlock, event: ReactMouseEvent) => void
   // Right-click on a block, Google-Calendar style (day view only).
   onBlockContextMenu?: (block: WorkContextBlock, event: ReactMouseEvent) => void
 }) {
@@ -618,7 +630,7 @@ function CalendarDayTrack({
             isSelected={selectedBlockId === block.id}
             inMergeRange={selectedBlockId !== block.id && (selectedSpanIds?.has(block.id) ?? false)}
             dimmed={dimBlock ? dimBlock(block) : false}
-            onClick={onBlockClick ? () => onBlockClick(block) : undefined}
+            onClick={onBlockClick ? (event) => onBlockClick(block, event) : undefined}
             onContextMenu={onBlockContextMenu ? (event) => onBlockContextMenu(block, event) : undefined}
           />
         )
@@ -2135,6 +2147,100 @@ function BlockDetailInspector({
   )
 }
 
+// A week-grid event popover (DEV-236): clicking a block in week view opens its
+// details in place — anchored at the click, clamped to the viewport — instead
+// of navigating away to the day. "Open in day view" is offered as an action,
+// not forced. Matches the Google Calendar reference, small events included.
+function WeekEventPopover({
+  block,
+  date,
+  x,
+  y,
+  onOpenDay,
+  onClose,
+}: {
+  block: WorkContextBlock
+  date: string
+  x: number
+  y: number
+  onOpenDay: () => void
+  onClose: () => void
+}) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  const accent = activityColorForCategory(block.dominantCategory)
+  const width = 300
+  const left = Math.max(12, Math.min(x + 12, window.innerWidth - width - 12))
+  const top = Math.max(12, Math.min(y, window.innerHeight - 200))
+  const summary = blockNarrative(block) ?? blockShortSummary(block)
+
+  return (
+    <div
+      data-timeline-inspector="true"
+      style={{ position: 'fixed', inset: 0, zIndex: 92 }}
+      onClick={onClose}
+      onContextMenu={(event) => { event.preventDefault(); onClose() }}
+    >
+      <div
+        role="dialog"
+        aria-label={`${userVisibleBlockLabel(block)} details`}
+        onClick={(event) => event.stopPropagation()}
+        style={{
+          position: 'fixed',
+          left,
+          top,
+          width,
+          maxWidth: 'calc(100vw - 24px)',
+          borderRadius: 12,
+          border: '1px solid var(--color-border-ghost)',
+          borderLeft: `3px solid ${accent}`,
+          background: 'var(--color-surface)',
+          boxShadow: '0 18px 48px rgba(0,0,0,0.32)',
+          padding: '13px 15px',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'start', gap: 8 }}>
+          <span style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 700, color: 'var(--color-text-primary)', lineHeight: 1.3 }}>
+            {userVisibleBlockLabel(block)}
+          </span>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onClose}
+            style={{ border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', fontSize: 15, fontWeight: 700, cursor: 'pointer', padding: 0, lineHeight: 1, flexShrink: 0 }}
+          >
+            ×
+          </button>
+        </div>
+        <div style={{ fontSize: 11.5, color: 'var(--color-text-secondary)', marginTop: 3, fontVariantNumeric: 'tabular-nums' }}>
+          {formatFullDate(date)} · {formatClockTime(block.startTime)} – {formatClockTime(block.endTime)} · {formatDuration(blockActiveSeconds(block))}
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
+          {activityCategoryLabel(block.dominantCategory)}
+        </div>
+        {summary && (
+          <p style={{ fontSize: 12, lineHeight: 1.5, color: 'var(--color-text-secondary)', margin: '9px 0 0', display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 4, overflow: 'hidden' }}>
+            {summary}
+          </p>
+        )}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
+          <button
+            type="button"
+            onClick={() => { onOpenDay(); onClose() }}
+            style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: 12, fontWeight: 650, cursor: 'pointer', padding: '6px 12px', borderRadius: 8 }}
+          >
+            Open in day view
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // The week as a real calendar grid: seven day columns on a shared 24-hour
 // track, Google-Calendar shape, Daylens data. The stats + week review card
 // keeps living underneath, computed from the same blocks the grid draws so
@@ -2144,12 +2250,14 @@ function CalendarWeekView({
   onSelectDate,
   onOpenBlock,
   nowMs,
+  hourHeight,
   scrollerRef,
 }: {
   selectedDate: string
   onSelectDate: (date: string) => void
   onOpenBlock: (date: string, startTime: number) => void
   nowMs: number
+  hourHeight: number
   scrollerRef: React.RefObject<HTMLDivElement | null>
 }) {
   const weekStart = weekStartString(selectedDate)
@@ -2173,6 +2281,9 @@ function CalendarWeekView({
   })
   const [generatingWeekReview, setGeneratingWeekReview] = useState(false)
   const [weekReviewError, setWeekReviewError] = useState<string | null>(null)
+  // DEV-236: clicking a block in week view opens its details in place here,
+  // instead of navigating to the day.
+  const [eventPopover, setEventPopover] = useState<{ block: WorkContextBlock; date: string; x: number; y: number } | null>(null)
 
   const days = useMemo(() => weekResource.data ?? [], [weekResource.data])
   const byDate = useMemo(() => new Map(days.map((payload) => [payload.date, payload])), [days])
@@ -2277,17 +2388,17 @@ function CalendarWeekView({
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: `${TIME_GUTTER_WIDTH}px repeat(7, minmax(0, 1fr))` }}>
-          <HourGutter hourHeight={WEEK_HOUR_HEIGHT} bounds={weekBounds} />
+          <HourGutter hourHeight={hourHeight} bounds={weekBounds} />
           {dates.map((date) => (
             <div key={`col:${date}`} style={{ borderLeft: '1px solid var(--color-border-ghost)', minWidth: 0 }}>
               <CalendarDayTrack
                 date={date}
                 blocks={byDate.get(date)?.blocks ?? []}
                 bounds={weekBounds}
-                hourHeight={WEEK_HOUR_HEIGHT}
+                hourHeight={hourHeight}
                 compact
                 nowMs={date === today ? nowMs : null}
-                onBlockClick={(block) => onOpenBlock(date, block.startTime)}
+                onBlockClick={(block, event) => setEventPopover({ block, date, x: event.clientX, y: event.clientY })}
               />
             </div>
           ))}
@@ -2396,6 +2507,17 @@ function CalendarWeekView({
           </div>
         </div>
       </div>
+
+      {eventPopover && (
+        <WeekEventPopover
+          block={eventPopover.block}
+          date={eventPopover.date}
+          x={eventPopover.x}
+          y={eventPopover.y}
+          onOpenDay={() => onOpenBlock(eventPopover.date, eventPopover.block.startTime)}
+          onClose={() => setEventPopover(null)}
+        />
+      )}
     </div>
   )
 }
@@ -2589,6 +2711,14 @@ export default function Timeline() {
   // Clock tick for the current-time line and the live block's growing bottom
   // edge — 30s keeps the active session visibly moving between data refreshes.
   const [nowMs, setNowMs] = useState(() => Date.now())
+  // Day/week calendar density (DEV-235), persisted so it sticks across sessions.
+  const [zoom, setZoom] = useState<number>(loadTimelineZoom)
+  useEffect(() => {
+    if (typeof localStorage !== 'undefined') localStorage.setItem(TIMELINE_ZOOM_KEY, String(zoom))
+  }, [zoom])
+  const adjustZoom = (delta: number) => setZoom((current) =>
+    Math.round(Math.min(TIMELINE_ZOOM_MAX, Math.max(TIMELINE_ZOOM_MIN, current + delta)) * 100) / 100)
+  const dayHourHeight = Math.round(DAY_HOUR_HEIGHT * zoom)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const lastTimelineOpenKeyRef = useRef<string | null>(null)
   const lastViewOpenedKeyRef = useRef<string | null>(null)
@@ -3038,21 +3168,59 @@ export default function Timeline() {
         background: 'var(--color-bg)',
         borderBottom: '1px solid var(--color-border-ghost)',
         padding: '20px 32px 16px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
       }}>
-        <PeriodNavigator
-          label={headerLabel}
-          value={view}
-          options={[
-            { value: 'day', label: 'Day' },
-            { value: 'week', label: 'Week' },
-            { value: 'month', label: 'Month' },
-          ]}
-          onChange={setView}
-          onPrevious={() => stepDate(-1)}
-          onNext={() => stepDate(1)}
-          nextDisabled={forwardDisabled}
-          onToday={onCurrentPeriod ? undefined : () => setDate(todayString())}
-        />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <PeriodNavigator
+            label={headerLabel}
+            value={view}
+            options={[
+              { value: 'day', label: 'Day' },
+              { value: 'week', label: 'Week' },
+              { value: 'month', label: 'Month' },
+            ]}
+            onChange={setView}
+            onPrevious={() => stepDate(-1)}
+            onNext={() => stepDate(1)}
+            nextDisabled={forwardDisabled}
+            onToday={onCurrentPeriod ? undefined : () => setDate(todayString())}
+          />
+        </div>
+        {view !== 'month' && (
+          // Zoom / density control (DEV-235): scales the calendar hour height.
+          // Clicking the percentage resets to 100%.
+          <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0, border: '1px solid var(--color-border-ghost)', borderRadius: 9, padding: 2 }}>
+            <button
+              type="button"
+              aria-label="Zoom out"
+              disabled={zoom <= TIMELINE_ZOOM_MIN}
+              onClick={() => adjustZoom(-TIMELINE_ZOOM_STEP)}
+              style={{ width: 26, height: 24, border: 'none', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: 16, lineHeight: 1, cursor: zoom <= TIMELINE_ZOOM_MIN ? 'default' : 'pointer', opacity: zoom <= TIMELINE_ZOOM_MIN ? 0.4 : 1, borderRadius: 7 }}
+            >
+              −
+            </button>
+            <button
+              type="button"
+              aria-label="Reset zoom"
+              onClick={() => setZoom(1)}
+              title="Reset density"
+              style={{ minWidth: 42, height: 24, border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', fontSize: 11, fontWeight: 700, fontVariantNumeric: 'tabular-nums', cursor: 'pointer', borderRadius: 7 }}
+            >
+              {Math.round(zoom * 100)}%
+            </button>
+            <button
+              type="button"
+              aria-label="Zoom in"
+              disabled={zoom >= TIMELINE_ZOOM_MAX}
+              onClick={() => adjustZoom(TIMELINE_ZOOM_STEP)}
+              style={{ width: 26, height: 24, border: 'none', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: 16, lineHeight: 1, cursor: zoom >= TIMELINE_ZOOM_MAX ? 'default' : 'pointer', opacity: zoom >= TIMELINE_ZOOM_MAX ? 0.4 : 1, borderRadius: 7 }}
+            >
+              +
+            </button>
+          </div>
+        )}
       </div>
 
       {/* The timeline scrolls without showing a scrollbar — the grid is the
@@ -3063,6 +3231,7 @@ export default function Timeline() {
             <CalendarWeekView
               selectedDate={date}
               nowMs={nowMs}
+              hourHeight={Math.round(WEEK_HOUR_HEIGHT * zoom)}
               scrollerRef={scrollRef}
               onSelectDate={(nextDate) => {
                 updateNavState({ view: 'day', date: nextDate })
@@ -3180,7 +3349,7 @@ export default function Timeline() {
                         userSelect: 'none',
                       }}
                     >
-                      <HourGutter hourHeight={DAY_HOUR_HEIGHT} bounds={dayBounds} />
+                      <HourGutter hourHeight={dayHourHeight} bounds={dayBounds} />
                       <CalendarDayTrack
                         date={payload.date}
                         blocks={sortedBlocks}
@@ -3188,7 +3357,7 @@ export default function Timeline() {
                         gapSegments={gapSegments}
                         scheduledMeetings={payload.scheduledMeetings}
                         onScheduledMeetingClick={openScheduledMeetingMenu}
-                        hourHeight={DAY_HOUR_HEIGHT}
+                        hourHeight={dayHourHeight}
                         selectedBlockId={selectedBlockId}
                         selectedSpanIds={selectedSpanIds}
                         nowMs={isToday ? nowMs : null}
