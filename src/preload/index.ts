@@ -30,7 +30,9 @@ import type {
   AIProviderMode,
   BrowserLinkResult,
   BillingAccessSnapshot,
+  ConnectorId,
   ConnectorListing,
+  ConnectorSyncSummary,
   HistoryExportPlan,
   HistoryExportProgress,
   HistoryExportRunResult,
@@ -516,10 +518,27 @@ const api = {
       ipcRenderer.invoke(IPC.FILE_ACCESS.PICK_PATH, payload),
   },
   connectors: {
-    // DEV-186: Settings → Connections listing. The renderer only ever
-    // receives the ConnectorListing projection — never credentials, cursors,
-    // or paths. Lifecycle IPC arrives with the first connectable provider.
+    // DEV-186 listing + DEV-188 lifecycle. The renderer only ever receives
+    // the ConnectorListing projection and sanitized action summaries — never
+    // credentials, cursors, or paths. `connect` runs the provider's
+    // authorization flow (for OAuth connectors this opens the system browser)
+    // and the first sync; `disconnect` carries the person's explicit
+    // keep-or-delete choice for already-imported data.
     list: (): Promise<ConnectorListing[]> => ipcRenderer.invoke(IPC.CONNECTORS.LIST),
+    connect: (connectorId: ConnectorId, config: Record<string, unknown> = {}): Promise<ConnectorSyncSummary> =>
+      ipcRenderer.invoke(IPC.CONNECTORS.CONNECT, connectorId, config),
+    sync: (connectorId: ConnectorId): Promise<ConnectorSyncSummary> =>
+      ipcRenderer.invoke(IPC.CONNECTORS.SYNC, connectorId),
+    disconnect: (connectorId: ConnectorId, options: { deleteData: boolean }): Promise<void> =>
+      ipcRenderer.invoke(IPC.CONNECTORS.DISCONNECT, connectorId, options),
+    onConnectProgress: (
+      callback: (event: { connectorId: ConnectorId; phase: 'authorizing' | 'syncing' }) => void,
+    ): (() => void) => {
+      const handler = (_e: Electron.IpcRendererEvent, event: { connectorId: ConnectorId; phase: 'authorizing' | 'syncing' }) =>
+        callback(event)
+      ipcRenderer.on(IPC.CONNECTORS.PROGRESS, handler)
+      return () => { ipcRenderer.removeListener(IPC.CONNECTORS.PROGRESS, handler) }
+    },
   },
   export: {
     // DEV-196: full-history export. Plans, progress, and verification reports
