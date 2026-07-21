@@ -43,6 +43,7 @@ export function statusForTool(tool: string, input: unknown): string {
     case 'propose_memory': return 'Asking to remember'
     case 'propose_correction': return 'Previewing a correction'
     case 'undo_correction': return 'Undoing a correction'
+    case 'forget_memory': return 'Asking to forget a memory'
     default: return tool.startsWith('mcp_') ? 'Checking a connected source' : 'Working'
   }
 }
@@ -122,7 +123,7 @@ export function aggregateToolsConsulted(
 
 /** Tools that interact with the person rather than fetch data — they are
  *  listed among tools consulted but do not count as sources. */
-const NON_SOURCE_TOOLS = new Set(['ask_user', 'create_artifact', 'propose_memory', 'propose_correction', 'undo_correction'])
+const NON_SOURCE_TOOLS = new Set(['ask_user', 'create_artifact', 'propose_memory', 'forget_memory', 'propose_correction', 'undo_correction'])
 
 export interface AgentTurnSummary {
   /** Identical to the inspector's tools-consulted list for this turn. */

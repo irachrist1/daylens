@@ -328,6 +328,25 @@ export async function runCorrectionProposal(
     }
   }
 
+  // Stale-preview guard: the day may have changed while the card sat on
+  // screen (a live block advanced, another correction landed, evidence
+  // arrived). Recompute the dry-run and compare the target blocks' BEFORE
+  // fingerprints — a preview that no longer matches reality expires and
+  // applies nothing (ai-agent.md: a stale preview cannot apply).
+  try {
+    const recheck = previewCorrection(db, command, deps.hooks?.resolveLiveSession?.(command.date) ?? null)
+    const fingerprint = (p: CorrectionPreview): string =>
+      p.blocks.map((b) => `${b.blockId}|${b.labelBefore}|${b.startMsBefore}|${b.endMsBefore}|${b.categoryBefore}`).join('\n')
+    if (fingerprint(recheck) !== fingerprint(preview)) {
+      return {
+        applied: false,
+        reason: 'The day changed while the preview was on screen, so the preview expired and nothing was applied. Re-read the day and propose again.',
+      }
+    }
+  } catch (error) {
+    return miss(error instanceof Error ? error.message : 'The day changed while the preview was on screen — nothing was applied.')
+  }
+
   try {
     deps.hooks?.onBeforeApply?.(command)
     const result = applyCorrection(db, command, live)

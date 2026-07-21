@@ -22,7 +22,7 @@ import {
   toCorrectionCommand,
   type CorrectionToolDeps,
 } from '../src/main/agent/correctionTools.ts'
-import { previewCorrection } from '../src/main/services/correctionCommands.ts'
+import { applyCorrection, previewCorrection } from '../src/main/services/correctionCommands.ts'
 import { getTimelineDayPayload } from '../src/main/services/workBlocks.ts'
 import type { AgentQuestion } from '../src/main/agent/interactionTools.ts'
 
@@ -265,6 +265,34 @@ test('invalid input returns explicit misses the model can act on', async () => {
 
   // None of the misses ever showed a confirmation card.
   assert.equal(h.questions.length, 0)
+  db.close()
+})
+
+// ─── Stale previews expire ────────────────────────────────────────────────────
+
+test('a preview that no longer matches the day expires: confirming it applies nothing', async () => {
+  const db = createProductionTestDatabase()
+  seedTwoTopicDay(db)
+  const target = getTimelineDayPayload(db, TEST_DATE).blocks[0]
+
+  // While the card is on screen, the day changes underneath it: someone (the
+  // Timeline UI, another correction) renames the same block.
+  const h = harness(db, () => {
+    applyCorrection(db, {
+      kind: 'edit', date: TEST_DATE, blockId: target.id, label: 'Renamed while the card sat open',
+    }, null)
+    return 'Apply correction'
+  })
+  const outcome = await propose(h, {
+    action: 'rename', date: TEST_DATE, blockId: target.id, label: 'ACME kickoff meeting',
+  })
+
+  assert.equal(outcome.applied, false)
+  assert.match(String(outcome.reason), /changed|expired/i)
+  // The interfering correction is the one that stands; the agent's did not land.
+  assert.equal(getTimelineDayPayload(db, TEST_DATE).blocks[0].label.current, 'Renamed while the card sat open')
+  assert.equal(undoLogCount(db), 1, 'only the interfering correction is in the ledger')
+  assert.equal(h.hookCalls.applied.length, 0)
   db.close()
 })
 
