@@ -2549,6 +2549,11 @@ export default function Timeline() {
   // The far end of a shift-selected merge span. Null means a plain single
   // selection; set means "select the whole run between the anchor and here".
   const [mergeRangeEndId, setMergeRangeEndId] = useState<string | null>(null)
+  // A merge that failed before its preview dialog could open (e.g. the span
+  // still holds a live episode). Surfaced as a small toast at the click instead
+  // of failing silently — a merge that does nothing with no feedback is the
+  // exact bug DEV-233 fixes.
+  const [mergeError, setMergeError] = useState<string | null>(null)
   const isCompact = useCompactLayout()
   const [navState, setNavState] = useState<TimelineNavState>(() => timelineNavStateFromParams(searchParams))
   // Clock tick for the current-time line and the live block's growing bottom
@@ -2834,6 +2839,7 @@ export default function Timeline() {
   // correction actually applied. A cancelled preview leaves the grid as-is.
   const runMerge = async (blockIds: string[], selectAt: number | null) => {
     setContextMenu(null)
+    setMergeError(null)
     try {
       const applied = await correction.request({ kind: 'merge', date, blockIds })
       if (applied) {
@@ -2841,8 +2847,10 @@ export default function Timeline() {
         setMergeRangeEndId(null)
         setSelectedBlockId(null)
       }
-    } catch {
-      // Preview failed (e.g. the day just rebuilt) — the grid stays honest.
+    } catch (err) {
+      // The merge couldn't even be previewed — say why at the click instead of
+      // leaving the user staring at an unchanged grid (DEV-233).
+      setMergeError(sanitizeIpcError(err, "Couldn't merge these blocks. Try again in a moment.").message)
     }
   }
 
@@ -3267,6 +3275,23 @@ export default function Timeline() {
                 {/* The correction preview dialog + undo toast — outside the
                     blocks gate so the toast survives excluding the last block. */}
                 {correction.overlay}
+                {mergeError && (
+                  <div
+                    data-timeline-inspector="true"
+                    role="alert"
+                    style={{ position: 'fixed', left: '50%', bottom: 28, transform: 'translateX(-50%)', zIndex: 86, display: 'flex', alignItems: 'center', gap: 12, maxWidth: 'min(560px, calc(100vw - 48px))', borderRadius: 12, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', boxShadow: '0 12px 36px rgba(0,0,0,0.28)', padding: '10px 14px' }}
+                  >
+                    <span style={{ fontSize: 12.5, color: 'var(--color-text-primary)', fontWeight: 600, lineHeight: 1.4 }}>{mergeError}</span>
+                    <button
+                      type="button"
+                      aria-label="Dismiss"
+                      onClick={() => setMergeError(null)}
+                      style={{ border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', fontSize: 14, fontWeight: 700, cursor: 'pointer', padding: 0, lineHeight: 1, flexShrink: 0 }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                )}
               </>
             )}
           </div>
