@@ -101,3 +101,33 @@ export function estimateUsageCostUsd(
   const total = inputCost + outputCost + cacheReadCost + cacheWriteCost
   return total > 0 ? Math.round(total * 1_000_000) / 1_000_000 : null
 }
+
+// ─── Allowance in estimated questions ────────────────────────────────────────
+// Remaining allowance is shown in money and estimated questions — never raw
+// tokens first. The target estimator is remaining credit divided by the median
+// settled cost of the accepted benchmark fixture questions per model; that
+// benchmark artifact does not exist yet, so until it lands the divisor is a
+// documented representative managed question: a context-packet-sized prompt
+// with a typical answer, priced cache-free so the estimate errs low rather
+// than promising questions the credit cannot cover.
+const TYPICAL_QUESTION_INPUT_TOKENS = 8_000
+const TYPICAL_QUESTION_OUTPUT_TOKENS = 600
+
+export function typicalQuestionCostUsd(model: string | null | undefined): number {
+  const rates = lookupModelPricing(model)
+  return (TYPICAL_QUESTION_INPUT_TOKENS / 1_000_000) * rates.inputPerMillion
+    + (TYPICAL_QUESTION_OUTPUT_TOKENS / 1_000_000) * rates.outputPerMillion
+}
+
+// Whole questions the remaining credit can still answer on the given model
+// (null model = the managed default tier). Null when there is no meaningful
+// remaining figure to divide.
+export function estimateQuestionsRemaining(
+  remainingUsd: number | null | undefined,
+  model: string | null | undefined,
+): number | null {
+  if (remainingUsd == null || !Number.isFinite(remainingUsd) || remainingUsd < 0) return null
+  const costPerQuestion = typicalQuestionCostUsd(model)
+  if (!(costPerQuestion > 0)) return null
+  return Math.floor(remainingUsd / costPerQuestion)
+}

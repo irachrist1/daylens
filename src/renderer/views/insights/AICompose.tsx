@@ -15,6 +15,10 @@ interface AIComposeProps {
   // While loading, the send button becomes Stop and calls this — it aborts
   // the in-flight provider request, not just the spinner.
   onCancel?: () => void
+  // DEV-200: pause the in-flight turn as a resumable checkpoint (surviving
+  // restart) — shown next to Stop while a turn runs. Distinct from Stop,
+  // which discards the turn.
+  onPause?: () => void
   placeholder?: string
   variant?: 'docked' | 'starter'
 }
@@ -63,7 +67,7 @@ function serializeEditor(el: HTMLElement): string {
 }
 
 function AIComposeImpl(
-  { onSubmit, loading, onCancel, placeholder, variant = 'docked' }: AIComposeProps,
+  { onSubmit, loading, onCancel, onPause, placeholder, variant = 'docked' }: AIComposeProps,
   ref: ForwardedRef<AIComposeHandle>,
 ) {
   const editorRef = useRef<HTMLDivElement>(null)
@@ -366,29 +370,56 @@ function AIComposeImpl(
           />
         </div>
         {loading && onCancel ? (
-          <button
-            onClick={onCancel}
-            type="button"
-            aria-label="Stop generating"
-            title="Stop generating"
-            style={{
-              width: 34,
-              height: 34,
-              padding: 0,
-              borderRadius: 999,
-              border: '1px solid var(--color-border-ghost)',
-              cursor: 'pointer',
-              background: 'var(--color-surface-high)',
-              color: 'var(--color-text-primary)',
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              flexShrink: 0,
-              transition: 'background 160ms ease, color 160ms ease',
-            }}
-          >
-            <IconStop />
-          </button>
+          <>
+            {onPause && (
+              <button
+                onClick={onPause}
+                type="button"
+                aria-label="Pause — resume later, even after a restart"
+                title="Pause — resume later, even after a restart"
+                style={{
+                  width: 34,
+                  height: 34,
+                  padding: 0,
+                  borderRadius: 999,
+                  border: '1px solid var(--color-border-ghost)',
+                  cursor: 'pointer',
+                  background: 'var(--color-surface-high)',
+                  color: 'var(--color-text-primary)',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                  transition: 'background 160ms ease, color 160ms ease',
+                }}
+              >
+                <IconPause />
+              </button>
+            )}
+            <button
+              onClick={onCancel}
+              type="button"
+              aria-label="Stop generating"
+              title="Stop generating"
+              style={{
+                width: 34,
+                height: 34,
+                padding: 0,
+                borderRadius: 999,
+                border: '1px solid var(--color-border-ghost)',
+                cursor: 'pointer',
+                background: 'var(--color-surface-high)',
+                color: 'var(--color-text-primary)',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+                transition: 'background 160ms ease, color 160ms ease',
+              }}
+            >
+              <IconStop />
+            </button>
+          </>
         ) : (
           <button
             onClick={send}
@@ -416,6 +447,16 @@ function AIComposeImpl(
         )}
       </div>
     </div>
+  )
+}
+
+// Pause glyph (two bars) for the in-flight pause affordance.
+function IconPause() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <rect x="3.5" y="2.5" width="3.4" height="11" rx="1.3" />
+      <rect x="9.1" y="2.5" width="3.4" height="11" rx="1.3" />
+    </svg>
   )
 }
 

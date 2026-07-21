@@ -15,7 +15,7 @@
 import { streamText, stepCountIs, type LanguageModel, type ModelMessage, type ToolSet } from 'ai'
 import type Database from 'better-sqlite3'
 import os from 'node:os'
-import type { AIAgentStep, AIMessageArtifact } from '@shared/types'
+import type { AIAgentStep, AIMessageArtifact, AgentTurnWaitKind } from '@shared/types'
 import { statusForTool } from '@shared/agentTrail'
 import type { ResolvedProviderConfig, AIProviderUsage } from '../services/aiOrchestration'
 import { providerLabel } from '../services/aiOrchestration'
@@ -79,6 +79,11 @@ export interface ChatAgentDeps {
    *  the bench and tests run without Electron; the tools themselves are always
    *  available and always confirm through the askUser card. */
   corrections?: CorrectionToolHooks
+  /** The turn's visible state machine (DEV-200): every agent-initiated wait —
+   *  clarification, file permission, memory or correction confirmation, all of
+   *  which ride the askUser channel — reports `awaiting_user` with its kind
+   *  before the card goes up, and `running` when the answer arrives. */
+  onPhase?: (event: { phase: 'running' | 'awaiting_user'; waitKind: AgentTurnWaitKind | null }) => void
 }
 
 export interface ChatAgentResult {
@@ -182,8 +187,20 @@ export async function runChatAgentTurn(
 
   const mcp = await connectMcpTools(deps.mcpServers ?? [])
   try {
+    // Every user-facing card the agent can raise goes through askUser; wrapping
+    // it per kind is what makes the waits ONE visible state machine (DEV-200):
+    // the turn reports awaiting_user (with which card) while paused on the
+    // promise, and running again the moment the answer lands.
+    const askUserAs = (waitKind: AgentTurnWaitKind) => async (question: AgentQuestion): Promise<string> => {
+      deps.onPhase?.({ phase: 'awaiting_user', waitKind })
+      try {
+        return await deps.askUser(question)
+      } finally {
+        deps.onPhase?.({ phase: 'running', waitKind: null })
+      }
+    }
     const interactionDeps: InteractionDeps = {
-      askUser: deps.askUser,
+      askUser: askUserAs('clarification'),
       artifactDir: deps.artifactDir,
       onArtifact: (artifact) => artifacts.push(artifact),
       signal: deps.signal,
@@ -193,9 +210,10 @@ export async function runChatAgentTurn(
     // "Allow this folder" persists a chat-sourced model-readable grant;
     // "Allow once" covers exactly this turn; anything else is a denial.
     const fileDisclosures: FileDisclosureRow[] = []
+    const askFilePermission = askUserAs('file_permission')
     const requestFileAccess = async (request: { path: string; sizeBytes: number | null; reason: string }): Promise<FileAccessAnswer> => {
       const size = request.sizeBytes != null ? ` (${Math.max(1, Math.round(request.sizeBytes / 1024))} KB)` : ''
-      const answer = await deps.askUser({
+      const answer = await askFilePermission({
         question: `Daylens wants to open ${request.path}${size} to answer this.`,
         options: ['Allow once', 'Allow this folder', 'Deny'],
         allowFreeText: false,
@@ -224,7 +242,7 @@ export async function runChatAgentTurn(
       // only an explicit confirmation (or a typed correction) persists.
       ...buildMemoryTools({
         db: deps.db,
-        askUser: deps.askUser,
+        askUser: askUserAs('memory_confirmation'),
         threadId: deps.threadId ?? null,
         signal: deps.signal,
       }),
@@ -233,7 +251,7 @@ export async function runChatAgentTurn(
       // confirmation card — the model can propose, never silently write.
       ...buildCorrectionTools({
         db: deps.db,
-        askUser: deps.askUser,
+        askUser: askUserAs('correction_confirmation'),
         hooks: deps.corrections,
         signal: deps.signal,
       }),

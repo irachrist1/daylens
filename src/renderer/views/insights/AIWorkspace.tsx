@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Copy, Pencil, RefreshCw, SlidersHorizontal, ThumbsDown, ThumbsUp, Wand2 } from 'lucide-react'
 import { ANALYTICS_EVENT } from '@shared/analytics'
-import type { AIProviderMode, AIStarterSuggestion, AIThreadSettings } from '@shared/types'
+import type { AIModelCostCatalog, AIProviderMode, AIStarterSuggestion, AIThreadSettings } from '@shared/types'
+import { buildModelSources } from '@shared/aiModelSources'
 import { track } from '../../lib/analytics'
 import { ipc } from '../../lib/ipc'
 import { AI_PROVIDER_META } from '../../lib/aiProvider'
@@ -63,12 +64,16 @@ export default function AIWorkspace() {
     actionWidgetState,
     reducedMotion,
     agentQuestion,
+    turnPhase,
     latestCompletedAssistantId,
     initialLoading,
     loadError,
     refreshProvider,
     submitMessage,
     cancelGeneration,
+    pauseGeneration,
+    resumePausedTurn,
+    discardPausedTurn,
     handleRetry,
     handleErrorRetry,
     handleCopy,
@@ -122,6 +127,26 @@ export default function AIWorkspace() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [modelSelectorOpen, setModelSelectorOpen] = useState(false)
   const [threadSettings, setThreadSettings] = useState<AIThreadSettings>({ provider: null, model: null, instructions: null })
+
+  // DEV-201: the picker's provider sources (managed / your keys / your CLI
+  // subscriptions, each with honest availability) and per-model costs in money
+  // and estimated questions, priced by the main process from the same table
+  // billing settlement uses. Costs are fetched when the picker opens.
+  const [modelCosts, setModelCosts] = useState<AIModelCostCatalog | null>(null)
+  const modelSources = useMemo(() => buildModelSources({
+    providerAvailability,
+    billing: billingAccess,
+  }), [providerAvailability, billingAccess])
+  useEffect(() => {
+    if (!modelSelectorOpen) return
+    let cancelled = false
+    const allModels = (Object.keys(AI_PROVIDER_META) as AIProviderMode[]).flatMap((provider) =>
+      AI_PROVIDER_META[provider].models.map((model) => ({ provider, modelId: model.id })))
+    void ipc.ai.getModelCosts(allModels)
+      .then((catalog) => { if (!cancelled) setModelCosts(catalog) })
+      .catch(() => { /* the picker still works without cost lines */ })
+    return () => { cancelled = true }
+  }, [modelSelectorOpen])
 
   // Load the active thread's overrides so the header subline + the panel reflect
   // them. A brand-new (unsent) chat has no thread row yet, so settings stay empty.
@@ -270,7 +295,7 @@ export default function AIWorkspace() {
 
   const copyChat = useCallback(async () => {
     const text = messages
-      .filter((m) => m.state !== 'pending' && m.state !== 'cancelled')
+      .filter((m) => m.state !== 'pending' && m.state !== 'cancelled' && m.state !== 'paused')
       .map((m) => `${m.role === 'user' ? 'You' : 'Daylens'}: ${m.content}`)
       .join('\n\n')
     if (!text.trim()) return
@@ -508,15 +533,15 @@ export default function AIWorkspace() {
           {hasApiKey && (
             <button
               type="button"
-              onClick={() => { if (!managedAccess) setModelSelectorOpen(true) }}
-              title={managedAccess ? 'Daylens chooses and manages the model for this plan' : 'Change the model for this chat'}
+              onClick={() => setModelSelectorOpen(true)}
+              title="Model for this chat — with what a typical question costs"
               className="ai-model-subline"
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 1, padding: '1px 5px', marginLeft: -5, borderRadius: 6, border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', fontSize: 11, cursor: managedAccess ? 'default' : 'pointer', maxWidth: '100%', overflow: 'hidden' }}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 1, padding: '1px 5px', marginLeft: -5, borderRadius: 6, border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', fontSize: 11, cursor: 'pointer', maxWidth: '100%', overflow: 'hidden' }}
             >
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {managedAccess ? 'Daylens managed AI' : `${displayProviderMeta.shortLabel} · ${displayModelLabel}${overrideActive ? ' · custom' : ''}`}
+                {managedAccess && !overrideActive ? 'Daylens managed AI' : `${displayProviderMeta.shortLabel} · ${displayModelLabel}${overrideActive ? ' · custom' : ''}`}
               </span>
-              {!managedAccess && <span style={{ display: 'inline-flex', flexShrink: 0, opacity: 0.8 }}><IconChevronDown /></span>}
+              <span style={{ display: 'inline-flex', flexShrink: 0, opacity: 0.8 }}><IconChevronDown /></span>
             </button>
           )}
         </div>
@@ -592,6 +617,9 @@ export default function AIWorkspace() {
                 onDismissActionWidget={dismissActionWidget}
                 onFollowUpClick={onFollowUpClick}
                 onInspectPacket={openPacketInspector}
+                onResumePaused={(message) => { void resumePausedTurn(message) }}
+                onDiscardPaused={(message) => { void discardPausedTurn(message) }}
+                turnPhase={turnPhase}
                 scrollToBottom={scrollToBottom}
                 hasEarlier={hasEarlierMessages}
                 loadingEarlier={loadingEarlier}
@@ -633,7 +661,7 @@ export default function AIWorkspace() {
                 </p>
               </div>
               <div style={{ width: '100%', maxWidth: 620, marginTop: 4, textAlign: 'left' }}>
-                <AICompose ref={composerRef} onSubmit={submitMessage} onCancel={cancelGeneration} loading={loading} variant="starter" placeholder="Ask anything" />
+                <AICompose ref={composerRef} onSubmit={submitMessage} onCancel={cancelGeneration} onPause={pauseGeneration} loading={loading} variant="starter" placeholder="Ask anything" />
               </div>
               <div style={{ width: '100%', maxWidth: 620, textAlign: 'left' }}>
                 {starterPrompts.map((suggestion, index) => (
@@ -671,18 +699,20 @@ export default function AIWorkspace() {
       {hasApiKey && (hasMessages || threadLoading) && (
         <div style={{ flexShrink: 0, padding: '12px 24px 20px' }}>
           <div style={{ maxWidth: 760, margin: '0 auto' }}>
-            <AICompose ref={composerRef} onSubmit={submitMessage} onCancel={cancelGeneration} loading={loading} />
+            <AICompose ref={composerRef} onSubmit={submitMessage} onCancel={cancelGeneration} onPause={pauseGeneration} loading={loading} />
           </div>
         </div>
       )}
       </div>
-      {modelSelectorOpen && !managedAccess && (
+      {modelSelectorOpen && (
         <ModelSelector
-          providerAvailability={providerAvailability}
+          sources={modelSources}
+          costs={modelCosts}
           currentProvider={displayProviderMeta.id}
           currentModel={displayModelId}
           isOverride={overrideActive}
-          defaultLabel={`${providerMeta.shortLabel} · ${modelLabel}`}
+          defaultLabel={managedAccess ? 'Daylens managed AI' : `${providerMeta.shortLabel} · ${modelLabel}`}
+          managedActive={managedAccess}
           onApply={onApplyModel}
           onClose={() => setModelSelectorOpen(false)}
         />

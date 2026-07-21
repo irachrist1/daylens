@@ -106,6 +106,90 @@ export function cancelTurn(messages: ThreadMessage[], assistantId: string): Thre
   ))
 }
 
+/**
+ * Flip the pending assistant row to the paused state (DEV-200). Distinct from
+ * cancel: the main process persisted (or is persisting) a resumable
+ * checkpoint. `checkpointId` may arrive later over the turn-phase channel —
+ * see `attachPausedCheckpointId`.
+ */
+export function pauseTurn(
+  messages: ThreadMessage[],
+  assistantId: string,
+  info: { question: string; checkpointId: string | null; lastStatus?: string | null },
+): ThreadMessage[] {
+  return messages.map((message) => (
+    message.id === assistantId && message.state === 'pending'
+      ? {
+          ...message,
+          content: '',
+          state: 'paused' as const,
+          pausedInfo: {
+            checkpointId: info.checkpointId,
+            question: info.question,
+            pauseKind: 'user' as const,
+            lastStatus: info.lastStatus ?? null,
+          },
+        }
+      : message
+  ))
+}
+
+/** Fill in the persisted checkpoint id once the main process confirms it. */
+export function attachPausedCheckpointId(
+  messages: ThreadMessage[],
+  assistantId: string,
+  checkpointId: string,
+): ThreadMessage[] {
+  return messages.map((message) => (
+    message.id === assistantId && message.state === 'paused' && message.pausedInfo
+      ? { ...message, pausedInfo: { ...message.pausedInfo, checkpointId } }
+      : message
+  ))
+}
+
+/**
+ * Append paused checkpoints restored from the main process (thread open /
+ * app restart) as user-question + paused-answer pairs. Rows already on screen
+ * (an in-session pause the user is looking at) are not duplicated.
+ */
+export function appendPausedCheckpoints(
+  messages: ThreadMessage[],
+  checkpoints: Array<{
+    id: string
+    question: string
+    pauseKind: 'user' | 'restart' | null
+    lastStatus: string | null
+    createdAt: number
+  }>,
+): ThreadMessage[] {
+  const existing = new Set(
+    messages
+      .filter((message) => message.state === 'paused' && message.pausedInfo?.checkpointId)
+      .map((message) => message.pausedInfo!.checkpointId as string),
+  )
+  const restored: ThreadMessage[] = []
+  for (const checkpoint of checkpoints) {
+    if (existing.has(checkpoint.id)) continue
+    restored.push(
+      { id: `user:ckpt:${checkpoint.id}`, role: 'user', content: checkpoint.question, createdAt: checkpoint.createdAt, state: 'complete' },
+      {
+        id: `assistant:ckpt:${checkpoint.id}`,
+        role: 'assistant',
+        content: '',
+        createdAt: checkpoint.createdAt,
+        state: 'paused',
+        pausedInfo: {
+          checkpointId: checkpoint.id,
+          question: checkpoint.question,
+          pauseKind: checkpoint.pauseKind ?? 'restart',
+          lastStatus: checkpoint.lastStatus,
+        },
+      },
+    )
+  }
+  return restored.length > 0 ? [...messages, ...restored] : messages
+}
+
 /** Remove a turn's pair in place (retry / switch-provider re-runs it). */
 export function removeTurn(
   messages: ThreadMessage[],
