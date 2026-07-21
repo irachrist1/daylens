@@ -73,6 +73,7 @@ import type {
   PurgeTrackedEvidencePayload,
   MemoryBackfillResult,
   TrackingDiagnosticsPayload,
+  CaptureVerificationState,
   TrackingPermissionDetails,
   TrackingPermissionState,
   NotificationPermissionState,
@@ -430,6 +431,16 @@ const api = {
     getPermissionState: (): Promise<TrackingPermissionState> => ipcRenderer.invoke(IPC.TRACKING.GET_PERMISSION_STATE),
     getPermissionDetails: (): Promise<TrackingPermissionDetails> => ipcRenderer.invoke(IPC.TRACKING.GET_PERMISSION_DETAILS),
     requestScreenPermission: (): Promise<TrackingPermissionState> => ipcRenderer.invoke(IPC.TRACKING.REQUEST_SCREEN_PERMISSION),
+    getCaptureVerification: (): Promise<CaptureVerificationState | null> =>
+      ipcRenderer.invoke(IPC.TRACKING.GET_CAPTURE_VERIFICATION),
+    // DEV-229: pushed by the main-process permission watcher on every status
+    // change, so a revoked Accessibility grant surfaces within seconds even
+    // when no settings page is polling.
+    onCaptureVerificationChanged: (callback: (state: CaptureVerificationState) => void): (() => void) => {
+      const handler = (_e: Electron.IpcRendererEvent, state: CaptureVerificationState) => callback(state)
+      ipcRenderer.on(IPC.TRACKING.CAPTURE_VERIFICATION_CHANGED, handler)
+      return () => { ipcRenderer.removeListener(IPC.TRACKING.CAPTURE_VERIFICATION_CHANGED, handler) }
+    },
     deleteAppHistory: (payload: { bundleId?: string | null; appName?: string | null }): Promise<{ deletedRows: number; affectedDates: string[] }> =>
       ipcRenderer.invoke(IPC.TRACKING.DELETE_APP_HISTORY, payload),
     deleteSiteHistory: (payload: { domain: string }): Promise<{ deletedRows: number; affectedDates: string[] }> =>

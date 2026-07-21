@@ -66,6 +66,7 @@ import { getDb, tableExists } from '../services/database'
 import { setSettings } from '../services/settings'
 import { flushCurrentSession, getCurrentSession, getLinuxTrackingDiagnostics, trackingStatus } from '../services/tracking'
 import { workerAppDetail, workerAppSummaries } from '../services/rangeWorker'
+import { getCaptureVerificationState } from '../services/permissionWatcher'
 import { getBrowserStatus } from '../services/browser'
 import { isWindowsFocusCaptureRunning } from '../services/windowsFocusCapture'
 import {
@@ -1019,6 +1020,7 @@ export function registerDbHandlers(): void {
   // Returns the current in-flight session (not yet flushed to DB) so the renderer
   // can display live totals without waiting for the next app switch.
   ipcMain.handle(IPC.TRACKING.GET_LIVE, () => getCurrentSession())
+  ipcMain.handle(IPC.TRACKING.GET_CAPTURE_VERIFICATION, () => getCaptureVerificationState())
   ipcMain.handle(IPC.TRACKING.GET_DIAGNOSTICS, () => {
     const since = Date.now() - 15 * 60_000
     const db = getDb()
@@ -1060,11 +1062,16 @@ export function registerDbHandlers(): void {
       captureHealth: {
         permissions: getTrackingPermissionDetails(),
         windowTitles: {
-          status: recentSamplesWithTitle > 0
-            ? 'healthy'
-            : recentSamples > 0
+          // DEV-229: "healthy" means MOST samples carry titles, not "at least
+          // one did" — 17 titled out of 102 used to read as healthy while
+          // capture was effectively blind.
+          status: recentSamples === 0
+            ? 'waiting'
+            : recentSamplesWithTitle === 0
               ? 'missing'
-              : 'waiting',
+              : recentSamplesWithTitle / recentSamples < 0.5
+                ? 'degraded'
+                : 'healthy',
           recentSamples,
           recentSamplesWithTitle,
           lastCapturedAt,

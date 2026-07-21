@@ -797,7 +797,7 @@ function CaptureHealthContent({
 
   const tone: 'success' | 'warning' | 'neutral' = titleStatus === 'healthy'
     ? 'success'
-    : titleStatus === 'missing'
+    : titleStatus === 'missing' || titleStatus === 'degraded'
       ? 'warning'
       : 'neutral'
   const captureHelperUnhealthy = captureHealth.captureHelperRunning === false
@@ -817,7 +817,9 @@ function CaptureHealthContent({
     : tone === 'warning'
       ? (permissions.platformNote
           ? permissions.platformNote
-          : 'Daylens sees which apps are open but not the titles inside them. Granting the screen/accessibility permission usually fixes this.')
+          : titleStatus === 'degraded'
+            ? 'Fewer than half of recent samples carried a window title, so parts of your day are being captured blind. Re-granting the Accessibility permission usually fixes this.'
+            : 'Daylens sees which apps are open but not the titles inside them. Granting the screen/accessibility permission usually fixes this.')
       : 'Daylens needs a few minutes of activity to confirm it\u2019s capturing properly.'
   const accent = tone === 'success'
     ? { border: '1px solid rgba(79, 219, 200, 0.24)', background: 'rgba(79, 219, 200, 0.08)' }
@@ -2204,6 +2206,13 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
     const requested = searchParams.get('section')
     return isSectionId(requested) ? requested : 'general'
   })
+  // A deep link can also arrive while Settings is already mounted (a
+  // notification click, the capture-blind banner). Follow it — but only when
+  // the param actually changes, so ordinary in-page section clicks stay local.
+  useEffect(() => {
+    const requested = searchParams.get('section')
+    if (isSectionId(requested)) setActiveSection(requested)
+  }, [searchParams])
   const [sectionSearch, setSectionSearch] = useState('')
   const [resetAndUninstallBusy, setResetAndUninstallBusy] = useState(false)
   const [navOrigin, setNavOrigin] = useState<SectionId | null>(null)

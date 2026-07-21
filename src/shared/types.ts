@@ -2660,13 +2660,28 @@ interface LinuxDesktopDiagnostics {
   secretServiceReachable: boolean | null
 }
 
+/** DEV-229: the permission watcher's live verdict on whether capture can
+ *  actually read window titles — the OS grant flag AND a real-read proxy
+ *  (titled share of recently persisted samples). 'blind' = flag revoked or
+ *  grant silently dead; 'degraded' = under half of samples titled;
+ *  'waiting' = too few samples to judge. */
+export interface CaptureVerificationState {
+  status: 'healthy' | 'degraded' | 'blind' | 'waiting'
+  axTrusted: boolean
+  recentSamples: number
+  recentSamplesWithTitle: number
+  checkedAt: number
+}
+
 export interface TrackingDiagnosticsPayload {
   platform: NodeJS.Platform
   trackingStatus: TrackingStatusDiagnostics
   captureHealth: {
     permissions: TrackingPermissionDetails
     windowTitles: {
-      status: 'healthy' | 'waiting' | 'missing'
+      // 'degraded' = titles are arriving but on under half of samples —
+      // capture works, badly (DEV-229's "most samples carry titles" bar).
+      status: 'healthy' | 'degraded' | 'waiting' | 'missing'
       recentSamples: number
       recentSamplesWithTitle: number
       lastCapturedAt: number | null
@@ -3003,6 +3018,10 @@ export const IPC = {
     GET_PERMISSION_STATE: 'tracking:get-permission-state',
     GET_PERMISSION_DETAILS: 'tracking:get-permission-details',
     REQUEST_SCREEN_PERMISSION: 'tracking:request-screen-permission',
+    // DEV-229: main-process permission watcher — a pull for the current
+    // verdict plus a push channel fired on every status change.
+    GET_CAPTURE_VERIFICATION: 'tracking:get-capture-verification',
+    CAPTURE_VERIFICATION_CHANGED: 'tracking:capture-verification-changed',
     // Delete already-captured history for an excluded app/site.
     DELETE_APP_HISTORY: 'tracking:delete-app-history',
     DELETE_SITE_HISTORY: 'tracking:delete-site-history',
