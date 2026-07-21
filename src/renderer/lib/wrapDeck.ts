@@ -209,6 +209,24 @@ export function planDayWrapSlides(facts: DayWrapFacts, coverage?: WrapCoverageIn
   // front instead of dressing up.
   out.push(buildDayCoverageSlide(facts, coverage))
 
+  // 2c · What the day was about — the entities the evidence supports naming
+  // (projects, clients, people, meetings, repositories from the durable
+  // ledger). Pinned before the story so the day's subjects lead it; absent
+  // when the ledger supports nothing, never padded.
+  const entities = facts.entities ?? []
+  if (entities.length > 0) {
+    const [first, second] = entities
+    out.push({
+      id: 'about', kind: 'bars', kicker: 'What the day was about',
+      bars: entities.map((e) => ({ name: e.name, seconds: e.seconds, detail: entityTypeWord(e.type) })),
+      fallbackLine: second
+        ? `Mostly ${first.name}, with ${second.name} in the mix.`
+        : `Mostly ${first.name}.`,
+      ask: `The day's own subjects, by evidence: ${entities.slice(0, 3).map((e) => `${e.name} (${entityTypeWord(e.type)})`).join(', ')}. One line on what the day was actually about, naming the one or two that defined it. Use ONLY these names; never invent a project, client, person, or meeting the facts do not list.`,
+      factsNote: entities.map((e) => `${e.name} (${entityTypeWord(e.type)}): ${hm(e.seconds)}`).join(', '),
+    })
+  }
+
   // 3-6 · The day as a story, in chronological order, from the real segments.
   // dayStory is already ordered late-night → evening; a pre-dawn leftover is its
   // own beat, so it never merges into "morning".
@@ -688,6 +706,18 @@ export function periodWrapDeckMeta(facts: WrappedPeriodFacts): WrapDeckMeta {
     rangeLabel: facts.rangeLabel.toUpperCase(),
     headline: formatHm(facts.totalSeconds),
     footer: `${PERIOD_NOUN[facts.period]}, wrapped by Daylens`,
+  }
+}
+
+/** Plain-word tag for an entity type on the "what the day was about" scene. */
+function entityTypeWord(type: string): string {
+  switch (type) {
+    case 'project': return 'project'
+    case 'client': return 'client'
+    case 'person': return 'person'
+    case 'meeting': return 'meeting'
+    case 'repository': return 'repository'
+    default: return 'subject'
   }
 }
 

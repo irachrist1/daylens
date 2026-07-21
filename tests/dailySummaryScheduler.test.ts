@@ -1,14 +1,12 @@
 // Tests for the pure scheduling decisions used by the daily-summary notifier.
-// These cover the time-of-day gates, once-per-day write, activity threshold,
-// and morning-nudge "user hasn't started working yet" check.
+// These cover the time-of-day gates, once-per-day write, the activity
+// threshold (an empty day fires nothing), and the removed carryover nudge.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   decideDailySummary,
   decideYesterdayRecap,
-  decideCarryoverNudge,
   NOTIFY_MIN_SECONDS,
-  CARRYOVER_MIN_WORK_SECONDS,
   AI_ATTEMPT_MAX_PER_DAY,
   AI_ATTEMPT_MIN_GAP_MS,
   canAttemptAiNarrative,
@@ -185,54 +183,16 @@ test('yesterday recap does not fire twice in one day', () => {
   assert.deepEqual(decision, { fire: false, reason: 'already-fired-today' })
 })
 
-// ─── decideCarryoverNudge (§4.2) ───────────────────────────────────────────
+// ─── The carryover nudge is removed ─────────────────────────────────────────
+// Removed with the brief rebuild, not migrated: the scheduler exposes no
+// carryover decision, no carryover window, and no carryover state.
 
-test('carryover nudge does not fire when disabled', () => {
-  const decision = decideCarryoverNudge({
-    ...MORNING_BASE,
-    now: at(10),
-    todaySecondsTracked: CARRYOVER_MIN_WORK_SECONDS,
-    morningNudgeEnabled: false,
-  })
-  assert.deepEqual(decision, { fire: false, reason: 'disabled' })
-})
-
-test('carryover nudge does not fire until ~1h of work that morning', () => {
-  const decision = decideCarryoverNudge({
-    ...MORNING_BASE,
-    now: at(10),
-    todaySecondsTracked: CARRYOVER_MIN_WORK_SECONDS - 1,
-  })
-  assert.deepEqual(decision, { fire: false, reason: 'not-settled-in-yet' })
-})
-
-test('carryover nudge fires after ~1h of work, regardless of yesterday recap', () => {
-  const decision = decideCarryoverNudge({
-    ...MORNING_BASE,
-    now: at(10),
-    state: { recapGeneratedDates: [YESTERDAY] }, // recap generated yesterday: still fires
-    todaySecondsTracked: CARRYOVER_MIN_WORK_SECONDS,
-  })
-  assert.deepEqual(decision, { fire: true, targetDate: TODAY })
-})
-
-test('carryover nudge does not fire in the late afternoon', () => {
-  const decision = decideCarryoverNudge({
-    ...MORNING_BASE,
-    now: at(14),
-    todaySecondsTracked: CARRYOVER_MIN_WORK_SECONDS * 3,
-  })
-  assert.deepEqual(decision, { fire: false, reason: 'after-early-afternoon' })
-})
-
-test('carryover nudge does not fire twice in one day', () => {
-  const decision = decideCarryoverNudge({
-    ...MORNING_BASE,
-    now: at(11),
-    state: { lastCarryoverNudgeDate: TODAY },
-    todaySecondsTracked: CARRYOVER_MIN_WORK_SECONDS * 2,
-  })
-  assert.deepEqual(decision, { fire: false, reason: 'already-fired-today' })
+test('the carryover nudge is gone from the scheduler surface', async () => {
+  const scheduler = await import('../src/main/lib/dailySummaryScheduler')
+  const exported = Object.keys(scheduler).join(' ')
+  assert.ok(!/carryover/i.test(exported), `no carryover export may remain, got: ${exported}`)
+  const windows = scheduler.workRhythmWindows('standard')
+  assert.ok(!('carryoverEndHour' in windows), 'rhythm windows carry no carryover hour')
 })
 
 // ─── Property-style: at most one notification per day from a fresh state ──
@@ -298,8 +258,8 @@ test('AI attempt budget is independent per kind and per date', () => {
   assert.equal(canAttemptAiNarrative(state, 'yesterday-recap', yesterday, t0 + 6 * 3_600_000), false)
   // A different kind on a different date keeps its own budget — and recording
   // it must not wipe the exhausted one (pruning is by age, not date match).
-  assert.equal(canAttemptAiNarrative(state, 'carryover-nudge', TODAY, t0), true)
-  state = recordAiNarrativeAttempt(state, 'carryover-nudge', TODAY, t0)
+  assert.equal(canAttemptAiNarrative(state, 'evening-wrap', TODAY, t0), true)
+  state = recordAiNarrativeAttempt(state, 'evening-wrap', TODAY, t0)
   assert.equal(canAttemptAiNarrative(state, 'yesterday-recap', yesterday, t0 + 6 * 3_600_000), false)
 })
 

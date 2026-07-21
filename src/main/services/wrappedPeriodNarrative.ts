@@ -200,8 +200,30 @@ async function getWrappedPeriodNarrative(
     if (stored && isDeckNarrative(stored.narrative)) {
       // A closed period never silently regenerates. An open one is live: show
       // the stored wrap while the facts still match, regenerate when they grew.
-      if (!open || stored.factsHash === factsHash) {
+      if (stored.factsHash === factsHash) {
         return { ...stored.narrative, generatedAt: stored.generatedAt }
+      }
+      if (!open) {
+        // A closed period's facts moved under the stored prose (corrections
+        // delete the stored row at write time, so this is the rare leftover,
+        // e.g. a snapshot rebuilt by a newer builder). Re-ground every piece
+        // against the current facts rather than serving lines that could
+        // contradict the cards; pieces that fail fall back per slide.
+        if (stored.narrative.source === 'ai') {
+          const reground = validatePeriodNarrativeObject(
+            {
+              lines: stored.narrative.lines ?? {},
+              question: stored.narrative.question,
+              reflection: stored.narrative.reflection,
+            },
+            facts,
+            factsHash,
+          )
+          if (reground.narrative) {
+            return { ...reground.narrative, generatedAt: stored.generatedAt }
+          }
+        }
+        return buildPeriodFallbackNarrative(facts, factsHash)
       }
     }
   }

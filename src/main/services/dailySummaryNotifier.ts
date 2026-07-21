@@ -22,13 +22,16 @@ import { deliverNotification } from './notificationDelivery'
 import {
   decideDailySummary,
   decideYesterdayRecap,
-  decideCarryoverNudge,
   workRhythmWindows,
   canAttemptAiNarrative,
   recordAiNarrativeAttempt,
+  aiNarrativeAttemptsExhausted,
   type AiAttemptKind,
   type DailyNotifierState,
 } from '../lib/dailySummaryScheduler'
+import { factOnlyRecapLine } from '../lib/wrappedNarrative'
+import { buildDayWrapFacts } from '../../renderer/lib/dayWrapScenes'
+import { getWrapProviderState } from './aiOrchestration'
 
 const MAX_TRACKED_RECAP_DATES = 21
 
@@ -89,13 +92,19 @@ function writeState(state: DailyNotifierState): void {
 // it came from the provider — never the deterministic fallback. When it returns
 // null (no provider, no credits, or the call failed) the notifier does NOT fire:
 // no canned brief, no static teaser.
+//
+// onStale 'regenerate': a brief is generated from the facts as they stand at
+// delivery time, never served from a stale cache. A stored wrap whose facts
+// hash still matches the day is reused (it IS the current facts); one that
+// drifted is regenerated and persisted before the notification fires, so the
+// line on the lock screen is by construction the lead of the wrap it opens.
 async function getAiNarrative(dateStr: string): Promise<AIWrappedNarrative | null> {
   try {
     const today = localDateString(new Date())
     const liveSession = dateStr === today ? getCurrentSession() : null
     const payload = getTimelineDayPayload(getDb(), dateStr, liveSession)
     const narrative = await Promise.race([
-      getWrappedNarrative(payload, { triggerSource: 'system' }),
+      getWrappedNarrative(payload, { triggerSource: 'system', onStale: 'regenerate' }),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), AI_REPORT_TIMEOUT_MS)),
     ])
     if (!narrative || narrative.source !== 'ai' || !narrative.lead) return null
@@ -135,6 +144,21 @@ function secondsTrackedOn(date: string): number {
   return sessions.reduce((sum, s) => sum + s.durationSeconds, 0)
 }
 
+// The deterministic floor of the evening recap: a line made only of the day's
+// shared corrected facts (the same payload every other surface reads), or null
+// when the day is too thin to say anything honest. Fallback order when AI
+// can't write the recap: this fact-only line, then silence — never a guess.
+function deterministicRecapLine(dateStr: string): string | null {
+  try {
+    const today = localDateString(new Date())
+    const liveSession = dateStr === today ? getCurrentSession() : null
+    const payload = getTimelineDayPayload(getDb(), dateStr, liveSession)
+    return factOnlyRecapLine(buildDayWrapFacts(payload))
+  } catch {
+    return null
+  }
+}
+
 async function checkDailySummary(): Promise<void> {
   if (dailySummaryPreparing) return
 
@@ -156,11 +180,30 @@ async function checkDailySummary(): Promise<void> {
 
   dailySummaryPreparing = true
   try {
-    if (!withAiAttemptBudget('evening-wrap', today)) return
-    // No-credits rule: only fire when the body is real AI output (§7).
-    const teaser = await tryGetWrappedTeaser(today)
-    if (!teaser) return
-    notifyWithNavigation('Your evening wrap', teaser, buildEveningWrapRoute(today))
+    // With a connected provider, the recap is written from the current facts
+    // (attempt-budgeted); the fact-only line steps in only once no written
+    // recap can come today. Without one, the fact-only line IS the recap.
+    const providerConnected = await getWrapProviderState()
+      .then((s) => s.connected)
+      .catch(() => false)
+
+    if (providerConnected && withAiAttemptBudget('evening-wrap', today)) {
+      const teaser = await tryGetWrappedTeaser(today)
+      if (teaser) {
+        notifyWithNavigation('Your evening wrap', teaser, buildEveningWrapRoute(today))
+        writeState({ ...readState(), lastDailySummaryDate: today })
+        return
+      }
+    }
+
+    // No AI recap this round. If a retry could still produce one later in the
+    // window, hold the notification for it; otherwise end the day's window
+    // with the deterministic fact-only line (then silence when even that has
+    // nothing honest to say).
+    if (providerConnected && !aiNarrativeAttemptsExhausted(readState(), 'evening-wrap', today)) return
+    const line = deterministicRecapLine(today)
+    if (!line) return
+    notifyWithNavigation('Your evening wrap', line, buildEveningWrapRoute(today))
     writeState({ ...readState(), lastDailySummaryDate: today })
   } finally {
     dailySummaryPreparing = false
@@ -210,52 +253,6 @@ async function checkYesterdayRecap(): Promise<void> {
   }
 }
 
-// §4.2 — Carryover nudge. Fires after ~1–2h of work that morning, always. Greets
-// you, notes what it can see you doing this morning, and surfaces yesterday's
-// open thread to pick up. A clean start is a real answer.
-async function checkCarryoverNudge(): Promise<void> {
-  if (dailySummaryPreparing) return
-
-  const settings = getSettings()
-  const now = new Date()
-  const today = localDateString(now)
-  const yesterday = shiftLocalDateString(today, -1)
-  const state = readState()
-
-  const windows = workRhythmWindows(settings.workRhythm)
-  const decision = decideCarryoverNudge({
-    now,
-    state,
-    todaySecondsTracked: secondsTrackedOn(today),
-    morningNudgeEnabled: settings.morningNudgeEnabled ?? true,
-    todayDateString: today,
-    yesterdayDateString: yesterday,
-    carryoverEndHour: windows.carryoverEndHour,
-  })
-  if (!decision.fire) return
-
-  dailySummaryPreparing = true
-  try {
-    if (!withAiAttemptBudget('carryover-nudge', today)) return
-    const body = await buildCarryoverBody(today, yesterday)
-    if (!body) return // no provider / no credits → no brief (§7)
-    notifyWithNavigation('Good morning', body, buildEveningWrapRoute(today))
-    writeState({ ...readState(), lastCarryoverNudgeDate: today })
-  } finally {
-    dailySummaryPreparing = false
-  }
-}
-
-// What it sees this morning, AI-written. Daylens never predicts tomorrow or
-// surfaces an "open thread to pick up" (locked decision: carryover is gone every
-// cadence), so the body is an honest read on the morning, nothing more. Returns
-// null when no AI content is available, so the nudge stays silent rather than
-// fabricating a brief.
-async function buildCarryoverBody(today: string, _yesterday: string): Promise<string | null> {
-  const todayNarrative = await getAiNarrative(today)
-  return todayNarrative?.lead?.trim() ?? null
-}
-
 // Record that the user generated a recap for `date` (Generate Recap / Analyze
 // Day). Two jobs: (1) it suppresses the next morning's "yesterday's recap"
 // notification for that day (§4.1 firing rule); (2) it freezes the day's
@@ -295,8 +292,10 @@ export async function fireTestDailySummaryNotification(
       return { ok: true, route }
     }
 
-    const teaser = await tryGetWrappedTeaser(today)
-    if (!teaser) return { ok: false, reason: 'no-ai-content' }
+    // Same fallback order as the real evening check: the written recap when a
+    // provider can produce one, else the deterministic fact-only line.
+    const teaser = (await tryGetWrappedTeaser(today)) ?? deterministicRecapLine(today)
+    if (!teaser) return { ok: false, reason: 'no-recap-content' }
     const route = buildEveningWrapRoute(today)
     notifyWithNavigation('Your evening wrap', teaser, route)
     return { ok: true, route }
@@ -320,7 +319,6 @@ export function startDailySummaryNotifier(window?: BrowserWindow | null): void {
     void (async () => {
       try {
         await checkYesterdayRecap()
-        await checkCarryoverNudge()
         await checkDailySummary()
       } catch (err) {
         console.warn('[daily-summary] notifier check failed:', err)

@@ -33,6 +33,7 @@ import {
   type LineGuardContext,
   type WrapLineRejection,
 } from './wrapNarrativeShared'
+import { buildPeriodFactTable, groundingFormsForRuntime } from './wrapFactTable'
 
 function periodWord(period: WrappedPeriod): string {
   return period === 'week' ? 'week' : period === 'month' ? 'month' : 'year'
@@ -103,6 +104,9 @@ function guardContext(facts: WrappedPeriodFacts, slides: WrapSlideSpec[]): LineG
     // Period facts carry no output evidence (no git/notes enrichment rides a
     // period wrap today), so completion claims are always unverified here.
     outputVerified: false,
+    // The fact-table backstop: every numeric token in a line must match the
+    // period's fact table or a number the writer was shown.
+    groundedNumericForms: groundingFormsForRuntime(buildPeriodFactTable(facts), durationSource),
   }
 }
 

@@ -2,15 +2,16 @@
 // has no dependency on settings, the database, or providers — tests drive the
 // gate logic with synthetic state alone.
 //
-// The morning brief is TWO separate notifications with
-// different firing rules. §5: the evening wrap fires as you shut down.
+// Two notifications: the morning brief (yesterday's recap) and the evening
+// wrap that fires as you shut down. The carryover nudge is gone — removed with
+// the brief rebuild, not migrated.
 //
 // The notifier (`src/main/services/dailySummaryNotifier.ts`) gathers settings +
 // state + tracked seconds and asks these functions whether to fire.
 
 import type { WorkRhythm } from '@shared/types'
 
-// DEV-113: the user's working rhythm (chosen in onboarding) shifts when the
+// The user's working rhythm (chosen in onboarding) shifts when the
 // briefs and wrap fire. An early bird gets an earlier evening wrap and morning
 // recap window; a night owl gets later ones; "always on" stays wide. The
 // defaults match the standard nine-to-five day so behavior is unchanged when no
@@ -21,21 +22,19 @@ export interface RhythmWindows {
   /** Morning-recap window: fires only between these hours. */
   morningStartHour: number
   morningEndHour: number
-  /** Carryover nudge stops offering once this hour passes. */
-  carryoverEndHour: number
 }
 
 export function workRhythmWindows(rhythm: WorkRhythm | undefined): RhythmWindows {
   switch (rhythm) {
     case 'early':
-      return { eveningWrapHour: 17, morningStartHour: 4, morningEndHour: 11, carryoverEndHour: 13 }
+      return { eveningWrapHour: 17, morningStartHour: 4, morningEndHour: 11 }
     case 'night':
-      return { eveningWrapHour: 21, morningStartHour: 8, morningEndHour: 14, carryoverEndHour: 16 }
+      return { eveningWrapHour: 21, morningStartHour: 8, morningEndHour: 14 }
     case 'always':
-      return { eveningWrapHour: 18, morningStartHour: 5, morningEndHour: 13, carryoverEndHour: 15 }
+      return { eveningWrapHour: 18, morningStartHour: 5, morningEndHour: 13 }
     case 'standard':
     default:
-      return { eveningWrapHour: 18, morningStartHour: 5, morningEndHour: 12, carryoverEndHour: 14 }
+      return { eveningWrapHour: 18, morningStartHour: 5, morningEndHour: 12 }
   }
 }
 
@@ -46,8 +45,6 @@ export interface DailyNotifierState {
   lastDailySummaryDate?: string
   /** Yesterday's-recap notification last fired (keyed to the day it fired). */
   lastYesterdayRecapDate?: string
-  /** Carryover-nudge notification last fired (keyed to the day it fired). */
-  lastCarryoverNudgeDate?: string
   /** Dates the user explicitly generated a recap for (so we don't re-offer it). */
   recapGeneratedDates?: string[]
   /** AI narrative attempts per "<kind>:<date>" — the retry budget below. */
@@ -64,7 +61,7 @@ export interface DailyNotifierState {
 // the loop through the existing last*Date state, so the budget only ever gates
 // retries of failures.
 
-export type AiAttemptKind = 'evening-wrap' | 'yesterday-recap' | 'carryover-nudge'
+export type AiAttemptKind = 'evening-wrap' | 'yesterday-recap'
 
 export const AI_ATTEMPT_MAX_PER_DAY = 3
 export const AI_ATTEMPT_MIN_GAP_MS = 20 * 60_000
@@ -83,6 +80,19 @@ export function canAttemptAiNarrative(
   if (!entry) return true
   if (entry.count >= AI_ATTEMPT_MAX_PER_DAY) return false
   return nowMs - entry.lastAtMs >= AI_ATTEMPT_MIN_GAP_MS
+}
+
+/** True once the day's AI budget for this kind is spent for good — as opposed
+ *  to merely waiting out the retry gap. This is the moment the evening recap
+ *  stops hoping for a written line and falls back to the deterministic
+ *  fact-only one (fallback order: fact-only line, then silence). */
+export function aiNarrativeAttemptsExhausted(
+  state: DailyNotifierState,
+  kind: AiAttemptKind,
+  date: string,
+): boolean {
+  const entry = state.aiAttempts?.[aiAttemptKey(kind, date)]
+  return (entry?.count ?? 0) >= AI_ATTEMPT_MAX_PER_DAY
 }
 
 /** Returns a new state with the attempt recorded and entries older than 48h
@@ -108,12 +118,9 @@ export function recordAiNarrativeAttempt(
 }
 
 // Minimum tracked seconds before a day has enough signal to be worth a recap.
-// Matches the 'partial' threshold from the renderer quality model.
+// Matches the 'partial' threshold from the renderer quality model. An empty or
+// barely-tracked day produces no notification at all: silence over invention.
 export const NOTIFY_MIN_SECONDS = 45 * 60
-
-// The carryover nudge catches you once you're settled — after ~1h of work that
-// morning, not the instant you open the laptop (§4.2).
-export const CARRYOVER_MIN_WORK_SECONDS = 60 * 60
 
 export type SchedulerDecision =
   | { fire: true; targetDate: string }
@@ -184,31 +191,3 @@ export function decideYesterdayRecap(input: YesterdayRecapDecisionInput): Schedu
   return { fire: true, targetDate: input.yesterdayDateString }
 }
 
-// ─── Carryover nudge (§4.2) ───────────────────────────────────────────────────
-// Fires after 1–2 hours of work that morning — always, regardless of whether a
-// recap was generated yesterday. The "here's what to pick up" nudge.
-
-export interface CarryoverNudgeDecisionInput {
-  now: Date
-  state: DailyNotifierState
-  todaySecondsTracked: number
-  morningNudgeEnabled: boolean
-  todayDateString: string
-  yesterdayDateString: string
-  /** Hour after which the carryover nudge stops offering; defaults to 14:00. */
-  carryoverEndHour?: number
-}
-
-export function decideCarryoverNudge(input: CarryoverNudgeDecisionInput): SchedulerDecision {
-  if (!input.morningNudgeEnabled) return { fire: false, reason: 'disabled' }
-  if (input.state.lastCarryoverNudgeDate === input.todayDateString) {
-    return { fire: false, reason: 'already-fired-today' }
-  }
-  // Late morning / very early afternoon — once you're settled into the day.
-  const carryoverEndHour = input.carryoverEndHour ?? STANDARD_WINDOWS.carryoverEndHour
-  if (input.now.getHours() >= carryoverEndHour) return { fire: false, reason: 'after-early-afternoon' }
-  if (input.todaySecondsTracked < CARRYOVER_MIN_WORK_SECONDS) {
-    return { fire: false, reason: 'not-settled-in-yet' }
-  }
-  return { fire: true, targetDate: input.todayDateString }
-}

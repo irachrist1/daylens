@@ -25,8 +25,10 @@ import {
   computeFactsHash,
   mergeWrapRepair,
   parseWrapResponse,
+  reconcileStoredNarrative,
   validateWrappedNarrativeObject,
 } from '../lib/wrappedNarrative'
+import { buildDayFactTable } from '../lib/wrapFactTable'
 import { getDb } from './database'
 import { resolveDayEnrichment } from './enrichmentResolve'
 import { getStoredWrappedNarrative, putStoredWrappedNarrative } from '../db/wrappedNarrativeStore'
@@ -62,9 +64,23 @@ function isDeckNarrative(value: unknown): value is AIWrappedNarrative {
   return Boolean(value && typeof value === 'object' && typeof (value as AIWrappedNarrative).lines === 'object')
 }
 
+export interface WrappedNarrativeOptions {
+  triggerSource?: AIInvocationSource
+  force?: boolean
+  /** How a STORED narrative whose facts hash no longer matches the day is
+   *  treated. 'reconcile' (the default, in-app opens): stored prose is
+   *  re-grounded against the current facts and any piece that would contradict
+   *  the cards falls back deterministically, without spending a call.
+   *  'regenerate' (notification delivery): a brief must be generated from the
+   *  facts at delivery time, never a stale cache, so a mismatch spends a call
+   *  to regenerate; if that fails the result is the deterministic fallback,
+   *  which the notifier treats as silence. */
+  onStale?: 'reconcile' | 'regenerate'
+}
+
 export async function getWrappedNarrative(
   payload: DayTimelinePayload,
-  options: { triggerSource?: AIInvocationSource; force?: boolean } = {},
+  options: WrappedNarrativeOptions = {},
 ): Promise<AIWrappedNarrative> {
   const facts = buildDayWrapFacts(payload)
   const db = getDb()
@@ -72,17 +88,33 @@ export async function getWrappedNarrative(
   // from stored rows — no tool loop, never blocks. Absent → null, never invented.
   const enrichment = resolveDayEnrichment(db, facts.date)
   const factsHash = computeFactsHash(facts, enrichment)
+  // The one deterministic fact table for this day — the substrate every model
+  // line is validated against, computed before and independently of any model.
+  const factTable = buildDayFactTable(facts, payload.blocks, facts.date, enrichment)
   // Keyed by the DATE, not the facts hash, so today's wrap is stable as the day
   // accrues more activity (it does not rebuild every open). Only Regenerate replaces it.
   const periodKey = facts.date
 
-  // A wrap is never silently regenerated (DEV-118 / wrapped.md §3.3): a stored
-  // wrap is shown as-is, with its real generated-at time. Only an explicit
-  // Regenerate (force) spends a new call and overwrites it.
+  // A wrap is never silently regenerated: a stored wrap whose facts still hold
+  // is shown as-is, with its real generated-at time. When the facts moved
+  // (corrections invalidate the stored row at write time, so in practice this
+  // is today accruing activity), the stored prose is re-grounded rather than
+  // trusted — a line that would contradict the current cards cannot render.
   if (!options.force) {
     const stored = getStoredWrappedNarrative<AIWrappedNarrative>(db, 'day', periodKey)
     if (stored && isDeckNarrative(stored.narrative)) {
-      return { ...stored.narrative, generatedAt: stored.generatedAt }
+      if (stored.factsHash === factsHash) {
+        return { ...stored.narrative, generatedAt: stored.generatedAt }
+      }
+      if (options.onStale !== 'regenerate') {
+        const reconciled = reconcileStoredNarrative(stored.narrative, facts, factsHash, enrichment, factTable)
+        if (reconciled) return { ...reconciled, generatedAt: stored.generatedAt }
+        // Nothing of the stored prose grounds anymore: show the honest
+        // deterministic narrative without spending a call. Regenerate (force)
+        // or notification delivery produces a fresh one.
+        return buildFallbackNarrative(facts, factsHash)
+      }
+      // onStale 'regenerate': fall through and generate from the current facts.
     }
   }
 
@@ -134,7 +166,7 @@ export async function getWrappedNarrative(
 
     const parsed = parseWrapResponse(text)
     if (!parsed) return persist(fallback)
-    let { narrative, rejections } = validateWrappedNarrativeObject(parsed, facts, factsHash, enrichment)
+    let { narrative, rejections } = validateWrappedNarrativeObject(parsed, facts, factsHash, enrichment, factTable)
 
     // ONE repair round (wrapped-agent-plan: verify + at most one repair call).
     // The writer gets its own rejected lines back with the exact violations and
@@ -161,7 +193,7 @@ export async function getWrappedNarrative(
           'wrapped_narrative repair timed out',
         )
         const merged = mergeWrapRepair(parsed, repairText, rejections)
-        const second = validateWrappedNarrativeObject(merged, facts, factsHash, enrichment)
+        const second = validateWrappedNarrativeObject(merged, facts, factsHash, enrichment, factTable)
         if (second.narrative) {
           narrative = second.narrative
           rejections = second.rejections

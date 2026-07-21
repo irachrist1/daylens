@@ -364,6 +364,18 @@ export interface SecondaryDisplayVisibleSpan {
   presence: 'visible'
 }
 
+/** One durable entity the day's evidence supports naming — a project, client,
+ *  person, meeting, or repository from the entity ledger whose evidence spans
+ *  overlap the day's surviving (trusted, undeleted) blocks. The wrap's
+ *  "what the day was about" scene reads these; seconds are the overlap with
+ *  the surviving blocks, so deleted evidence can never lend an entity time. */
+export interface DayWrapEntity {
+  id: string
+  type: 'project' | 'client' | 'person' | 'meeting' | 'repository'
+  name: string
+  seconds: number
+}
+
 export interface DayTimelinePayload {
   date: string
   sessions: AppSession[]
@@ -381,6 +393,9 @@ export interface DayTimelinePayload {
   // Additive: what secondary displays showed while focus was elsewhere.
   // Absent on payloads that predate multi-display capture.
   secondaryDisplay?: SecondaryDisplayVisibleSpan[]
+  // Additive: the durable entities the day's evidence supports naming.
+  // Absent on payloads built before the entity ledger existed.
+  dayEntities?: DayWrapEntity[]
 }
 
 export type HistoryDayPayload = DayTimelinePayload
@@ -1630,6 +1645,8 @@ export interface ConnectorListing {
   whatItBrings: string
   /** Exact read-only scopes, each with plain-language meaning. */
   scopes: Array<{ scope: string; grants: string }>
+  /** Bounded initial-sync lookback, for honest progress copy. */
+  lookbackDays: number
   /** True when a working adapter ships today; false = listed for the wave. */
   available: boolean
   authState: ConnectorAuthState
@@ -1641,6 +1658,16 @@ export interface ConnectorListing {
   lastSyncError: string | null
   nextRetryAt: number | null
   itemsIngested: number
+}
+
+/** What a connect/sync action reports back to Settings. `error` is always a
+ *  sanitized summary — never a provider body that could carry secrets. */
+export interface ConnectorSyncSummary {
+  status: 'ok' | 'blocked_consent' | 'blocked_disabled' | 'failed' | 'not_connected'
+  ingested: number
+  quarantined: number
+  tombstoned: number
+  error?: string
 }
 
 // ─── Full-history export (privacy-retention-and-sync.md §Export, DEV-196) ────
@@ -2711,9 +2738,15 @@ export const IPC = {
     PICK_PATH: 'file-access:pick-path',
   },
   CONNECTORS: {
-    // Listing only in this slice — lifecycle IPC (connect/disconnect/sync)
-    // arrives with the first connectable provider.
     LIST: 'connectors:list',
+    // Lifecycle IPC (DEV-188, with the first connectable provider). CONNECT
+    // runs the provider's authorization flow and first sync; DISCONNECT
+    // carries the person's explicit keep-or-delete choice for imported data.
+    CONNECT: 'connectors:connect',
+    SYNC: 'connectors:sync',
+    DISCONNECT: 'connectors:disconnect',
+    /** Main → renderer: connect-phase progress ({ connectorId, phase }). */
+    PROGRESS: 'connectors:progress',
   },
   EXPORT: {
     // Full-history export (DEV-196). PLAN previews what an export would
