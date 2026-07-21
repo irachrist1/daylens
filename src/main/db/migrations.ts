@@ -3040,6 +3040,64 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 62,
+    description:
+      'Screen-context experiment lifecycle (DEV-197): the durable frame ledger and derived-evidence store behind the opt-in screen-sampling experiment. screen_context_frames tracks every sampled frame through its one lifecycle (captured → extracting → indexed → safe_to_delete → deleted, with failed → quarantined on extraction failure) so the raw-deletion invariant — no raw file is deleted before its derived evidence is atomically committed, and no raw file outlives the 24-hour safety window unquarantined — survives restarts and crashes. screen_context_evidence holds the high-sensitivity derived records (title, short OCR spans, subject references, provenance bounding, model/schema versions, a one-way frame digest) and is LOCAL-ONLY: never synced, never exported, never fed to MCP or a model outside the experiment boundary. Raw frame bytes live encrypted on disk, never in the database. (Numbered v62: drafted as v60, renumbered at integration because the connector stack\'s GitHub memory_records widening shipped as v60 and meeting-attendance as v61 — merge the connector stack first; the runner tolerates the 59 -> 62 gap and never revisits versions below MAX(applied).)',
+    up: () => {
+      getDb().exec(`
+        CREATE TABLE IF NOT EXISTS screen_context_frames (
+          id TEXT PRIMARY KEY,
+          captured_at INTEGER NOT NULL,
+          trigger TEXT NOT NULL DEFAULT 'interval' CHECK (trigger IN (
+            'stability', 'context_change', 'interval', 'diagnostic'
+          )),
+          app_bundle_id TEXT,
+          app_name TEXT,
+          display_id INTEGER,
+          exclusion_policy_version INTEGER NOT NULL DEFAULT 0,
+          local_path TEXT,
+          byte_size INTEGER NOT NULL DEFAULT 0,
+          state TEXT NOT NULL CHECK (state IN (
+            'captured', 'extracting', 'indexed', 'safe_to_delete', 'deleted',
+            'failed', 'quarantined'
+          )),
+          retry_count INTEGER NOT NULL DEFAULT 0,
+          last_error TEXT,
+          next_retry_at INTEGER,
+          first_failed_at INTEGER,
+          deleted_without_evidence INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_screen_frames_state ON screen_context_frames(state);
+        CREATE INDEX IF NOT EXISTS idx_screen_frames_captured ON screen_context_frames(captured_at);
+
+        CREATE TABLE IF NOT EXISTS screen_context_evidence (
+          id TEXT PRIMARY KEY,
+          frame_id TEXT NOT NULL REFERENCES screen_context_frames(id),
+          captured_at INTEGER NOT NULL,
+          app_bundle_id TEXT,
+          app_name TEXT,
+          doc_title TEXT,
+          ocr_spans_json TEXT NOT NULL DEFAULT '[]',
+          subject_refs_json TEXT NOT NULL DEFAULT '[]',
+          bounding_json TEXT,
+          extractor_model TEXT NOT NULL,
+          extractor_schema_version INTEGER NOT NULL,
+          confidence REAL NOT NULL DEFAULT 0,
+          sensitivity TEXT NOT NULL DEFAULT 'high',
+          frame_digest TEXT NOT NULL,
+          interval_start_ms INTEGER,
+          interval_end_ms INTEGER,
+          created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_screen_evidence_frame ON screen_context_evidence(frame_id);
+        CREATE INDEX IF NOT EXISTS idx_screen_evidence_digest ON screen_context_evidence(frame_digest);
+        CREATE INDEX IF NOT EXISTS idx_screen_evidence_captured ON screen_context_evidence(captured_at);
+      `)
+    },
+  },
 ]
 
 export const LATEST_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0
