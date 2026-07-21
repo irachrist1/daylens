@@ -1630,6 +1630,8 @@ export interface ConnectorListing {
   whatItBrings: string
   /** Exact read-only scopes, each with plain-language meaning. */
   scopes: Array<{ scope: string; grants: string }>
+  /** Bounded initial-sync lookback, for honest progress copy. */
+  lookbackDays: number
   /** True when a working adapter ships today; false = listed for the wave. */
   available: boolean
   authState: ConnectorAuthState
@@ -1641,6 +1643,16 @@ export interface ConnectorListing {
   lastSyncError: string | null
   nextRetryAt: number | null
   itemsIngested: number
+}
+
+/** What a connect/sync action reports back to Settings. `error` is always a
+ *  sanitized summary — never a provider body that could carry secrets. */
+export interface ConnectorSyncSummary {
+  status: 'ok' | 'blocked_consent' | 'blocked_disabled' | 'failed' | 'not_connected'
+  ingested: number
+  quarantined: number
+  tombstoned: number
+  error?: string
 }
 
 // ─── Full-history export (privacy-retention-and-sync.md §Export, DEV-196) ────
@@ -2103,6 +2115,13 @@ export interface AppSettings {
   // every connector sync and ingest immediately, same shape as the capture
   // consent gate. Per-connector connect/disconnect lives on the connection.
   connectedSourcesEnabled?: boolean
+  // Screen-context experiment (DEV-197). Consent is separate from capture,
+  // sync, browser, and connector consent, and is offered ONLY from the
+  // experiment setup — enabling normal tracking never sets it. Absent means
+  // not consented; revoking clears it and deletes unprocessed frames.
+  screenContextExperimentEnabled?: boolean
+  // Ad-hoc pause for screen sampling only; core tracking is untouched.
+  screenContextPaused?: boolean
 }
 
 export type BillingAccessMode = 'free_credit' | 'subscription' | 'local_pass' | 'own_key' | 'none' | 'unavailable'
@@ -2734,9 +2753,15 @@ export const IPC = {
     PICK_PATH: 'file-access:pick-path',
   },
   CONNECTORS: {
-    // Listing only in this slice — lifecycle IPC (connect/disconnect/sync)
-    // arrives with the first connectable provider.
     LIST: 'connectors:list',
+    // Lifecycle IPC (DEV-188, with the first connectable provider). CONNECT
+    // runs the provider's authorization flow and first sync; DISCONNECT
+    // carries the person's explicit keep-or-delete choice for imported data.
+    CONNECT: 'connectors:connect',
+    SYNC: 'connectors:sync',
+    DISCONNECT: 'connectors:disconnect',
+    /** Main → renderer: connect-phase progress ({ connectorId, phase }). */
+    PROGRESS: 'connectors:progress',
   },
   EXPORT: {
     // Full-history export (DEV-196). PLAN previews what an export would
