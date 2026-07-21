@@ -18,16 +18,27 @@
 // refused outright — nothing is written, not even bookkeeping.
 
 import type Database from 'better-sqlite3'
-import type { CalendarEventSignal, CalendarSignal, ConnectorId, GitActivitySignal } from '@shared/types'
+import type {
+  CalendarEventSignal,
+  CalendarSignal,
+  ConnectorId,
+  GitActivitySignal,
+  MeetingNotesSignal,
+} from '@shared/types'
 import { isCaptureConsentCurrent } from '@shared/captureConsent'
 import { getSettings } from '../services/settings'
 import { getExternalSignal } from '../services/externalSignals'
-import { adoptConnectedEnvelope, unifyRepositoryEntityIdentity } from '../services/entities/entityAdoption'
+import {
+  adoptConnectedEnvelope,
+  unifyMeetingNoteIdentity,
+  unifyRepositoryEntityIdentity,
+} from '../services/entities/entityAdoption'
 import { addEntityEvidenceRef, resolvePersonEntity } from '../services/entities/entityRepository'
 import {
   validateRecordEnvelope,
   type ConnectorDaySignalEvent,
   type ConnectorGitDaySignal,
+  type ConnectorNotesDaySignal,
   type ConnectorRecordEnvelope,
   type ConnectorSyncPage,
 } from './contract'
@@ -41,6 +52,7 @@ import {
 import {
   removeConnectorDaySignalEvent,
   removeConnectorGitDaySignalEvent,
+  removeConnectorNotesDaySignalEvent,
   removeConnectorRecordDerivedData,
 } from './purge'
 import { connectorEvidenceSourceId } from './evidenceId'
@@ -109,6 +121,18 @@ export function mergeConnectorCalendarDaySignal(
   `).run(date, JSON.stringify(merged), nowMs)
 }
 
+/** The honest source label the notes day row shows ("Granola"). */
+function connectorDisplayLabel(connectorId: ConnectorId): string {
+  switch (connectorId) {
+    case 'granola': return 'Granola'
+    case 'linear': return 'Linear'
+    case 'github': return 'GitHub'
+    case 'google_calendar': return 'Google Calendar'
+    case 'outlook_calendar': return 'Outlook Calendar'
+    default: return connectorId
+  }
+}
+
 /** Cap per repo per day so one rebase spree cannot flood the day layer. */
 const MAX_DAY_COMMIT_MESSAGES = 12
 
@@ -165,6 +189,41 @@ export function mergeConnectorGitDaySignal(
   `).run(date, JSON.stringify(payload), nowMs)
 }
 
+/**
+ * Merge connector meeting notes into the external_signals 'notes' day layer —
+ * the MeetingNotesSignal row the wrap enrichment already reads (and
+ * sanitizes). Merged by (title, scheduledClock) so a re-synced note replaces
+ * its own entry instead of duplicating it. The app label stays the provider's
+ * honest display name.
+ */
+export function mergeConnectorNotesDaySignal(
+  db: Database.Database,
+  date: string,
+  notes: ConnectorNotesDaySignal[],
+  appLabel: string,
+  nowMs = Date.now(),
+): void {
+  if (notes.length === 0) return
+  const incoming = notes.map((note) => ({
+    title: note.title,
+    participants: note.participants,
+    actionItems: note.actionItems,
+    scheduledClock: note.scheduledClock,
+  }))
+  const existing = getExternalSignal<MeetingNotesSignal>(db, date, 'notes')?.payload.notes ?? []
+  const kept = existing.filter((note) => !incoming.some(
+    (candidate) => candidate.title === note.title && (candidate.scheduledClock ?? null) === (note.scheduledClock ?? null),
+  ))
+  const merged: MeetingNotesSignal = { app: appLabel, notes: [...kept, ...incoming] }
+  db.prepare(`
+    INSERT INTO external_signals (date, source, payload_json, captured_at)
+    VALUES (?, 'notes', ?, ?)
+    ON CONFLICT(date, source) DO UPDATE SET
+      payload_json = excluded.payload_json,
+      captured_at = excluded.captured_at
+  `).run(date, JSON.stringify(merged), nowMs)
+}
+
 // ─── Page ingestion ──────────────────────────────────────────────────────────
 
 export interface IngestPageResult {
@@ -181,6 +240,7 @@ export interface IngestPageResult {
 function envelopeDate(record: ConnectorRecordEnvelope): string | null {
   if (record.daySignal) return record.daySignal.date
   if (record.gitSignal) return record.gitSignal.date
+  if (record.notesSignal) return record.notesSignal.date
   if (record.provenance.effectiveAtMs != null) {
     const at = new Date(record.provenance.effectiveAtMs)
     const month = String(at.getMonth() + 1).padStart(2, '0')
@@ -215,6 +275,7 @@ export function ingestConnectorPage(
   const run = db.transaction(() => {
     const dayEvents = new Map<string, ConnectorDaySignalEvent[]>()
     const gitEvents = new Map<string, ConnectorGitDaySignal[]>()
+    const noteEvents = new Map<string, ConnectorNotesDaySignal[]>()
 
     for (const record of page.records) {
       const problems = validateRecordEnvelope(record)
@@ -245,6 +306,22 @@ export function ingestConnectorPage(
             date: record.gitSignal.date,
           })
         }
+        // A meeting-notes record whose identity corroborates a scheduled
+        // meeting on the same day (title + timing + shared addresses, two of
+        // three) merges into that meeting's entity — the note ATTACHES to
+        // the meeting it documents and becomes its occurrence evidence.
+        if (record.entity.kind === 'meeting_record' && record.notesSignal) {
+          unifyMeetingNoteIdentity(db, {
+            noteEntityId: entity.id,
+            title: record.entity.title,
+            startMs: record.entity.startMs ?? null,
+            date: record.notesSignal.date,
+            participantEmails: (record.entity.participants ?? [])
+              .map((person) => person.connectorId.split(':').slice(1).join(':'))
+              .filter((identity) => identity.includes('@')),
+            linkedCalendarEventIds: record.entity.linkedCalendarEventIds,
+          })
+        }
       }
       // Attendees/participants minted inside adoptConnectedEnvelope get the
       // same per-record support ref (resolvePersonEntity is idempotent), so
@@ -253,7 +330,7 @@ export function ingestConnectorPage(
         ? record.entity.attendees ?? []
         : record.entity.kind === 'meeting_record'
           ? record.entity.participants ?? []
-          : record.entity.kind === 'repository_activity'
+          : record.entity.kind === 'repository_activity' || record.entity.kind === 'issue_activity'
             ? record.entity.people ?? []
             : []
       for (const person of people) {
@@ -285,6 +362,13 @@ export function ingestConnectorPage(
           if (oldGit && JSON.stringify(oldGit) !== JSON.stringify(nextGit ?? null)) {
             removeConnectorGitDaySignalEvent(db, oldGit, nowMs)
           }
+          const oldNotes = previousEnvelope.notesSignal
+          const nextNotes = record.notesSignal
+          if (oldNotes && (!nextNotes || oldNotes.date !== nextNotes.date
+            || oldNotes.title !== nextNotes.title
+            || (oldNotes.scheduledClock ?? null) !== (nextNotes.scheduledClock ?? null))) {
+            removeConnectorNotesDaySignalEvent(db, oldNotes, nowMs)
+          }
         } catch { /* unreadable prior envelope — nothing to clean */ }
       }
 
@@ -299,6 +383,11 @@ export function ingestConnectorPage(
         events.push(record.gitSignal)
         gitEvents.set(record.gitSignal.date, events)
       }
+      if (record.notesSignal) {
+        const events = noteEvents.get(record.notesSignal.date) ?? []
+        events.push(record.notesSignal)
+        noteEvents.set(record.notesSignal.date, events)
+      }
       ingested += 1
     }
 
@@ -307,6 +396,9 @@ export function ingestConnectorPage(
     }
     for (const [date, events] of gitEvents) {
       mergeConnectorGitDaySignal(db, date, events, nowMs)
+    }
+    for (const [date, events] of noteEvents) {
+      mergeConnectorNotesDaySignal(db, date, events, connectorDisplayLabel(connectorId), nowMs)
     }
 
     // Explicit provider deletions on an incremental page (cancellations under

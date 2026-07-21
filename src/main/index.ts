@@ -136,6 +136,8 @@ import { startConnectorSyncSchedule, stopConnectorSyncSchedule } from './connect
 import { registerGoogleCalendarConnector } from './connectors/googleCalendar/adapter'
 import { registerOutlookCalendarConnector } from './connectors/outlookCalendar/adapter'
 import { registerGithubConnector } from './connectors/github/adapter'
+import { registerLinearConnector } from './connectors/linear/adapter'
+import { registerGranolaConnector } from './connectors/granola/adapter'
 import { registerConnectorHandlers } from './ipc/connectors.handlers'
 import { registerExportHandlers } from './ipc/export.handlers'
 import { getLinuxDesktopDiagnostics, syncLinuxLaunchOnLogin } from './services/linuxDesktop'
@@ -1317,6 +1319,10 @@ app.whenReady()
     registerOutlookCalendarConnector()
     // DEV-191: GitHub — the code provider on the same foundation.
     registerGithubConnector()
+    // DEV-192: Linear — the issues provider, personal-API-key authorized.
+    registerLinearConnector()
+    // DEV-193: Granola — the meetings provider, a local cache read.
+    registerGranolaConnector()
     registerConnectorHandlers()
     registerExportHandlers()
 
