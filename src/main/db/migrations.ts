@@ -2977,9 +2977,9 @@ const migrations: Migration[] = [
     },
   },
   {
-    version: 60,
+    version: 62,
     description:
-      'Screen-context experiment lifecycle (DEV-197): the durable frame ledger and derived-evidence store behind the opt-in screen-sampling experiment. screen_context_frames tracks every sampled frame through its one lifecycle (captured → extracting → indexed → safe_to_delete → deleted, with failed → quarantined on extraction failure) so the raw-deletion invariant — no raw file is deleted before its derived evidence is atomically committed, and no raw file outlives the 24-hour safety window unquarantined — survives restarts and crashes. screen_context_evidence holds the high-sensitivity derived records (title, short OCR spans, subject references, provenance bounding, model/schema versions, a one-way frame digest) and is LOCAL-ONLY: never synced, never exported, never fed to MCP or a model outside the experiment boundary. Raw frame bytes live encrypted on disk, never in the database.',
+      'Screen-context experiment lifecycle (DEV-197): the durable frame ledger and derived-evidence store behind the opt-in screen-sampling experiment. screen_context_frames tracks every sampled frame through its one lifecycle (captured → extracting → indexed → safe_to_delete → deleted, with failed → quarantined on extraction failure) so the raw-deletion invariant — no raw file is deleted before its derived evidence is atomically committed, and no raw file outlives the 24-hour safety window unquarantined — survives restarts and crashes. screen_context_evidence holds the high-sensitivity derived records (title, short OCR spans, subject references, provenance bounding, model/schema versions, a one-way frame digest) and is LOCAL-ONLY: never synced, never exported, never fed to MCP or a model outside the experiment boundary. Raw frame bytes live encrypted on disk, never in the database. (Numbered v62: drafted as v60, renumbered at integration because the connector stack\'s GitHub memory_records widening shipped as v60 and meeting-attendance as v61 — merge the connector stack first; the runner tolerates the 59 -> 62 gap and never revisits versions below MAX(applied).)',
     up: () => {
       getDb().exec(`
         CREATE TABLE IF NOT EXISTS screen_context_frames (
@@ -3034,15 +3034,17 @@ const migrations: Migration[] = [
       `)
     },
   },
-  // v61 is claimed by the in-flight meeting-attendance branch and v62 is
-  // reserved for the connector stack's next PR (Linear + Granola) — same rule
-  // as the v59 renumbering. The runner tolerates ordered gaps: it applies
-  // every array entry with version > MAX(applied), in array order, so 60 → 63
-  // is safe as long as versions stay strictly increasing in this array.
+  // Numbering note: v60 is the GitHub-connector memory_records widening and
+  // v61 the meeting-attendance marks (connector stack); the screen-context
+  // migration above — originally drafted as v60 — landed as v62, the slot
+  // once reserved for Linear + Granola, which shipped without a migration.
+  // Same rule as the v59 renumbering: the runner applies every array entry
+  // with version > MAX(applied), in array order, so ordered gaps are safe as
+  // long as versions stay strictly increasing in this array.
   {
     version: 63,
     description:
-      'Versioned day analysis (DEV-206): every AI analysis of a day — the day wrap narrative, the period wraps that contain it, and the timeline regroup/relabel run — is recorded as an append-only version row instead of silently replacing what came before. Each row carries what the analysis said (payload_json), the facts hash it was computed from, the model and prompt version that produced it, the trigger source, and WHY it exists (initial / facts-changed / correction / manual-regenerate). A correction retires the current version (retired_at + retired_reason) rather than erasing it, so the next generation is visibly a new version with a reason — old versions stay inspectable forever. LOCAL table: it exports with the timeline section of the history export and never rides a sync payload (the strict sync allowlist has no key for it). (Numbered v63, skipping v61/v62 claimed by the in-flight connector-stack branches — the runner never revisits versions below MAX(applied).)',
+      'Versioned day analysis (DEV-206): every AI analysis of a day — the day wrap narrative, the period wraps that contain it, and the timeline regroup/relabel run — is recorded as an append-only version row instead of silently replacing what came before. Each row carries what the analysis said (payload_json), the facts hash it was computed from, the model and prompt version that produced it, the trigger source, and WHY it exists (initial / facts-changed / correction / manual-regenerate). A correction retires the current version (retired_at + retired_reason) rather than erasing it, so the next generation is visibly a new version with a reason — old versions stay inspectable forever. LOCAL table: it exports with the timeline section of the history export and never rides a sync payload (the strict sync allowlist has no key for it). (Numbered v63, above the connector stack\'s v60/v61 and the screen-context migration\'s v62 — the runner never revisits versions below MAX(applied).)',
     up: () => {
       getDb().exec(`
         CREATE TABLE IF NOT EXISTS day_analysis_versions (
