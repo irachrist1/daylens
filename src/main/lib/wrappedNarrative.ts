@@ -79,6 +79,11 @@ export function enrichmentAllowedCounts(enrichment: DayEnrichment | null | undef
   return counts
 }
 
+/** Bumped whenever the day wrap's prompt semantics change (directives,
+ *  contract, slide asks), so a stored analysis version records WHICH prompt
+ *  produced it (DEV-206: reproducible, inspectable versions). */
+export const DAY_WRAP_PROMPT_VERSION = 1
+
 export function computeFactsHash(facts: DayWrapFacts, enrichment?: DayEnrichment | null): string {
   const bucket = (s: number) => Math.round(s / 60)
   const canonical = JSON.stringify({

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { WrappedPeriod, WrappedPeriodFacts, WrappedPeriodNarrative, WrapProviderState } from '@shared/types'
+import type { DayAnalysisVersionSummary, WrappedPeriod, WrappedPeriodFacts, WrappedPeriodNarrative, WrapProviderState } from '@shared/types'
 import { ipc } from '../lib/ipc'
 import { seedFromDate } from '../lib/dayWrapScenes'
 import { periodWrapDeckMeta, planPeriodWrapSlides } from '../lib/wrapDeck'
@@ -61,6 +61,7 @@ export default function PeriodWrapped({
   const [wrap, setWrap] = useState<{ facts: WrappedPeriodFacts; narrative: WrappedPeriodNarrative } | null>(null)
   const [loaded, setLoaded] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
+  const [history, setHistory] = useState<DayAnalysisVersionSummary[] | null>(null)
 
   useEffect(() => {
     if (blockedOpen) { setLoaded(true); return }
@@ -75,6 +76,10 @@ export default function PeriodWrapped({
       const res = await ipc.ai.getWrappedPeriodWrap(period, anchor, reloadKey > 0).catch(() => null)
       if (cancelled) return
       setWrap(res)
+      // DEV-206: this period wrap's analysis version history.
+      const versions = await ipc.ai.getDayAnalysisHistory(anchor, period).catch(() => null)
+      if (cancelled) return
+      setHistory(versions?.day ?? null)
       setLoaded(true)
     })()
     return () => { cancelled = true }
@@ -137,6 +142,7 @@ export default function PeriodWrapped({
       seed={seed}
       exportStem={`daylens-${facts.period}-${facts.anchorDate}`}
       generatedLabel={narrative.generatedAt ? relativeTime(narrative.generatedAt) : null}
+      history={history}
       onRegenerate={() => setReloadKey((k) => k + 1)}
       onClose={onClose}
       ask={({ slideId, slideLine, question, replyingTo }) =>

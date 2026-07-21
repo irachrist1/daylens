@@ -1449,6 +1449,47 @@ export interface AIWrappedNarrative {
   generatedAt?: number
 }
 
+// ─── Versioned day analysis (DEV-206) ────────────────────────────────────────
+// Every AI analysis of a day (the day wrap, the period wraps that contain it,
+// and the timeline regroup/relabel run) is recorded as an append-only version:
+// what it said, when, from which facts (facts hash), by which model and prompt
+// version, and why it replaced the previous one. Old versions stay inspectable;
+// a correction retires the current version instead of silently diverging.
+
+export type DayAnalysisKind = 'day' | 'week' | 'month' | 'year' | 'timeline'
+
+export type DayAnalysisReason =
+  | 'initial'
+  | 'facts-changed'
+  | 'correction'
+  | 'deletion'
+  | 'evidence-change'
+  | 'manual-regenerate'
+  | 'regenerated'
+
+export interface DayAnalysisVersionSummary {
+  kind: DayAnalysisKind
+  /** The date for 'day'/'timeline'; the period's start date otherwise. */
+  periodKey: string
+  /** 1-based, per (kind, periodKey). */
+  version: number
+  factsHash: string
+  /** The provider model that wrote it; null for deterministic output. */
+  model: string | null
+  promptVersion: number
+  triggerSource: string
+  source: 'ai' | 'fallback' | 'deterministic'
+  /** Why this version exists (what replaced the previous one). */
+  reason: DayAnalysisReason
+  /** One representative line of what this version said (the wrap lead, or a
+   *  short summary for a timeline analysis run). */
+  lead: string | null
+  createdAt: number
+  /** Set when a later correction/deletion retired this version. */
+  retiredAt: number | null
+  retiredReason: 'correction' | 'deletion' | 'evidence-change' | 'superseded' | null
+}
+
 /** A question asked from inside a wrap slide, answered in context. */
 export interface WrappedAskRequest {
   cadence: 'day' | 'week' | 'month' | 'year'
@@ -2100,6 +2141,21 @@ export interface AppSettings {
   aiReportPersonalizationEnabled?: boolean
   dailySummaryEnabled?: boolean
   morningNudgeEnabled?: boolean
+  /** The weekly brief: fires at the week boundary and opens the week's wrap.
+   *  Independently disableable like the other briefs (briefs.md). */
+  weeklyBriefEnabled?: boolean
+  /** Activity-free notification text (briefs.md §Notification content and
+   *  privacy): when true, brief notifications say only that the brief is ready
+   *  ("Your evening wrap is ready") — no activity content on the lock screen —
+   *  without losing the brief itself. */
+  activityFreeNotificationText?: boolean
+  /** The interpretation-agent live switch (agent-runtime-and-context.md,
+   *  DEV-206): OFF by default. Turning it on routes automatic day analysis
+   *  through the packet-based interpretation agent instead of the direct
+   *  regroup/relabel pipeline — allowed only once the offline fixture eval
+   *  (interpretationEval) passes for the packaged runtime. Until that runtime
+   *  lands, the flag is honored but the direct pipeline still runs (logged). */
+  interpretationAgentEnabled?: boolean
   distractionAlertThresholdMinutes?: number
   distractionAlertsEnabled?: boolean
   notificationPermissionState?: NotificationPermissionState
@@ -2623,6 +2679,7 @@ export const IPC = {
     GET_APP_NARRATIVE: 'ai:get-app-narrative',
     GET_WRAPPED_NARRATIVE: 'ai:get-wrapped-narrative',
     GET_WRAPPED_PERIOD_NARRATIVE: 'ai:get-wrapped-period-narrative',
+    GET_DAY_ANALYSIS_HISTORY: 'ai:get-day-analysis-history',
     GET_WRAP_PROVIDER_STATE: 'ai:get-wrap-provider-state',
     GET_WRAP_PREFLIGHT: 'ai:get-wrap-preflight',
     ASK_WRAPPED: 'ai:ask-wrapped',

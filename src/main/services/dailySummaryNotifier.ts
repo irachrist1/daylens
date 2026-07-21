@@ -13,15 +13,18 @@ import { getCurrentSession } from './tracking'
 import { getTimelineDayPayload } from './workBlocks'
 import {
   buildEveningWrapRoute,
+  buildWeeklyBriefRoute,
   buildDailyReportRoute,
   openDailySummaryRoute,
   setDailySummaryNavigationWindow,
 } from './dailySummaryNavigation'
 import { deliverNotification } from './notificationDelivery'
+import { getNotificationPermissionState } from './notificationPermissions'
 
 import {
   decideDailySummary,
   decideYesterdayRecap,
+  decideWeeklyBrief,
   workRhythmWindows,
   canAttemptAiNarrative,
   recordAiNarrativeAttempt,
@@ -30,6 +33,8 @@ import {
   type DailyNotifierState,
 } from '../lib/dailySummaryScheduler'
 import { factOnlyRecapLine } from '../lib/wrappedNarrative'
+import { factOnlyWeeklyLine } from '../lib/wrappedPeriodNarrative'
+import { buildWrappedPeriodFacts, getWrappedPeriodWrap } from './wrappedPeriodNarrative'
 import { buildDayWrapFacts } from '../../renderer/lib/dayWrapScenes'
 import { getWrapProviderState } from './aiOrchestration'
 
@@ -144,6 +149,38 @@ function secondsTrackedOn(date: string): number {
   return sessions.reduce((sum, s) => sum + s.durationSeconds, 0)
 }
 
+/** Total tracked seconds across the completed week ending on `anchorDate`. */
+function secondsTrackedInWeekEnding(anchorDate: string): number {
+  let total = 0
+  for (let offset = 0; offset > -7; offset -= 1) {
+    total += secondsTrackedOn(shiftLocalDateString(anchorDate, offset))
+  }
+  return total
+}
+
+// Notification consent (briefs.md): no brief fires before the person has
+// consented to notifications in onboarding. Consent means onboarding is done
+// AND the OS permission is granted — on macOS 'not-determined' is "not asked
+// yet", which is not consent; on other platforms a supported notification
+// system reports 'granted'. Delivery has its own denied-block; this gate
+// keeps a brief from even being decided (and from spending an AI call)
+// before consent exists.
+function briefsConsented(): boolean {
+  const settings = getSettings()
+  if (!(settings.onboardingComplete ?? false)) return false
+  return getNotificationPermissionState() === 'granted'
+}
+
+// Activity-free notification text (briefs.md §Notification content and
+// privacy): the person can choose lock-screen-safe copy that names no
+// activity at all — without losing the brief. The gate still runs the full
+// content path first, so the fallback order (real line, fact-only line,
+// silence) is unchanged: an activity-free notification only fires when the
+// brief it opens actually exists.
+function notificationBody(contentLine: string, activityFree: string): string {
+  return (getSettings().activityFreeNotificationText ?? false) ? activityFree : contentLine
+}
+
 // The deterministic floor of the evening recap: a line made only of the day's
 // shared corrected facts (the same payload every other surface reads), or null
 // when the day is too thin to say anything honest. Fallback order when AI
@@ -173,6 +210,7 @@ async function checkDailySummary(): Promise<void> {
     state,
     todaySecondsTracked: secondsTrackedOn(today),
     dailySummaryEnabled: settings.dailySummaryEnabled ?? true,
+    notificationsConsented: briefsConsented(),
     todayDateString: today,
     eveningWrapHour: windows.eveningWrapHour,
   })
@@ -190,7 +228,7 @@ async function checkDailySummary(): Promise<void> {
     if (providerConnected && withAiAttemptBudget('evening-wrap', today)) {
       const teaser = await tryGetWrappedTeaser(today)
       if (teaser) {
-        notifyWithNavigation('Your evening wrap', teaser, buildEveningWrapRoute(today))
+        notifyWithNavigation('Your evening wrap', notificationBody(teaser, 'Your evening wrap is ready.'), buildEveningWrapRoute(today))
         writeState({ ...readState(), lastDailySummaryDate: today })
         return
       }
@@ -203,16 +241,21 @@ async function checkDailySummary(): Promise<void> {
     if (providerConnected && !aiNarrativeAttemptsExhausted(readState(), 'evening-wrap', today)) return
     const line = deterministicRecapLine(today)
     if (!line) return
-    notifyWithNavigation('Your evening wrap', line, buildEveningWrapRoute(today))
+    notifyWithNavigation('Your evening wrap', notificationBody(line, 'Your evening wrap is ready.'), buildEveningWrapRoute(today))
     writeState({ ...readState(), lastDailySummaryDate: today })
   } finally {
     dailySummaryPreparing = false
   }
 }
 
-// §4.1 — Yesterday's recap. Fires first thing in the morning, only when you did
-// NOT already generate a recap yesterday. The body is a fresh, specific summary
-// of yesterday, readable without opening the app.
+// §4.1 — The morning brief: yesterday's recap. Fires first thing in the
+// morning, only when you did NOT already generate a recap yesterday. The body
+// is a fresh, specific one-liner about yesterday, generated from the facts as
+// they stand at delivery time (corrections made overnight are in it), readable
+// without opening the app. Fallback order when no written line can come
+// (briefs.md §Failure behavior): the deterministic fact-only line built from
+// the same shared corrected facts, then silence — never a canned teaser,
+// never a stale cache.
 async function checkYesterdayRecap(): Promise<void> {
   if (dailySummaryPreparing) return
 
@@ -228,6 +271,7 @@ async function checkYesterdayRecap(): Promise<void> {
     state,
     yesterdaySecondsTracked: secondsTrackedOn(yesterday),
     morningNudgeEnabled: settings.morningNudgeEnabled ?? true,
+    notificationsConsented: briefsConsented(),
     todayDateString: today,
     yesterdayDateString: yesterday,
     morningStartHour: windows.morningStartHour,
@@ -237,19 +281,142 @@ async function checkYesterdayRecap(): Promise<void> {
 
   dailySummaryPreparing = true
   try {
-    if (!withAiAttemptBudget('yesterday-recap', yesterday)) return
-    const narrative = await getAiNarrative(yesterday)
-    if (!narrative) return // no provider / no credits → no brief (§7)
-    void tryPrepareAIReport(yesterday) // warm the full report in the background
+    const providerConnected = await getWrapProviderState()
+      .then((s) => s.connected)
+      .catch(() => false)
+
+    if (providerConnected && withAiAttemptBudget('yesterday-recap', yesterday)) {
+      const narrative = await getAiNarrative(yesterday)
+      if (narrative) {
+        void tryPrepareAIReport(yesterday) // warm the full report in the background
+        notifyWithNavigation(
+          'Yesterday, in one line',
+          notificationBody(narrative.lead, "Yesterday's brief is ready."),
+          `/wrapped?date=${yesterday}&source=daily-summary`,
+          { actionText: 'Open' },
+        )
+        writeState({ ...readState(), lastYesterdayRecapDate: today })
+        return
+      }
+    }
+
+    // No written line this round. Hold the window while a retry could still
+    // produce one; once the budget is spent (or there is no provider at all),
+    // fall back to the deterministic fact-only line — then silence.
+    if (providerConnected && !aiNarrativeAttemptsExhausted(readState(), 'yesterday-recap', yesterday)) return
+    const line = deterministicRecapLine(yesterday)
+    if (!line) return
     notifyWithNavigation(
-      "Yesterday, in one line",
-      narrative.lead,
+      'Yesterday, in one line',
+      notificationBody(line, "Yesterday's brief is ready."),
       `/wrapped?date=${yesterday}&source=daily-summary`,
       { actionText: 'Open' },
     )
     writeState({ ...readState(), lastYesterdayRecapDate: today })
   } finally {
     dailySummaryPreparing = false
+  }
+}
+
+// The weekly brief (briefs.md): fires at the week boundary — Monday morning —
+// and opens the completed week's wrap. Content follows the same one-fact-system
+// rules as the other briefs: the wrap's own lead when a provider can write it
+// (generated from the facts at delivery time, never a stale cache), else the
+// deterministic fact-only weekly line summed from the same frozen snapshots
+// the wrap shows, else silence.
+async function checkWeeklyBrief(): Promise<void> {
+  if (dailySummaryPreparing) return
+
+  const settings = getSettings()
+  const now = new Date()
+  const today = localDateString(now)
+  // The completed week ends yesterday (Sunday when today is the Monday
+  // boundary) — the anchor the week wrap opens on.
+  const anchor = shiftLocalDateString(today, -1)
+  const state = readState()
+
+  // Query-cost guard only — the decision function below re-checks both and
+  // stays the single authority the tests drive. Without this, the notifier's
+  // 60s cadence would sum a week of sessions every minute of every day.
+  if (now.getDay() !== 1 || state.lastWeeklyBriefAnchor === anchor) return
+
+  const windows = workRhythmWindows(settings.workRhythm)
+  const decision = decideWeeklyBrief({
+    now,
+    state,
+    weekSecondsTracked: secondsTrackedInWeekEnding(anchor),
+    weeklyBriefEnabled: settings.weeklyBriefEnabled ?? true,
+    notificationsConsented: briefsConsented(),
+    weekAnchorDate: anchor,
+    morningStartHour: windows.morningStartHour,
+    morningEndHour: windows.morningEndHour,
+  })
+  if (!decision.fire) return
+
+  dailySummaryPreparing = true
+  try {
+    const providerConnected = await getWrapProviderState()
+      .then((s) => s.connected)
+      .catch(() => false)
+
+    if (providerConnected && withAiAttemptBudget('weekly-brief', anchor)) {
+      const lead = await tryGetWeeklyWrapLead(anchor)
+      if (lead) {
+        notifyWithNavigation(
+          'Your week, wrapped',
+          notificationBody(lead, 'Your weekly brief is ready.'),
+          buildWeeklyBriefRoute(anchor),
+          { actionText: 'Open' },
+        )
+        writeState({ ...readState(), lastWeeklyBriefAnchor: anchor })
+        return
+      }
+    }
+
+    // No written line this round. Hold the window while a retry could still
+    // produce one; once the budget is spent (or there is no provider at all),
+    // fall back to the deterministic fact-only weekly line — then silence.
+    if (providerConnected && !aiNarrativeAttemptsExhausted(readState(), 'weekly-brief', anchor)) return
+    const line = deterministicWeeklyLine(anchor)
+    if (!line) return
+    notifyWithNavigation(
+      'Your week, wrapped',
+      notificationBody(line, 'Your weekly brief is ready.'),
+      buildWeeklyBriefRoute(anchor),
+      { actionText: 'Open' },
+    )
+    writeState({ ...readState(), lastWeeklyBriefAnchor: anchor })
+  } finally {
+    dailySummaryPreparing = false
+  }
+}
+
+// The weekly wrap's own lead — ONLY when it came from the provider, generated
+// or verified fresh at delivery time (onStale 'regenerate': a stored week wrap
+// whose facts hash still matches is reused because it IS the current facts; a
+// drifted one is regenerated before the notification fires). Null means no
+// written line can honestly be pushed this round.
+async function tryGetWeeklyWrapLead(anchorDate: string): Promise<string | null> {
+  try {
+    const { narrative } = await Promise.race([
+      getWrappedPeriodWrap('week', anchorDate, { triggerSource: 'system', onStale: 'regenerate' }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('weekly wrap timed out')), AI_REPORT_TIMEOUT_MS * 2)),
+    ])
+    if (!narrative || narrative.source !== 'ai' || !narrative.lead) return null
+    return narrative.lead
+  } catch {
+    return null
+  }
+}
+
+// The weekly brief's deterministic floor: a line made only of the week's
+// summed frozen-snapshot facts (the same totals the wrap and Timeline show),
+// or null when the week is too thin to say anything honest.
+function deterministicWeeklyLine(anchorDate: string): string | null {
+  try {
+    return factOnlyWeeklyLine(buildWrappedPeriodFacts('week', anchorDate))
+  } catch {
+    return null
   }
 }
 
@@ -275,9 +442,11 @@ export function markRecapGenerated(date: string): void {
 }
 
 // Manual trigger used by the notification harness. Bypasses time-of-day and
-// once-per-day gates. Uses real AI copy when a provider is connected.
+// once-per-day/week gates. Uses real AI copy when a provider is connected,
+// with the same fallback order as the real checks (fact-only line, then an
+// honest failure) so what you test is what ships.
 export async function fireTestDailySummaryNotification(
-  kind: 'evening-wrap' | 'morning-brief',
+  kind: 'evening-wrap' | 'morning-brief' | 'weekly-brief',
 ): Promise<{ ok: boolean; reason?: string; route?: string }> {
   const now = new Date()
   const today = localDateString(now)
@@ -286,9 +455,18 @@ export async function fireTestDailySummaryNotification(
   try {
     if (kind === 'morning-brief') {
       const narrative = await getAiNarrative(yesterday)
-      if (!narrative) return { ok: false, reason: 'no-ai-content' }
+      const line = narrative?.lead ?? deterministicRecapLine(yesterday)
+      if (!line) return { ok: false, reason: 'no-recap-content' }
       const route = `/wrapped?date=${yesterday}&source=daily-summary`
-      notifyWithNavigation('Yesterday, in one line', narrative.lead, route, { actionText: 'Open' })
+      notifyWithNavigation('Yesterday, in one line', notificationBody(line, "Yesterday's brief is ready."), route, { actionText: 'Open' })
+      return { ok: true, route }
+    }
+
+    if (kind === 'weekly-brief') {
+      const line = (await tryGetWeeklyWrapLead(yesterday)) ?? deterministicWeeklyLine(yesterday)
+      if (!line) return { ok: false, reason: 'no-weekly-content' }
+      const route = buildWeeklyBriefRoute(yesterday)
+      notifyWithNavigation('Your week, wrapped', notificationBody(line, 'Your weekly brief is ready.'), route, { actionText: 'Open' })
       return { ok: true, route }
     }
 
@@ -297,7 +475,7 @@ export async function fireTestDailySummaryNotification(
     const teaser = (await tryGetWrappedTeaser(today)) ?? deterministicRecapLine(today)
     if (!teaser) return { ok: false, reason: 'no-recap-content' }
     const route = buildEveningWrapRoute(today)
-    notifyWithNavigation('Your evening wrap', teaser, route)
+    notifyWithNavigation('Your evening wrap', notificationBody(teaser, 'Your evening wrap is ready.'), route)
     return { ok: true, route }
   } catch (err) {
     console.warn('[daily-summary] manual trigger failed:', err)
@@ -318,6 +496,7 @@ export function startDailySummaryNotifier(window?: BrowserWindow | null): void {
   const runChecks = () => {
     void (async () => {
       try {
+        await checkWeeklyBrief()
         await checkYesterdayRecap()
         await checkDailySummary()
       } catch (err) {

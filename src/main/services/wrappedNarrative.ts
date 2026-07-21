@@ -19,6 +19,7 @@ import {
 } from './aiOrchestration'
 import { buildDayWrapFacts } from '../../renderer/lib/dayWrapScenes'
 import {
+  DAY_WRAP_PROMPT_VERSION,
   buildFallbackNarrative,
   buildWrappedPrompts,
   buildWrappedRepairMessage,
@@ -32,6 +33,7 @@ import { buildDayFactTable } from '../lib/wrapFactTable'
 import { getDb } from './database'
 import { resolveDayEnrichment } from './enrichmentResolve'
 import { getStoredWrappedNarrative, putStoredWrappedNarrative } from '../db/wrappedNarrativeStore'
+import { appendDayAnalysisVersion } from '../db/dayAnalysisVersions'
 
 interface ProviderRunner {
   (
@@ -119,9 +121,33 @@ export async function getWrappedNarrative(
   }
 
   // Persist a freshly produced wrap and stamp it with its generation time.
-  const persist = (result: AIWrappedNarrative): AIWrappedNarrative => {
+  // Every persist also appends to the analysis version ledger (DEV-206): what
+  // this analysis said, from which facts, by which model and prompt version,
+  // and why it replaced the previous one — never a silent overwrite.
+  const persist = (result: AIWrappedNarrative, model: string | null = null): AIWrappedNarrative => {
     const generatedAt = Date.now()
     putStoredWrappedNarrative(db, 'day', periodKey, result, factsHash, generatedAt)
+    try {
+      appendDayAnalysisVersion(db, {
+        kind: 'day',
+        periodKey,
+        factsHash,
+        model,
+        promptVersion: DAY_WRAP_PROMPT_VERSION,
+        triggerSource: options.triggerSource ?? 'user',
+        source: result.source === 'ai' ? 'ai' : 'fallback',
+        payload: {
+          lead: result.lead,
+          lines: result.lines,
+          question: result.question,
+          reflection: result.reflection,
+        },
+        reason: options.force ? 'manual-regenerate' : undefined,
+        now: generatedAt,
+      })
+    } catch (versionError) {
+      console.warn(`[ai] failed to record analysis version for ${periodKey}:`, versionError)
+    }
     return { ...result, generatedAt }
   }
 
@@ -149,7 +175,7 @@ export async function getWrappedNarrative(
     .join('\n\n')
 
   try {
-    const { text } = await withTimeout(
+    const { text, config } = await withTimeout(
       executeTextAIJob(
         {
           jobType: 'wrapped_narrative',
@@ -163,6 +189,7 @@ export async function getWrappedNarrative(
       NARRATIVE_TIMEOUT_MS,
       'wrapped_narrative timed out',
     )
+    const model = config.model
 
     const parsed = parseWrapResponse(text)
     if (!parsed) return persist(fallback)
@@ -207,7 +234,7 @@ export async function getWrappedNarrative(
       }
     }
 
-    return persist(narrative ?? fallback)
+    return persist(narrative ?? fallback, narrative ? model : null)
   } catch (error) {
     console.warn(`[ai] wrapped_narrative failed for ${facts.date}:`, error)
     // A transient failure is not a generated wrap — return the floor without

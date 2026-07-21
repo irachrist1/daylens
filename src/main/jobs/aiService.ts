@@ -2981,6 +2981,9 @@ export async function generateWorkBlockInsight(
     // the "done for the day?" wrap flow). Used as a strong grounding hint when
     // the evidence alone is ambiguous — never overrides the evidence wholesale.
     userHint?: string
+    /** Reports the provider model that actually produced the insight, so the
+     *  day-analysis version ledger (DEV-206) can record which model wrote it. */
+    onModel?: (model: string) => void
   },
 ): Promise<WorkContextInsight> {
   const systemPrompt = [
@@ -2995,7 +2998,7 @@ export async function generateWorkBlockInsight(
   ].join(' ')
 
   try {
-    const { text } = await withTimeout(
+    const { text, config } = await withTimeout(
       executeTextAIJob(
         {
           jobType: options?.jobType ?? (block.isLive ? 'block_label_preview' : 'block_label_finalize'),
@@ -3017,6 +3020,7 @@ export async function generateWorkBlockInsight(
       BLOCK_INSIGHT_TIMEOUT_MS,
       'Block insight timed out',
     )
+    options?.onModel?.(config.model)
     const parsed = parseWorkBlockInsight(text)
 
     // §3.5 / invariant 3: even the model may not name a block after a raw machine
@@ -3110,7 +3114,12 @@ function dayRegroupPrompt(blocks: WorkContextBlock[], userHint?: string): string
 // combined evidence and produces one coherent title (§3.3).
 export async function generateDayRegroupPlan(
   blocks: WorkContextBlock[],
-  options?: { userHint?: string },
+  options?: {
+    userHint?: string
+    /** Reports the provider model that actually produced the plan, so the
+     *  day-analysis version ledger (DEV-206) can record which model wrote it. */
+    onModel?: (model: string) => void
+  },
 ): Promise<number[][] | null> {
   if (blocks.length < 2) return null
 
@@ -3123,7 +3132,7 @@ export async function generateDayRegroupPlan(
   ].join(' ')
 
   try {
-    const { text } = await withTimeout(
+    const { text, config } = await withTimeout(
       executeTextAIJob(
         {
           jobType: 'block_cleanup_relabel',
@@ -3137,6 +3146,7 @@ export async function generateDayRegroupPlan(
       DAY_REGROUP_TIMEOUT_MS,
       'Day regroup timed out',
     )
+    options?.onModel?.(config.model)
     return parseDayRegroupGroups(text, blocks.length)
   } catch (error) {
     console.warn('[timeline] AI day regroup failed:', error)

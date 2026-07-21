@@ -3034,6 +3034,43 @@ const migrations: Migration[] = [
       `)
     },
   },
+  // Numbering note: v60 is the GitHub-connector memory_records widening and
+  // v61 the meeting-attendance marks (connector stack); the screen-context
+  // migration above — originally drafted as v60 — landed as v62, the slot
+  // once reserved for Linear + Granola, which shipped without a migration.
+  // Same rule as the v59 renumbering: the runner applies every array entry
+  // with version > MAX(applied), in array order, so ordered gaps are safe as
+  // long as versions stay strictly increasing in this array.
+  {
+    version: 63,
+    description:
+      'Versioned day analysis (DEV-206): every AI analysis of a day — the day wrap narrative, the period wraps that contain it, and the timeline regroup/relabel run — is recorded as an append-only version row instead of silently replacing what came before. Each row carries what the analysis said (payload_json), the facts hash it was computed from, the model and prompt version that produced it, the trigger source, and WHY it exists (initial / facts-changed / correction / manual-regenerate). A correction retires the current version (retired_at + retired_reason) rather than erasing it, so the next generation is visibly a new version with a reason — old versions stay inspectable forever. LOCAL table: it exports with the timeline section of the history export and never rides a sync payload (the strict sync allowlist has no key for it). (Numbered v63, above the connector stack\'s v60/v61 and the screen-context migration\'s v62 — the runner never revisits versions below MAX(applied).)',
+    up: () => {
+      getDb().exec(`
+        CREATE TABLE IF NOT EXISTS day_analysis_versions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          kind TEXT NOT NULL CHECK (kind IN ('day', 'week', 'month', 'year', 'timeline')),
+          period_key TEXT NOT NULL,
+          version INTEGER NOT NULL,
+          facts_hash TEXT NOT NULL,
+          model TEXT,
+          prompt_version INTEGER NOT NULL DEFAULT 1,
+          trigger_source TEXT NOT NULL DEFAULT 'user',
+          source TEXT NOT NULL DEFAULT 'ai' CHECK (source IN ('ai', 'fallback', 'deterministic')),
+          reason TEXT NOT NULL CHECK (reason IN (
+            'initial', 'facts-changed', 'correction', 'deletion',
+            'evidence-change', 'manual-regenerate', 'regenerated'
+          )),
+          payload_json TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          retired_at INTEGER,
+          retired_reason TEXT CHECK (retired_reason IN ('correction', 'deletion', 'evidence-change', 'superseded') OR retired_reason IS NULL),
+          UNIQUE(kind, period_key, version)
+        );
+        CREATE INDEX IF NOT EXISTS idx_day_analysis_versions_key ON day_analysis_versions(kind, period_key);
+      `)
+    },
+  },
 ]
 
 export const LATEST_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0

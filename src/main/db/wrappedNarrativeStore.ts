@@ -6,6 +6,10 @@
 // honest "generated <when>" marker instead of stamping "just now" on every open.
 
 import type Database from 'better-sqlite3'
+import {
+  retireDayAnalysisVersionsForDate,
+  type DayAnalysisRetirementReason,
+} from './dayAnalysisVersions'
 
 export type WrappedCadence = 'day' | 'week' | 'month' | 'year'
 
@@ -78,8 +82,19 @@ function shiftDate(dateStr: string, days: number): string {
  * serving lines that could contradict Timeline. Week rows are keyed by the
  * start of a rolling 7-day window, month rows by the first of the month, year
  * rows by the year's first day — containment follows from the key alone.
+ *
+ * The version ledger (DEV-206) records the same moment the other way around:
+ * instead of losing what was said, the CURRENT analysis version of every
+ * affected period is retired with `reason`, so the next generation appends a
+ * new version that names why it replaced the old one — a correction changes
+ * the analysis visibly, never silently.
  */
-export function deleteWrappedNarrativesForDate(db: Database.Database, date: string): void {
+export function deleteWrappedNarrativesForDate(
+  db: Database.Database,
+  date: string,
+  reason: DayAnalysisRetirementReason = 'correction',
+): void {
+  retireDayAnalysisVersionsForDate(db, date, reason)
   if (!wrappedNarrativesTableExists(db)) return
   db.prepare(`DELETE FROM wrapped_narratives WHERE cadence = 'day' AND period_key = ?`).run(date)
   // A week window starting up to 6 days before `date` still contains it.

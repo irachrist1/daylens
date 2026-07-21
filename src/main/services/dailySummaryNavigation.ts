@@ -77,3 +77,13 @@ export function buildEveningWrapRoute(date: string): string {
   params.set('source', 'evening-wrap')
   return `/wrapped?${params.toString()}`
 }
+
+/** The weekly brief opens the completed week's wrap: the period deck anchored
+ *  on the week's last day (the rolling 7-day window ending there). */
+export function buildWeeklyBriefRoute(anchorDate: string): string {
+  const params = new URLSearchParams()
+  params.set('period', 'week')
+  params.set('date', anchorDate)
+  params.set('source', 'weekly-brief')
+  return `/wrapped?${params.toString()}`
+}
