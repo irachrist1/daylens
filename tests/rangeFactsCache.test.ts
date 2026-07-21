@@ -14,7 +14,7 @@ import {
   type FocusEventInsert,
 } from '../src/main/core/evidence/focusEvent.ts'
 import { queryCorrectedActivityFactsForRange } from '../src/main/core/query/activityFactsQuery.ts'
-import { clearRangeFactsCache } from '../src/main/core/query/rangeFactsCache.ts'
+import { bumpRangeFactsEvidenceEpoch, clearRangeFactsCache } from '../src/main/core/query/rangeFactsCache.ts'
 
 // A window fully in the past, so the cache treats it as historical (no TTL).
 const FROM = new Date(2026, 3, 22, 0, 0, 0, 0).getTime()
@@ -122,6 +122,29 @@ test('a new correction invalidates the cached window', () => {
   assert.ok(
     after.totalSeconds < before.totalSeconds,
     `deleted span must drop from totals (${after.totalSeconds} !< ${before.totalSeconds})`,
+  )
+  db.close()
+  clearRangeFactsCache()
+})
+
+test('an in-place evidence UPDATE is invisible to the signature — the epoch bump catches it', () => {
+  clearRangeFactsCache()
+  const db = createProductionTestDatabase()
+  seedMorning(db)
+
+  const before = queryCorrectedActivityFactsForRange(db, FROM, TO)
+  assert.equal(before.sessions.some((s) => s.windowTitle === 'Docs'), true)
+
+  // A privacy purge nulls titles IN PLACE: count, max(ts), max(id) all
+  // unchanged, so without the epoch the cache would keep serving 'Docs'.
+  db.prepare(`UPDATE focus_events SET window_title = NULL WHERE window_title = 'Docs'`).run()
+  bumpRangeFactsEvidenceEpoch(db)
+
+  const after = queryCorrectedActivityFactsForRange(db, FROM, TO)
+  assert.equal(
+    after.sessions.some((s) => s.windowTitle === 'Docs'),
+    false,
+    'purged title must not be served from cache',
   )
   db.close()
   clearRangeFactsCache()

@@ -26,6 +26,7 @@ interface PendingRequest {
 
 let _proc: ChildProcess | null = null
 let _nextId = 1
+let _stopping = false
 const _pending = new Map<number, PendingRequest>()
 const _crashTimes: number[] = []
 
@@ -117,9 +118,11 @@ function ensureWorker(): ChildProcess | null {
     rejectAllPending('range worker errored')
     _proc = null
   })
-  _proc.on('exit', (code) => {
-    if (code !== 0 && code !== null) {
-      console.warn(`[range-worker] exited with code ${code}`)
+  _proc.on('exit', (code, signal) => {
+    // Any exit we didn't ask for counts toward the disable window — including
+    // signal deaths (SIGKILL/OOM arrive as code null + a signal).
+    if (!_stopping && code !== 0) {
+      console.warn(`[range-worker] exited (code ${code}, signal ${signal ?? 'none'})`)
       _crashTimes.push(Date.now())
     }
     rejectAllPending('range worker exited')
@@ -145,6 +148,11 @@ async function runWorkerOp<T>(payload: Record<string, unknown>): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
       _pending.delete(id)
+      // A hung worker must not stay in rotation: kill it (respawn happens on
+      // the next request) and count the hang toward the disable window, or a
+      // wedged subprocess would add 30s of latency to every Apps read forever.
+      _crashTimes.push(Date.now())
+      proc.kill('SIGKILL')
       reject(new Error('range worker timed out'))
     }, REQUEST_TIMEOUT_MS)
     _pending.set(id, { resolve: resolve as (value: unknown) => void, reject, timer })
@@ -176,6 +184,7 @@ export async function workerAppDetail<T>(
 
 export function stopRangeWorker(): void {
   if (!_proc || _proc.killed) return
+  _stopping = true
   const proc = _proc
   _proc = null
   rejectAllPending('range worker stopped')

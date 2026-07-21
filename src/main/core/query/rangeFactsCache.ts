@@ -89,6 +89,7 @@ export function computeRangeEvidenceSignature(
 
   return JSON.stringify([
     versionTag,
+    readEvidenceEpoch(db),
     events.n, events.t, events.i,
     reviews.n, reviews.u,
     exclusions.n, exclusions.u,
@@ -136,4 +137,34 @@ export function storeCachedRangeFacts<T>(
 
 export function clearRangeFactsCache(): void {
   entries.clear()
+}
+
+// ─── Evidence epoch ─────────────────────────────────────────────────────────
+// The signature's count/max aggregates cannot see an in-place UPDATE of
+// evidence rows (title purges, canonical-id restamps). Those writers bump
+// this database-backed counter instead; it is folded into every signature,
+// so caches in EVERY process (main and the range worker) invalidate at once.
+
+const EVIDENCE_EPOCH_KEY = 'range_facts_evidence_epoch'
+
+export function bumpRangeFactsEvidenceEpoch(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS maintenance_runs (
+      key TEXT PRIMARY KEY,
+      completed_at INTEGER NOT NULL
+    );
+  `)
+  db.prepare(`
+    INSERT INTO maintenance_runs (key, completed_at) VALUES (?, 1)
+    ON CONFLICT(key) DO UPDATE SET completed_at = completed_at + 1
+  `).run(EVIDENCE_EPOCH_KEY)
+  clearRangeFactsCache()
+}
+
+function readEvidenceEpoch(db: Database.Database): number {
+  if (!tableExists(db, 'maintenance_runs')) return 0
+  const row = db.prepare(
+    `SELECT completed_at FROM maintenance_runs WHERE key = ?`,
+  ).get(EVIDENCE_EPOCH_KEY) as { completed_at: number } | undefined
+  return row?.completed_at ?? 0
 }

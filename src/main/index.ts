@@ -605,7 +605,7 @@ function startBackgroundServices(): void {
       startDailySummaryNotifier(mainWindow)
       setDistractionAlertWindow(mainWindow)
       setSpendAlertWindow(mainWindow)
-    setPermissionWatcherWindow(mainWindow)
+      setPermissionWatcherWindow(mainWindow)
       startDistractionAlerter()
     }
     backgroundServicesStarted = true

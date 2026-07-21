@@ -18,6 +18,8 @@ import { getDb } from './database'
 import { getNativeCaptureTitleStats } from '../db/focusEventRepository'
 import { deliverNotification } from './notificationDelivery'
 import { isRealDayHarness } from '../lib/realDayHarness'
+import { getSettings } from './settings'
+import { shouldStartTrackingForSettings } from '../lib/onboardingState'
 
 const CHECK_INTERVAL_MS = 5_000
 const SAMPLE_WINDOW_MS = 15 * 60_000
@@ -28,6 +30,12 @@ const MIN_SAMPLES_FOR_VERDICT = 5
 // under half titled means something is wrong even if not fully blind.
 const HEALTHY_TITLE_RATIO = 0.5
 
+// Declaring "blind" while the OS flag says granted is a strong claim (it
+// drives a notification and an app-wide banner), so it needs more evidence
+// than the ordinary verdict: a short stretch in apps whose windows genuinely
+// have no titles (some games/utilities) must not read as a dead grant.
+const MIN_SAMPLES_FOR_BLIND_VERDICT = 10
+
 export function deriveCaptureVerificationStatus(input: {
   axTrusted: boolean
   recentSamples: number
@@ -35,7 +43,9 @@ export function deriveCaptureVerificationStatus(input: {
 }): CaptureVerificationState['status'] {
   if (!input.axTrusted) return 'blind'
   if (input.recentSamples < MIN_SAMPLES_FOR_VERDICT) return 'waiting'
-  if (input.recentSamplesWithTitle === 0) return 'blind'
+  if (input.recentSamplesWithTitle === 0) {
+    return input.recentSamples >= MIN_SAMPLES_FOR_BLIND_VERDICT ? 'blind' : 'waiting'
+  }
   if (input.recentSamplesWithTitle / input.recentSamples < HEALTHY_TITLE_RATIO) return 'degraded'
   return 'healthy'
 }
@@ -43,8 +53,8 @@ export function deriveCaptureVerificationStatus(input: {
 let watcherTimer: ReturnType<typeof setInterval> | null = null
 let watcherWindow: BrowserWindow | null = null
 let lastState: CaptureVerificationState | null = null
-// One notification per blind episode: set when we notify, cleared when the
-// status recovers to healthy/degraded, so a broken grant can't spam.
+// One notification per blind episode: set when we notify, cleared only when
+// the status fully recovers to healthy, so a broken grant can't spam.
 let notifiedThisEpisode = false
 
 export function setPermissionWatcherWindow(win: BrowserWindow | null): void {
@@ -64,6 +74,14 @@ function openCaptureHealthSettings(): void {
 }
 
 function checkOnce(): void {
+  // Capture intentionally off (consent declined, tracking paused) means a
+  // missing grant is not a problem to alarm about — stand down entirely.
+  if (!shouldStartTrackingForSettings(getSettings())) {
+    lastState = null
+    notifiedThisEpisode = false
+    return
+  }
+
   let axTrusted = true
   try {
     axTrusted = systemPreferences.isTrustedAccessibilityClient(false)

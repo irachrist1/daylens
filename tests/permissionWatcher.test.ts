@@ -35,6 +35,15 @@ test('too few samples is waiting, not an alarm', () => {
   )
 })
 
+test('a short all-untitled stretch is waiting, not a blind alarm', () => {
+  // 7 samples, all untitled, flag granted: could be a game or a titleless
+  // utility — not enough evidence to notify "your grant died".
+  assert.equal(
+    deriveCaptureVerificationStatus({ axTrusted: true, recentSamples: 7, recentSamplesWithTitle: 0 }),
+    'waiting',
+  )
+})
+
 test('under half titled is degraded — the "healthy at 17 of 102" screenshot case', () => {
   assert.equal(
     deriveCaptureVerificationStatus({ axTrusted: true, recentSamples: 102, recentSamplesWithTitle: 17 }),

@@ -59,6 +59,27 @@ test('the kill switch refuses machine-initiated jobs without calling the provide
   }
 })
 
+test('the kill switch also stops scheduled foreground-type jobs (evening wrap)', async () => {
+  const db = await setup()
+  __setSettings({ backgroundAiEnabled: false })
+  try {
+    let runnerCalls = 0
+    await assert.rejects(
+      executeTextAIJob(
+        // wrapped_narrative is foreground:true in JOB_DEFINITIONS but the
+        // daily notifier invokes it with triggerSource 'system' — the kill
+        // switch must stop that too ("stops background AI immediately").
+        { jobType: 'wrapped_narrative', triggerSource: 'system', systemPrompt: 's', userMessage: 'u' },
+        async () => { runnerCalls += 1; return { text: 'x' } },
+      ),
+      /switched off/,
+    )
+    assert.equal(runnerCalls, 0)
+  } finally {
+    teardown(db)
+  }
+})
+
 test('the kill switch never blocks user-initiated work', async () => {
   const db = await setup()
   __setSettings({ backgroundAiEnabled: false })

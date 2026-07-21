@@ -818,7 +818,7 @@ function CaptureHealthContent({
       ? (permissions.platformNote
           ? permissions.platformNote
           : titleStatus === 'degraded'
-            ? 'Fewer than half of recent samples carried a window title, so parts of your day are being captured blind. Re-granting the Accessibility permission usually fixes this.'
+            ? `Fewer than half of recent samples carried a window title, so parts of your day are being captured blind.${platform === 'darwin' ? ' Re-granting the Accessibility permission usually fixes this.' : ''}`
             : 'Daylens sees which apps are open but not the titles inside them. Granting the screen/accessibility permission usually fixes this.')
       : 'Daylens needs a few minutes of activity to confirm it\u2019s capturing properly.'
   const accent = tone === 'success'
@@ -2095,7 +2095,7 @@ function UsagePage() {
                   {item.feature}
                   {item.exhausted && (
                     <span style={{ marginLeft: 8, color: 'var(--color-danger, #d4494c)', fontSize: 11.5, fontWeight: 600 }}>
-                      Paused — budget spent
+                      Background paused — budget spent
                     </span>
                   )}
                 </span>
@@ -2109,6 +2109,11 @@ function UsagePage() {
                     step={0.25}
                     defaultValue={item.budgetUsd}
                     onBlur={(event) => {
+                      // An emptied field is an abandoned edit, not a $0 budget.
+                      if (event.target.value.trim() === '') {
+                        event.target.value = String(item.budgetUsd)
+                        return
+                      }
                       const next = Math.max(0, Number(event.target.value))
                       if (Number.isFinite(next) && next !== item.budgetUsd) void setFeatureBudget(item.feature, next)
                     }}

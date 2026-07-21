@@ -548,10 +548,13 @@ export async function executeTextAIJob(
   const settings = await getSettingsAsync()
   const definition = JOB_DEFINITIONS[payload.jobType]
 
-  // DEV-228 spend guardrails. Same machine-initiated predicate as the circuit
-  // breaker below: background job types not explicitly triggered by the user.
-  // Neither guard ever blocks something the user asked for on screen.
-  if (!definition.foreground && payload.triggerSource !== 'user') {
+  // DEV-228 spend guardrails. Gate on the trigger alone, not the job type's
+  // foreground flag: the scheduled evening wrap and weekly brief run
+  // foreground job types with triggerSource 'system', and "stop background AI
+  // immediately" must stop those too. Every call site the user explicitly
+  // clicks passes triggerSource 'user' (verified: manual wrap, re-analyze,
+  // chat), so neither guard can block something the user asked for.
+  if (payload.triggerSource !== 'user') {
     if (settings.backgroundAiEnabled === false) {
       throw new Error(
         `Background AI is switched off; skipping ${payload.jobType}. Turn it back on in Settings → Usage.`,
