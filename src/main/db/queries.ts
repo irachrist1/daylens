@@ -4029,6 +4029,19 @@ function parseSnapshotRow(row: DaySnapshotRow): DaySnapshot | null {
   }
 }
 
+/** Drop a day's frozen snapshot so the next period-wrap read rebuilds it from
+ *  the corrected facts. Called by every correction/deletion write path: the
+ *  frozen row is a cache of the day's trusted timeline, and a correction the
+ *  Timeline honors must reach week/month/year wraps the same way — a stale
+ *  frozen row would keep serving the pre-correction totals forever. */
+export function deleteDaySnapshotRow(db: Database.Database, date: string): void {
+  const table = db.prepare(
+    `SELECT name FROM sqlite_master WHERE type='table' AND name='day_snapshots' LIMIT 1`,
+  ).get() as { name: string } | undefined
+  if (!table) return
+  db.prepare(`DELETE FROM day_snapshots WHERE date = ?`).run(date)
+}
+
 export function upsertDaySnapshot(db: Database.Database, snapshot: DaySnapshot): void {
   db.prepare(`
     INSERT INTO day_snapshots (date, total_active, work_sec, leisure_sec, personal_sec, facts_json, facts_hash, finalized_at)

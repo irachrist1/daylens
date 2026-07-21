@@ -2115,6 +2115,13 @@ export interface AppSettings {
   // every connector sync and ingest immediately, same shape as the capture
   // consent gate. Per-connector connect/disconnect lives on the connection.
   connectedSourcesEnabled?: boolean
+  // Screen-context experiment (DEV-197). Consent is separate from capture,
+  // sync, browser, and connector consent, and is offered ONLY from the
+  // experiment setup — enabling normal tracking never sets it. Absent means
+  // not consented; revoking clears it and deletes unprocessed frames.
+  screenContextExperimentEnabled?: boolean
+  // Ad-hoc pause for screen sampling only; core tracking is untouched.
+  screenContextPaused?: boolean
 }
 
 export type BillingAccessMode = 'free_credit' | 'subscription' | 'local_pass' | 'own_key' | 'none' | 'unavailable'

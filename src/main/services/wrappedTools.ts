@@ -30,7 +30,8 @@ import { localDateString, localDayBounds, shiftLocalDateString } from '../lib/lo
 import { getSettings } from './settings'
 import { getTimelineDayPayload } from './workBlocks'
 import { buildDaySnapshot, isCurrentSnapshot } from '../lib/daySnapshot'
-import { getDaySnapshotRowsForRange, getReconciledDomainIntervals, getSessionsForRange } from '../db/queries'
+import { getDaySnapshotRowsForRange, getSessionsForRange } from '../db/queries'
+import { getCorrectedDomainIntervals, getCorrectedSessionsForRange } from './activityFacts'
 import { collectExternalSignals, getExternalSignal } from './externalSignals'
 import type { DaySnapshot } from '@shared/types'
 
@@ -112,22 +113,20 @@ export function getWindowTitleContext(
   const [fromMs, toMs] = localDayBounds(params.date)
   const lookup = normalizeLookup(params.appName)
   if (!lookup) return null
-  const rows = db.prepare(`
-    SELECT app_name, window_title, duration_sec
-    FROM app_sessions
-    WHERE start_time >= ? AND start_time < ?
-      AND window_title IS NOT NULL AND window_title != ''
-  `).all(fromMs, toMs) as Array<{ app_name: string; window_title: string; duration_sec: number }>
+  // The shared corrected session facts, not raw app_sessions: a deleted block's
+  // titles or an excluded app's titles must never resurface in a wrap tool.
+  const rows = getCorrectedSessionsForRange(db, fromMs, toMs)
+    .filter((s) => s.windowTitle && s.windowTitle.trim() !== '')
 
   const matched = rows.filter((r) => {
-    const rn = normalizeLookup(r.app_name)
+    const rn = normalizeLookup(r.appName)
     return rn === lookup || rn.includes(lookup) || (rn.length >= 4 && lookup.includes(rn))
   })
   if (matched.length === 0) return null
-  const appName = matched[0].app_name
+  const appName = matched[0].appName
   const clusters = clusterWindowTitles(appName, matched.map((r) => ({
-    windowTitle: r.window_title,
-    durationSeconds: Math.max(0, r.duration_sec),
+    windowTitle: r.windowTitle as string,
+    durationSeconds: Math.max(0, r.durationSeconds),
   })))
   if (clusters.length === 0) return null
   return { date: params.date, appName, clusters }
@@ -298,11 +297,12 @@ export function getDistractionProfile(
     else other += seconds
   }
 
-  // Per-site time via the reconciled interval reader (never raw SUM),
-  // restricted to leisure-kind domains.
+  // Per-site time via the CORRECTED interval reader (never raw SUM): the same
+  // deletion/exclusion ledger Timeline and Apps honor, restricted to
+  // leisure-kind domains.
   const [fromMs, toMs] = localDayBounds(params.date)
   const siteSeconds = new Map<string, number>()
-  for (const interval of getReconciledDomainIntervals(db, fromMs, toMs, (domain) => kindForDomain(domain) === 'leisure')) {
+  for (const interval of getCorrectedDomainIntervals(db, fromMs, toMs, (domain) => kindForDomain(domain) === 'leisure')) {
     const name = friendlyDomain(interval.domain) || interval.domain
     siteSeconds.set(name, (siteSeconds.get(name) ?? 0) + (interval.end - interval.start) / 1000)
   }
