@@ -123,6 +123,7 @@ import {
   userVisibleLabelForBlock,
 } from '../services/workBlocks'
 import { getAppDetailPayload } from '../services/appDetail'
+import { workerAppDetail } from '../services/rangeWorker'
 import { buildCLIProcessPayload, buildCLIProcessSpec } from '../services/cliLaunch'
 import { historyWithUserTurn, toChatCompletionMessages, toGoogleHistory } from '../lib/providerChatMessages'
 import { inferWorkIntent } from '../../shared/workIntent'
@@ -2653,7 +2654,11 @@ async function generateAppNarrative(
   daysOrDate: number | string = 7,
   force = false,
 ): Promise<AISurfaceSummary | null> {
-  const detail = getAppDetailPayload(getDb(), canonicalAppId, daysOrDate, getCurrentSession())
+  // DEV-227: the detail payload is the expensive multi-day scan — prefer the
+  // range worker so Generate never freezes the UI; inline is the fallback.
+  const detail = await workerAppDetail<ReturnType<typeof getAppDetailPayload>>(
+    canonicalAppId, daysOrDate, getCurrentSession(),
+  ).catch(() => getAppDetailPayload(getDb(), canonicalAppId, daysOrDate, getCurrentSession()))
   const bundle = buildAppNarrativeBundle(canonicalAppId, daysOrDate, detail)
   if (!bundle) {
     console.info(`[ai] app_narrative skipped: no bundle (totalSeconds<=0) for ${canonicalAppId} ${daysOrDate}`)

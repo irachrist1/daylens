@@ -133,6 +133,7 @@ import { consumePendingNavigationRoute } from './services/dailySummaryNavigation
 import { registerCommandPaletteShortcut, unregisterCommandPaletteShortcut } from './services/commandPalette'
 import { registerDistractionAlerterHandlers, resetDistractionStateOnResume, setDistractionAlertWindow, startDistractionAlerter } from './services/distractionAlerter'
 import { setSpendAlertWindow } from './services/aiSpendGuardrails'
+import { stopRangeWorker } from './services/rangeWorker'
 import { startExternalSignalCollection, stopExternalSignalCollection } from './services/externalSignals'
 import { startConnectorSyncSchedule, stopConnectorSyncSchedule } from './connectors/service'
 import { registerGoogleCalendarConnector } from './connectors/googleCalendar/adapter'
@@ -831,6 +832,7 @@ async function shutdownApp(options?: { awaitFinalSync?: boolean; backupBeforeExi
     deferredIntegrationStartup = null
   }
   stopMcpServer()
+  stopRangeWorker()
   stopCaptureServices()
   stopSync()
   stopMemoryIndexBackfill()

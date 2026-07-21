@@ -65,6 +65,7 @@ import { backfillMemoryFromHistory } from '../jobs/eveningConsolidation'
 import { getDb, tableExists } from '../services/database'
 import { setSettings } from '../services/settings'
 import { flushCurrentSession, getCurrentSession, getLinuxTrackingDiagnostics, trackingStatus } from '../services/tracking'
+import { workerAppDetail, workerAppSummaries } from '../services/rangeWorker'
 import { getBrowserStatus } from '../services/browser'
 import { isWindowsFocusCaptureRunning } from '../services/windowsFocusCapture'
 import {
@@ -453,7 +454,7 @@ export function registerDbHandlers(): void {
   // Corrected facts (invariant 7): deleted Timeline blocks are subtracted, so
   // the Apps list totals never disagree with the Timeline. Raw capture stays
   // stored untouched underneath.
-  ipcMain.handle(IPC.DB.GET_APP_SUMMARIES, (_e, days: number = 7) => {
+  ipcMain.handle(IPC.DB.GET_APP_SUMMARIES, async (_e, days: number = 7) => {
     // Normalize at the boundary so every period reaches one canonical query.
     const normalizedDays = Number.isFinite(days) ? Math.max(1, Math.floor(days)) : 7
     const today = localDateString()
@@ -466,11 +467,16 @@ export function registerDbHandlers(): void {
     }
     // All-time: one query over all captured history. Avoids the day-by-day
     // cache loop, which would iterate ~36,500 times for this sentinel.
-    if (normalizedDays >= ALL_TIME_DAYS) {
-      return getCorrectedAppSummariesForRange(getDb(), 0, todayTo, live)
+    const from = normalizedDays >= ALL_TIME_DAYS
+      ? 0
+      : dayBounds(shiftLocalDate(today, -(normalizedDays - 1)))[0]
+    // DEV-227: multi-day scans cost ~1s at 30 days and block the UI, so they
+    // run in the range worker; the inline path is the fallback, not the norm.
+    try {
+      return await workerAppSummaries(from, todayTo, live)
+    } catch {
+      return getCorrectedAppSummariesForRange(getDb(), from, todayTo, live)
     }
-    const [from] = dayBounds(shiftLocalDate(today, -(normalizedDays - 1)))
-    return getCorrectedAppSummariesForRange(getDb(), from, todayTo, live)
   })
 
   // Apps view date switcher. A single day reads the same trusted-block
@@ -538,7 +544,16 @@ export function registerDbHandlers(): void {
     return getAppCharacter(getDb(), bundleId, daysBack)
   })
 
-  ipcMain.handle(IPC.DB.GET_APP_DETAIL, (_e, canonicalAppId: string, days: number = 7) => {
+  ipcMain.handle(IPC.DB.GET_APP_DETAIL, async (_e, canonicalAppId: string, days: number = 7) => {
+    // DEV-227: the detail payload re-runs the multi-day range scan; offload
+    // ranges beyond a single day to the worker, fall back inline on failure.
+    if (Number.isFinite(days) && days > 1) {
+      try {
+        return await workerAppDetail(canonicalAppId, days, getCurrentSession())
+      } catch {
+        // fall through to the inline path
+      }
+    }
     return getAppDetailProjection(getDb(), canonicalAppId, days, getCurrentSession())
   })
 

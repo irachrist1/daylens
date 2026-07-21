@@ -94,7 +94,21 @@ function liveModelId(stored: string): string {
   return DEPRECATED_MODEL_REMAP[stored] ?? stored
 }
 
+// Worker-only seam (DEV-227): the range-facts worker subprocess has no
+// electron-store, but the shared activity query reads settings (focusApps)
+// deep inside. The worker primes this snapshot from each request so its
+// facts match what the main process would compute. Never set in the main
+// process.
+let _workerSettingsOverride: Partial<AppSettings> | null = null
+
+export function primeWorkerSettingsOverride(partial: Partial<AppSettings>): void {
+  _workerSettingsOverride = partial
+}
+
 export function getSettings(): AppSettings {
+  if (_workerSettingsOverride) {
+    return { ...DEFAULTS, ..._workerSettingsOverride }
+  }
   if (!_store) {
     // Synchronous fallback before async init — return defaults
     return { ...DEFAULTS }
