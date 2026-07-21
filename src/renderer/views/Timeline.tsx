@@ -4,7 +4,7 @@ import { EyeOff, Trash2, X } from 'lucide-react'
 import { ANALYTICS_EVENT, blockCountBucket, trackedTimeBucket } from '@shared/analytics'
 import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, AttributionProject, CalendarRangeBlock, CalendarRangeDay, ClientRecord, CorrectionCommand, DayTimelinePayload, TimelineGapSegment, TimelineScheduledMeeting, WorkContextBlock } from '@shared/types'
 import { activityColorForCategory, leisureBlocksDimmed } from '@shared/activityColors'
-import { calendarCardHeights } from '../lib/timelineBlockLayout'
+import { assignLanes, calendarCardHeights } from '../lib/timelineBlockLayout'
 import { blockActiveSeconds } from '@shared/blockDuration'
 import { userVisibleBlockLabel } from '@shared/blockLabel'
 import { blockTypeTag, effectiveBlockKind } from '@shared/workKind'
@@ -211,6 +211,8 @@ function CalendarBlockCard({
   block,
   top,
   height,
+  left,
+  width,
   compact,
   isSelected,
   inMergeRange = false,
@@ -221,6 +223,10 @@ function CalendarBlockCard({
   block: WorkContextBlock
   top: number
   height: number
+  // Google-Calendar lane geometry: overlapping cards share the track by
+  // column, so `left`/`width` are CSS lengths, not the old fixed inset.
+  left: string
+  width: string
   compact: boolean
   isSelected: boolean
   // True when this block sits inside the shift-selected merge span (but isn't
@@ -262,8 +268,8 @@ function CalendarBlockCard({
         position: 'absolute',
         top,
         height,
-        left: compact ? 2 : 4,
-        right: compact ? 2 : 8,
+        left,
+        width,
         // Explicit top-aligned column: a calendar event's title sits at its
         // start time. (A bare <button> vertically centers its content, which
         // floated the title into the middle of tall blocks.)
@@ -450,6 +456,33 @@ function CalendarDayTrack({
   const showNowLine = nowMinutes != null && nowMinutes >= trackStartMin && nowMinutes <= trackEndMin
   const hourCount = Math.max(0, bounds.endHour - bounds.startHour + 1)
 
+  // Google-Calendar lane layout: a block and an overlapping calendar event (or
+  // two overlapping blocks) share the track in side-by-side columns instead of
+  // stacking on top of each other. Lanes are assigned across blocks AND the
+  // unmatched scheduled-meeting outlines together so an event never buries a
+  // block. Edge insets: 4px outer margin, and a 6px gutter between columns.
+  const unmatchedMeetings = compact ? [] : scheduledMeetings.filter((m) => m.matchedBlockId == null)
+  const laneKeyForMeeting = (m: TimelineScheduledMeeting) => `m:${m.startMs}:${m.title}`
+  const laneInputs: { key: string; start: number; end: number }[] = [
+    ...unmatchedMeetings.map((m) => ({ key: laneKeyForMeeting(m), start: m.startMs, end: m.endMs })),
+    ...blocks.map((block) => ({
+      key: `b:${block.id}`,
+      start: block.startTime,
+      end: block.isLive && nowMs != null ? Math.max(block.endTime, nowMs) : block.endTime,
+    })),
+  ]
+  const lanePlacements = assignLanes(laneInputs)
+  const laneByKey = new Map(laneInputs.map((input, i) => [input.key, lanePlacements[i]]))
+  const laneGeometry = (key: string): { left: string; width: string } => {
+    const placement = laneByKey.get(key) ?? { lane: 0, lanes: 1 }
+    const columnPct = 100 / placement.lanes
+    const gutter = placement.lanes > 1 ? 6 : 8
+    return {
+      left: `calc(${placement.lane * columnPct}% + 4px)`,
+      width: `calc(${columnPct}% - ${gutter}px)`,
+    }
+  }
+
   return (
     <div style={{ position: 'relative', height: trackHeight, minWidth: 0 }}>
       {/* Faint hour lines, Google-Calendar style: the grid reads as a grid
@@ -526,8 +559,7 @@ function CalendarDayTrack({
               position: 'absolute',
               top,
               height: ghostHeight,
-              left: 4,
-              right: 8,
+              ...laneGeometry(laneKeyForMeeting(meeting)),
               borderRadius: 10,
               border: confirmed ? '1.5px solid var(--color-border)' : '1.5px dashed var(--color-border)',
               padding: '3px 10px',
@@ -571,6 +603,7 @@ function CalendarDayTrack({
             block={block}
             top={top}
             height={height}
+            {...laneGeometry(`b:${block.id}`)}
             compact={compact}
             isSelected={selectedBlockId === block.id}
             inMergeRange={selectedBlockId !== block.id && (selectedSpanIds?.has(block.id) ?? false)}
