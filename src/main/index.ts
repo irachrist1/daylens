@@ -106,7 +106,6 @@ import { registerSettingsHandlers } from './ipc/settings.handlers'
 import { registerBillingHandlers } from './ipc/billing.handlers'
 import { registerIntercomHandlers } from './ipc/intercom.handlers'
 import { registerNotificationHandlers } from './ipc/notifications.handlers'
-import { initNotificationPermissions } from './services/notificationPermissions'
 import { registerSearchHandlers } from './ipc/search.handlers'
 import { registerSyncHandlers } from './ipc/sync.handlers'
 import { startMcpServer, stopMcpServer } from './services/mcpServer'
@@ -167,7 +166,12 @@ import {
   isHealthyUserDataState,
   selectLatestRestorableBackup,
 } from './services/userData'
-import { checkDatabaseIntegrity, recoverCorruptDatabase } from './services/databaseRecovery'
+import {
+  checkDatabaseIntegrity,
+  consumeCleanShutdownMarker,
+  recoverCorruptDatabase,
+  writeCleanShutdownMarker,
+} from './services/databaseRecovery'
 import {
   parseBackupDirTimestampMs,
   pruneDeletionJournalOlderThan,
@@ -181,6 +185,10 @@ const REAL_DAY_HARNESS = isRealDayHarness()
 const SMOKE_REPORT_PATH = process.env.DAYLENS_SMOKE_REPORT_PATH?.trim() || path.join(os.tmpdir(), 'daylens-smoke-report.json')
 const SMOKE_FOREGROUND_TITLE = process.env.DAYLENS_SMOKE_EXPECT_FOREGROUND_TITLE?.trim() || null
 const SMOKE_FULLSCREEN_TITLE = process.env.DAYLENS_SMOKE_EXPECT_FULLSCREEN_TITLE?.trim() || null
+
+function logStartupTiming(stage: string): void {
+  console.log(`[startup] ${stage} +${Math.round(process.uptime() * 1_000)}ms`)
+}
 
 function configureUserDataPath(): void {
   const devUserDataPath = process.env.DAYLENS_DEV_USERDATA?.trim()
@@ -220,6 +228,7 @@ const gotTheLock = app.requestSingleInstanceLock()
 if (!gotTheLock) {
   app.quit()
 }
+const previousShutdownWasClean = gotTheLock && consumeCleanShutdownMarker(app.getPath('userData'))
 
 // Pin taskbar icon correctly on Windows
 app.setAppUserModelId(APP_USER_MODEL_ID)
@@ -238,6 +247,7 @@ declare const MAIN_WINDOW_VITE_NAME: string
 let mainWindow: BrowserWindow | null = null
 // Set to true once the user explicitly quits via tray menu
 let isQuitting = false
+let databaseReady = false
 let deferredIntegrationStartup: ReturnType<typeof setTimeout> | null = null
 let backgroundServicesStarted = false
 let captureAdapterStartupTimer: ReturnType<typeof setTimeout> | null = null
@@ -769,8 +779,21 @@ async function recoverFromUpdateIfNeeded(): Promise<void> {
 // into app.quit(), which made corruption an unrecoverable crash loop. Returns
 // false only when the person chose to quit instead of recovering.
 function resolveCorruptDatabaseBeforeOpen(): boolean {
+  if (!app.isPackaged || previousShutdownWasClean) {
+    console.log(`[db] skipped full integrity check (${app.isPackaged ? 'clean shutdown' : 'development build'})`)
+    return true
+  }
   const dbPath = path.join(app.getPath('userData'), 'daylens.sqlite')
-  const integrity = checkDatabaseIntegrity(dbPath)
+  const startedAt = performance.now()
+  const quick = checkDatabaseIntegrity(dbPath, 'quick')
+  console.log(`[db] quick integrity check completed in ${Math.round(performance.now() - startedAt)}ms`)
+  if (quick.ok) return true
+
+  // quick_check flagged a fault. Confirm with a full scan before the destructive
+  // recovery flow — it both rules out a transient read and yields the detailed
+  // reason shown to the person and recorded.
+  console.warn('[db] quick integrity check flagged a problem; running full scan:', quick.reason)
+  const integrity = checkDatabaseIntegrity(dbPath, 'full')
   if (integrity.ok) return true
 
   console.error('[db] integrity check failed:', integrity.reason)
@@ -854,6 +877,10 @@ async function shutdownApp(options?: { awaitFinalSync?: boolean; backupBeforeExi
   }
 
   closeDb()
+  if (databaseReady) {
+    writeCleanShutdownMarker(app.getPath('userData'))
+    databaseReady = false
+  }
 
   // Back up userData if explicitly requested, OR if an update has been downloaded
   // and will run automatically on quit via autoInstallOnAppQuit.
@@ -948,9 +975,11 @@ function createWindow(): BrowserWindow {
 
   win.once('ready-to-show', () => {
     win.show()
+    logStartupTiming('window visible')
     maybeRunSmokeValidation('ready-to-show')
   })
   win.webContents.once('did-finish-load', () => {
+    logStartupTiming('renderer loaded')
     if (SMOKE_TEST && !win.isVisible()) win.show()
     maybeRunSmokeValidation('did-finish-load')
   })
@@ -1215,6 +1244,7 @@ ipcMain.on('analytics:capture', (_e, event: string, properties: Record<string, u
 
 app.whenReady()
   .then(async () => {
+    logStartupTiming('electron ready')
     if (REAL_DAY_HARNESS) {
       session.defaultSession.webRequest.onBeforeRequest(
         { urls: ['http://*/*', 'https://*/*'] },
@@ -1244,6 +1274,7 @@ app.whenReady()
     // backup if NSIS wiped userData during the update, before electron-store reads it.
     if (!REAL_DAY_HARNESS) await recoverFromUpdateIfNeeded()
     await initSettings()
+    logStartupTiming('settings ready')
     // The smoke and real-day harnesses exist to exercise capture itself, on
     // isolated profiles, run deliberately by an operator — that run IS the
     // consent. Seed it so the consent gate doesn't blind the harness.
@@ -1251,13 +1282,10 @@ app.whenReady()
       await setSettings({ captureConsent: grantedCaptureConsent(Date.now()) })
     }
     if (!REAL_DAY_HARNESS && !SMOKE_TEST) {
-      initNotificationPermissions()
       void detectCLITools().catch(() => undefined)
     }
     const reconciledSettings = await reconcileOnboardingState()
-    if (!REAL_DAY_HARNESS) {
-      if (!SMOKE_TEST) await initAnalytics()
-    }
+    logStartupTiming('onboarding state ready')
     installApplicationMenu()
     if (!REAL_DAY_HARNESS && app.isPackaged && !SMOKE_TEST) {
       app.setLoginItemSettings({ openAtLogin: reconciledSettings.launchOnLogin })
@@ -1270,36 +1298,13 @@ app.whenReady()
       await setSettings({ firstLaunchDate: Date.now() })
     }
 
-    const launchSettings = getSettings()
-    const launchProvider = launchSettings.aiProvider
-    const hasAiProvider = SMOKE_TEST
-      ? false
-      : launchProvider === 'claude-cli' || launchProvider === 'chatgpt-cli' || launchProvider === 'gemini-cli' || launchProvider === 'codex-cli'
-        ? true
-        : await hasApiKey(launchProvider)
-
-    // getBillingAccess resolves locally (own key / no API URL) without network.
-    const billingAccess = SMOKE_TEST || REAL_DAY_HARNESS ? null : await getBillingAccess().catch(() => null)
-    const daysSinceInstall = launchSettings.firstLaunchDate > 0
-      ? Math.floor((Date.now() - launchSettings.firstLaunchDate) / 86_400_000)
-      : 0
-
-    if (!REAL_DAY_HARNESS) {
-      capture(ANALYTICS_EVENT.APP_LAUNCHED, {
-        version: app.getVersion(),
-        days_since_install: daysSinceInstall,
-        has_completed_onboarding: reconciledSettings.onboardingComplete,
-        subscription_status: billingAccess?.mode ?? 'unavailable',
-        has_ai_provider: hasAiProvider,
-        os_version: os.release(),
-      })
-    }
-
     if (!resolveCorruptDatabaseBeforeOpen()) {
       app.quit()
       return
     }
     initDb()
+    databaseReady = true
+    logStartupTiming('database ready')
 
     // DEV-200 restart recovery: an agent turn interrupted by a quit or crash
     // (still marked running / waiting on a card) has no live promise anymore,
@@ -1348,6 +1353,7 @@ app.whenReady()
     registerConnectorHandlers()
     registerExportHandlers()
     registerScreenContextHandlers()
+    logStartupTiming('IPC handlers ready')
 
     // IPC: renderer drains any pending notification-route the main process
     // queued before the renderer's listener was attached.
@@ -1358,12 +1364,58 @@ app.whenReady()
     ))
 
     mainWindow = createWindow()
+    logStartupTiming('window created')
+    const startupWindow = mainWindow
     setDailySummaryNotificationWindow(mainWindow)
     setDistractionAlertWindow(mainWindow)
     setSpendAlertWindow(mainWindow)
     setPermissionWatcherWindow(mainWindow)
-    if (!REAL_DAY_HARNESS) ensureTray()
-    initUpdater(mainWindow, { diagnosticsOnly: SMOKE_TEST })
+    startupWindow.once('show', () => {
+      setImmediate(() => {
+        if (isQuitting || startupWindow.isDestroyed()) return
+        if (!REAL_DAY_HARNESS) ensureTray()
+        initUpdater(startupWindow, { diagnosticsOnly: SMOKE_TEST })
+        startBackgroundServices()
+        if (!REAL_DAY_HARNESS && !SMOKE_TEST) void prewarmBrowserRegistry()
+        if (!REAL_DAY_HARNESS) {
+          void (async () => {
+            if (!SMOKE_TEST) await initAnalytics()
+            const launchSettings = getSettings()
+            const launchProvider = launchSettings.aiProvider
+            const hasAiProvider = SMOKE_TEST
+              ? false
+              : launchProvider === 'claude-cli' || launchProvider === 'chatgpt-cli' || launchProvider === 'gemini-cli' || launchProvider === 'codex-cli'
+                ? true
+                : await hasApiKey(launchProvider)
+            const billingAccess = SMOKE_TEST ? null : await getBillingAccess().catch(() => null)
+            const daysSinceInstall = launchSettings.firstLaunchDate > 0
+              ? Math.floor((Date.now() - launchSettings.firstLaunchDate) / 86_400_000)
+              : 0
+            capture(ANALYTICS_EVENT.APP_LAUNCHED, {
+              version: app.getVersion(),
+              days_since_install: daysSinceInstall,
+              has_completed_onboarding: reconciledSettings.onboardingComplete,
+              subscription_status: billingAccess?.mode ?? 'unavailable',
+              has_ai_provider: hasAiProvider,
+              os_version: os.release(),
+            })
+            logStartupTiming('launch telemetry ready')
+          })().catch((error) => {
+            console.warn('[startup] launch telemetry failed:', error)
+          })
+        }
+        if (!REAL_DAY_HARNESS) {
+          try {
+            if (runPendingDerivedStateReset(getDb())) {
+              console.log('[derived-state] performed deferred reset after version change')
+            }
+          } catch (err) {
+            console.warn('[derived-state] deferred reset failed:', err)
+          }
+        }
+        logStartupTiming('post-paint services started')
+      })
+    })
 
     // Push OS appearance changes to all renderer windows so the theme updates
     // in real time when the user switches dark/light mode in System Settings.
@@ -1386,31 +1438,6 @@ app.whenReady()
 
     if (!REAL_DAY_HARNESS) {
       if (!SMOKE_TEST) registerCommandPaletteShortcut(() => mainWindow)
-    }
-
-    startBackgroundServices()
-
-    // Warm the macOS browser registry off the main thread before the user's
-    // first Apps/Timeline click. Its synchronous fallback (`lsregister -dump`)
-    // is a ~5s blocking subprocess; pre-warming asynchronously keeps that cost
-    // off every interaction path. Fire-and-forget — failures self-heal lazily.
-    if (!REAL_DAY_HARNESS) {
-      if (!SMOKE_TEST) void prewarmBrowserRegistry()
-    }
-
-    // A reset-triggering derived-state version bump defers its destructive wipe
-    // off the startup path (F21); run it now that the window is up. No-op unless
-    // a reset is actually pending.
-    if (!REAL_DAY_HARNESS) {
-      setImmediate(() => {
-        try {
-          if (runPendingDerivedStateReset(getDb())) {
-            console.log('[derived-state] performed deferred reset after version change')
-          }
-        } catch (err) {
-          console.warn('[derived-state] deferred reset failed:', err)
-        }
-      })
     }
 
     // Optional integrations spawn subprocesses / open large stores, so start
