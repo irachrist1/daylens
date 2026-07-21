@@ -2193,6 +2193,68 @@ export interface AppSettings {
   screenContextExperimentEnabled?: boolean
   // Ad-hoc pause for screen sampling only; core tracking is untouched.
   screenContextPaused?: boolean
+  // Unix ms of the explicit consent decision (DEV-198) — shown in the
+  // experiment status so the person can see exactly when they agreed.
+  // Cleared on revoke.
+  screenContextConsentAt?: number
+}
+
+// ─── Screen-context experiment surface (DEV-198) ─────────────────────────────
+// The renderer-facing status and backlog shapes. Deliberately content-free
+// beyond what the person may inspect about their own frames: app identity,
+// timing, byte size, lifecycle state, and a bounded structural error — never
+// OCR text, titles, or derived evidence content.
+
+export interface ScreenContextBacklogFrame {
+  id: string
+  capturedAt: number
+  trigger: string
+  appName: string | null
+  appBundleId: string | null
+  state: string
+  byteSize: number
+  retryCount: number
+  lastError: string | null
+  nextRetryAt: number | null
+}
+
+export interface ScreenContextExclusionOffer {
+  /** The excluded app as the person excluded it (name or bundle id). */
+  source: string
+  frameCount: number
+  evidenceCount: number
+}
+
+export interface ScreenContextStatus {
+  /** The experiment exists on macOS and Windows only. */
+  supportedPlatform: boolean
+  /** Consent can be offered: supported platform AND core tracking already
+   *  consented and working (the experiment never leads onboarding). */
+  eligible: boolean
+  /** Honest reason when not eligible; null when eligible. */
+  eligibilityReason: string | null
+  enabled: boolean
+  paused: boolean
+  consentAt: number | null
+  /** Whether an OS capture sampler is wired in this build (macOS via
+   *  ScreenCaptureKit / Windows via Windows.Graphics.Capture, both through
+   *  the Electron capturer). False → sampling can never be active. */
+  samplerInstalled: boolean
+  /** True only while the sampler loop is running WITH consent and not paused
+   *  — the exact signal the persistent indicator shows. */
+  samplerActive: boolean
+  /** Which adapter is wired ('macos-screencapturekit', 'windows-graphics-capture',
+   *  'fake' in tests), or null when none is. */
+  samplerKind: string | null
+  backlog: { frames: number; bytes: number }
+  backlogCapReached: boolean
+  quarantinedCount: number
+  /** Derived screen evidence rows currently stored (local-only). */
+  evidenceCount: number
+  lastCapturedAt: number | null
+  /** Excluded apps that still have screen-context records — each one is an
+   *  explicit offer to delete the prior evidence for that source. */
+  exclusionOffers: ScreenContextExclusionOffer[]
 }
 
 export type BillingAccessMode = 'free_credit' | 'subscription' | 'local_pass' | 'own_key' | 'none' | 'unavailable'
@@ -2786,6 +2848,22 @@ export const IPC = {
     APPLY_CORRECTION: 'entities:apply-correction',
     UNDO_CORRECTION: 'entities:undo-correction',
     CREATE_PROJECT: 'entities:create-project',
+  },
+  SCREEN_CONTEXT: {
+    // The screen-context experiment surface (DEV-198). Consent, pause, and
+    // revoke gate the DEV-197 lifecycle; backlog/quarantine inspection with
+    // explicit Retry/Delete; and the full wipe that removes every raw frame
+    // AND every derived record. All local — nothing here touches the network.
+    STATUS: 'screen-context:status',
+    ENABLE: 'screen-context:enable',
+    SET_PAUSED: 'screen-context:set-paused',
+    REVOKE: 'screen-context:revoke',
+    LIST_BACKLOG: 'screen-context:list-backlog',
+    RETRY_FRAME: 'screen-context:retry-frame',
+    DELETE_FRAME: 'screen-context:delete-frame',
+    DELETE_FOR_SOURCE: 'screen-context:delete-for-source',
+    WIPE: 'screen-context:wipe',
+    DIAGNOSTIC_SAMPLE: 'screen-context:diagnostic-sample',
   },
   FILE_ACCESS: {
     LIST_GRANTS: 'file-access:list-grants',

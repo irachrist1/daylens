@@ -58,7 +58,8 @@ import {
   touchThreadLastMessage,
 } from '../services/artifacts'
 import { getApiKey, getSettings } from '../services/settings'
-import { getCurrentSession } from '../services/tracking'
+import { getCurrentSession, flushCurrentSession } from '../services/tracking'
+import { localDayBounds } from '../lib/localDate'
 import type {
   AIArtifactKind,
   AIProviderMode,
@@ -3421,6 +3422,25 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
       signal: getAmbientAbortSignal() ?? undefined,
       trackingStart,
       threadId,
+      // Agent-applied corrections (DEV-199) behave exactly like Settings-
+      // applied ones: same live-session resolution, same pre-merge session
+      // flush, same projection invalidation — one corrections machinery.
+      corrections: {
+        resolveLiveSession: (date) => {
+          const live = getCurrentSession()
+          if (!live) return null
+          const [fromMs, toMs] = localDayBounds(date)
+          return Date.now() <= fromMs || live.startTime >= toMs ? null : live
+        },
+        onBeforeApply: (command) => {
+          if (command.kind === 'merge') flushCurrentSession()
+        },
+        onApplied: (date) => {
+          invalidateProjectionScope('timeline', 'correction_command', { date })
+          invalidateProjectionScope('apps', 'correction_command', { date })
+          invalidateProjectionScope('insights', 'correction_command', { date })
+        },
+      },
     })
   } catch (error) {
     if (!isAbortError(error)) {

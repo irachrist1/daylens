@@ -27,6 +27,7 @@ import { buildSystemTools, type FileAccessAnswer } from './systemTools'
 import type { FileDisclosureRow } from '../services/fileAccess'
 import { buildExportTools, buildInteractionTools, createArtifact, type AgentQuestion, type InteractionDeps } from './interactionTools'
 import { buildMemoryTools } from './memoryTools'
+import { buildCorrectionTools, type CorrectionToolHooks } from './correctionTools'
 import { connectMcpTools, type McpServerConfig } from './mcpTools'
 import {
   buildContextPacket,
@@ -73,6 +74,11 @@ export interface ChatAgentDeps {
   model?: LanguageModel
   /** Thread the turn belongs to; recorded on file disclosures (DEV-184). */
   threadId?: number | null
+  /** Production hooks for agent-proposed corrections (DEV-199): live-session
+   *  resolution, pre-merge session flush, projection invalidation. Optional so
+   *  the bench and tests run without Electron; the tools themselves are always
+   *  available and always confirm through the askUser card. */
+  corrections?: CorrectionToolHooks
 }
 
 export interface ChatAgentResult {
@@ -220,6 +226,15 @@ export async function runChatAgentTurn(
         db: deps.db,
         askUser: deps.askUser,
         threadId: deps.threadId ?? null,
+        signal: deps.signal,
+      }),
+      // Conversational corrections (DEV-199): the same preview/confirm/apply/
+      // undo machinery as the Timeline's correction UI, behind an explicit
+      // confirmation card — the model can propose, never silently write.
+      ...buildCorrectionTools({
+        db: deps.db,
+        askUser: deps.askUser,
+        hooks: deps.corrections,
         signal: deps.signal,
       }),
       ...mcp.tools,

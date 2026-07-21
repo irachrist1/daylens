@@ -136,6 +136,7 @@ import { startConnectorSyncSchedule, stopConnectorSyncSchedule } from './connect
 import { registerGoogleCalendarConnector } from './connectors/googleCalendar/adapter'
 import { registerConnectorHandlers } from './ipc/connectors.handlers'
 import { registerExportHandlers } from './ipc/export.handlers'
+import { registerScreenContextHandlers } from './ipc/screenContext.handlers'
 import { getLinuxDesktopDiagnostics, syncLinuxLaunchOnLogin } from './services/linuxDesktop'
 import {
   performUninstallCleanup,
@@ -1313,6 +1314,7 @@ app.whenReady()
     registerGoogleCalendarConnector()
     registerConnectorHandlers()
     registerExportHandlers()
+    registerScreenContextHandlers()
 
     // IPC: renderer drains any pending notification-route the main process
     // queued before the renderer's listener was attached.

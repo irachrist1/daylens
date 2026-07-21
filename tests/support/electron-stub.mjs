@@ -80,6 +80,22 @@ export class Notification {
 export const powerMonitor = {
   on() {},
   removeListener() {},
+  isOnBatteryPower() { return false },
+  getSystemIdleTime() { return 0 },
+}
+
+// Screen-context experiment (DEV-198): the production frame source imports
+// these; the hermetic suite exercises the sampler only through injected fake
+// sources, so the stubs refuse rather than pretend.
+export const desktopCapturer = {
+  async getSources() { return [] },
+}
+
+export const screen = {
+  getAllDisplays() { return [] },
+  getPrimaryDisplay() { return { id: 0, size: { width: 1, height: 1 } } },
+  getCursorScreenPoint() { return { x: 0, y: 0 } },
+  getDisplayNearestPoint() { return { id: 0, size: { width: 1, height: 1 } } },
 }
 
 export const systemPreferences = {
