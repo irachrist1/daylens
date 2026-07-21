@@ -46,7 +46,7 @@ test('isAppFocused: a focus-app makes an otherwise unfocused category count as r
 })
 
 test('workRhythmWindows shifts timing by rhythm, standard is unchanged', () => {
-  assert.deepEqual(workRhythmWindows('standard'), { eveningWrapHour: 18, morningStartHour: 5, morningEndHour: 12, carryoverEndHour: 14 })
+  assert.deepEqual(workRhythmWindows('standard'), { eveningWrapHour: 18, morningStartHour: 5, morningEndHour: 12 })
   assert.deepEqual(workRhythmWindows(undefined), workRhythmWindows('standard'))
   assert.ok(workRhythmWindows('early').eveningWrapHour < 18)
   assert.ok(workRhythmWindows('night').eveningWrapHour > 18)

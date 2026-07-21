@@ -3043,7 +3043,7 @@ const migrations: Migration[] = [
   {
     version: 62,
     description:
-      'Screen-context experiment lifecycle (DEV-197): the durable frame ledger and derived-evidence store behind the opt-in screen-sampling experiment. screen_context_frames tracks every sampled frame through its one lifecycle (captured → extracting → indexed → safe_to_delete → deleted, with failed → quarantined on extraction failure) so the raw-deletion invariant — no raw file is deleted before its derived evidence is atomically committed, and no raw file outlives the 24-hour safety window unquarantined — survives restarts and crashes. screen_context_evidence holds the high-sensitivity derived records (title, short OCR spans, subject references, provenance bounding, model/schema versions, a one-way frame digest) and is LOCAL-ONLY: never synced, never exported, never fed to MCP or a model outside the experiment boundary. Raw frame bytes live encrypted on disk, never in the database. (Numbered v62: drafted as v60, renumbered at integration because the connector stack\'s GitHub memory_records widening shipped as v60 and meeting-attendance as v61 — merge the connector stack first; the runner tolerates the 59 -> 62 gap and never revisits versions below MAX(applied).)',
+      'Screen-context experiment lifecycle (DEV-197): the durable frame ledger and derived-evidence store behind the opt-in screen-sampling experiment. screen_context_frames tracks every sampled frame through its one lifecycle (captured → extracting → indexed → safe_to_delete → deleted, with failed → quarantined on extraction failure) so the raw-deletion invariant — no raw file is deleted before its derived evidence is atomically committed, and no raw file outlives the 24-hour safety window unquarantined — survives restarts and crashes. screen_context_evidence holds the high-sensitivity derived records (title, short OCR spans, subject references, provenance bounding, model/schema versions, a one-way frame digest) and is LOCAL-ONLY: never synced, never exported, never fed to MCP or a model outside the experiment boundary. Raw frame bytes live encrypted on disk, never in the database. (Numbered v62: drafted as v60 on the screen-context branch, renumbered at integration because the GitHub connector\'s memory_records widening shipped as v60 and meeting-attendance as v61 — merge the connector stack first; the runner never revisits versions below MAX(applied).)',
     up: () => {
       getDb().exec(`
         CREATE TABLE IF NOT EXISTS screen_context_frames (
@@ -3095,6 +3095,95 @@ const migrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_screen_evidence_frame ON screen_context_evidence(frame_id);
         CREATE INDEX IF NOT EXISTS idx_screen_evidence_digest ON screen_context_evidence(frame_digest);
         CREATE INDEX IF NOT EXISTS idx_screen_evidence_captured ON screen_context_evidence(captured_at);
+      `)
+    },
+  },
+  // Numbering note (integration of the connector stack and the screen/wrapped
+  // stack): v60 is the GitHub-connector memory_records widening and v61 the
+  // meeting-attendance marks (connector stack); the screen-context experiment
+  // migration — originally drafted as v60 on its own branch — landed as v62,
+  // the slot that had been reserved for Linear + Granola and went unused
+  // (Linear + Granola shipped without a migration). Same rule as the v59
+  // renumbering: the runner applies every array entry with version >
+  // MAX(applied), in array order, so any ordered gap is safe as long as
+  // versions stay strictly increasing in this array.
+  {
+    version: 63,
+    description:
+      'Versioned day analysis (DEV-206): every AI analysis of a day — the day wrap narrative, the period wraps that contain it, and the timeline regroup/relabel run — is recorded as an append-only version row instead of silently replacing what came before. Each row carries what the analysis said (payload_json), the facts hash it was computed from, the model and prompt version that produced it, the trigger source, and WHY it exists (initial / facts-changed / correction / manual-regenerate). A correction retires the current version (retired_at + retired_reason) rather than erasing it, so the next generation is visibly a new version with a reason — old versions stay inspectable forever. LOCAL table: it exports with the timeline section of the history export and never rides a sync payload (the strict sync allowlist has no key for it). (Numbered v63, skipping v61/v62 claimed by the in-flight connector-stack branches — the runner never revisits versions below MAX(applied).)',
+    up: () => {
+      getDb().exec(`
+        CREATE TABLE IF NOT EXISTS day_analysis_versions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          kind TEXT NOT NULL CHECK (kind IN ('day', 'week', 'month', 'year', 'timeline')),
+          period_key TEXT NOT NULL,
+          version INTEGER NOT NULL,
+          facts_hash TEXT NOT NULL,
+          model TEXT,
+          prompt_version INTEGER NOT NULL DEFAULT 1,
+          trigger_source TEXT NOT NULL DEFAULT 'user',
+          source TEXT NOT NULL DEFAULT 'ai' CHECK (source IN ('ai', 'fallback', 'deterministic')),
+          reason TEXT NOT NULL CHECK (reason IN (
+            'initial', 'facts-changed', 'correction', 'deletion',
+            'evidence-change', 'manual-regenerate', 'regenerated'
+          )),
+          payload_json TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          retired_at INTEGER,
+          retired_reason TEXT CHECK (retired_reason IN ('correction', 'deletion', 'evidence-change', 'superseded') OR retired_reason IS NULL),
+          UNIQUE(kind, period_key, version)
+        );
+        CREATE INDEX IF NOT EXISTS idx_day_analysis_versions_key ON day_analysis_versions(kind, period_key);
+      `)
+    },
+  },
+  {
+    version: 64,
+    description:
+      'Screen-context paired evaluation (DEV-198): the experiment is a MEASUREMENT, not a feature — each target question is answered once from normal evidence and once with screen-derived evidence, and a tester reviews which answer is more accurate, more specific, or unchanged (screen-context.md §Evaluation). screen_eval_pairs stores those pairs locally: the question, both answers, the target-difficulty kind, and the reviewed verdict. The ship-or-kill report is built ONLY from aggregate counts over these rows plus the frame/evidence ledgers — never from the stored text. LOCAL-ONLY like every screen-context table: withheld from the full-history export (named in the omissions manifest), no sync-allowlist key, never in analytics.',
+    up: () => {
+      getDb().exec(`
+        CREATE TABLE IF NOT EXISTS screen_eval_pairs (
+          id TEXT PRIMARY KEY,
+          target_kind TEXT NOT NULL CHECK (target_kind IN (
+            'untitled_native_doc', 'generic_window_title', 'visual_research',
+            'design_spreadsheet', 'false_context_risk', 'protected_surface'
+          )),
+          question TEXT NOT NULL,
+          baseline_answer TEXT,
+          screen_answer TEXT,
+          asked_at INTEGER NOT NULL,
+          verdict TEXT CHECK (verdict IN (
+            'screen_more_accurate', 'screen_more_specific', 'unchanged', 'screen_worse'
+          ) OR verdict IS NULL),
+          reviewed_at INTEGER,
+          created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_screen_eval_pairs_kind ON screen_eval_pairs(target_kind);
+      `)
+    },
+  },
+  {
+    version: 65,
+    description:
+      'Agent turn checkpoints (DEV-200): a long-running agent turn can be paused and resumed, and a paused turn survives an app restart. agent_turn_checkpoints holds ONLY outstanding turns — a row is opened when the agent loop starts, moves through the one visible state machine (running → awaiting_user → running, running → paused), and is DELETED on every terminal phase (completed/cancelled/failed) because the durable thread transcript owns finished turns. The row stores the user question verbatim plus honest state (phase, why it is paused, which card was holding it, the last tool status line) — never in-flight provider session state: resume deliberately re-runs the question against a fresh context packet, per agent-runtime-and-context.md §Sessions and interruption ("provider session state … can be rebuilt from the Daylens thread plus a fresh context packet"). Restart recovery degrades any row still marked running/awaiting_user to paused(restart) — incomplete work is marked accurately, never assumed done. LOCAL-ONLY table: no sync-allowlist key exists for it, so the strict allowlist proves it can never ride a sync payload; it carries conversation text and is not exported.',
+    up: () => {
+      getDb().exec(`
+        CREATE TABLE IF NOT EXISTS agent_turn_checkpoints (
+          id TEXT PRIMARY KEY,
+          thread_id INTEGER,
+          client_request_id TEXT,
+          question TEXT NOT NULL,
+          phase TEXT NOT NULL CHECK (phase IN ('running', 'awaiting_user', 'paused')),
+          pause_kind TEXT CHECK (pause_kind IN ('user', 'restart') OR pause_kind IS NULL),
+          wait_kind TEXT CHECK (wait_kind IN (
+            'clarification', 'file_permission', 'memory_confirmation', 'correction_confirmation'
+          ) OR wait_kind IS NULL),
+          last_status TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_turn_checkpoints_thread ON agent_turn_checkpoints(thread_id);
       `)
     },
   },

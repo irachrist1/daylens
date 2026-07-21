@@ -2,15 +2,17 @@
 // has no dependency on settings, the database, or providers — tests drive the
 // gate logic with synthetic state alone.
 //
-// The morning brief is TWO separate notifications with
-// different firing rules. §5: the evening wrap fires as you shut down.
+// Three notifications: the morning brief (yesterday's recap), the evening
+// wrap that fires as you shut down, and the weekly brief that fires at the
+// week boundary and opens the week's wrap. The carryover nudge is gone —
+// removed with the brief rebuild, not migrated.
 //
 // The notifier (`src/main/services/dailySummaryNotifier.ts`) gathers settings +
 // state + tracked seconds and asks these functions whether to fire.
 
 import type { WorkRhythm } from '@shared/types'
 
-// DEV-113: the user's working rhythm (chosen in onboarding) shifts when the
+// The user's working rhythm (chosen in onboarding) shifts when the
 // briefs and wrap fire. An early bird gets an earlier evening wrap and morning
 // recap window; a night owl gets later ones; "always on" stays wide. The
 // defaults match the standard nine-to-five day so behavior is unchanged when no
@@ -21,21 +23,19 @@ export interface RhythmWindows {
   /** Morning-recap window: fires only between these hours. */
   morningStartHour: number
   morningEndHour: number
-  /** Carryover nudge stops offering once this hour passes. */
-  carryoverEndHour: number
 }
 
 export function workRhythmWindows(rhythm: WorkRhythm | undefined): RhythmWindows {
   switch (rhythm) {
     case 'early':
-      return { eveningWrapHour: 17, morningStartHour: 4, morningEndHour: 11, carryoverEndHour: 13 }
+      return { eveningWrapHour: 17, morningStartHour: 4, morningEndHour: 11 }
     case 'night':
-      return { eveningWrapHour: 21, morningStartHour: 8, morningEndHour: 14, carryoverEndHour: 16 }
+      return { eveningWrapHour: 21, morningStartHour: 8, morningEndHour: 14 }
     case 'always':
-      return { eveningWrapHour: 18, morningStartHour: 5, morningEndHour: 13, carryoverEndHour: 15 }
+      return { eveningWrapHour: 18, morningStartHour: 5, morningEndHour: 13 }
     case 'standard':
     default:
-      return { eveningWrapHour: 18, morningStartHour: 5, morningEndHour: 12, carryoverEndHour: 14 }
+      return { eveningWrapHour: 18, morningStartHour: 5, morningEndHour: 12 }
   }
 }
 
@@ -46,8 +46,10 @@ export interface DailyNotifierState {
   lastDailySummaryDate?: string
   /** Yesterday's-recap notification last fired (keyed to the day it fired). */
   lastYesterdayRecapDate?: string
-  /** Carryover-nudge notification last fired (keyed to the day it fired). */
-  lastCarryoverNudgeDate?: string
+  /** Weekly brief last fired for this week (keyed by the completed week's last
+   *  day — the anchor its wrap opens on). Restarts, wakes, and clock changes
+   *  can never duplicate a week that already fired. */
+  lastWeeklyBriefAnchor?: string
   /** Dates the user explicitly generated a recap for (so we don't re-offer it). */
   recapGeneratedDates?: string[]
   /** AI narrative attempts per "<kind>:<date>" — the retry budget below. */
@@ -64,7 +66,7 @@ export interface DailyNotifierState {
 // the loop through the existing last*Date state, so the budget only ever gates
 // retries of failures.
 
-export type AiAttemptKind = 'evening-wrap' | 'yesterday-recap' | 'carryover-nudge'
+export type AiAttemptKind = 'evening-wrap' | 'yesterday-recap' | 'weekly-brief'
 
 export const AI_ATTEMPT_MAX_PER_DAY = 3
 export const AI_ATTEMPT_MIN_GAP_MS = 20 * 60_000
@@ -83,6 +85,19 @@ export function canAttemptAiNarrative(
   if (!entry) return true
   if (entry.count >= AI_ATTEMPT_MAX_PER_DAY) return false
   return nowMs - entry.lastAtMs >= AI_ATTEMPT_MIN_GAP_MS
+}
+
+/** True once the day's AI budget for this kind is spent for good — as opposed
+ *  to merely waiting out the retry gap. This is the moment the evening recap
+ *  stops hoping for a written line and falls back to the deterministic
+ *  fact-only one (fallback order: fact-only line, then silence). */
+export function aiNarrativeAttemptsExhausted(
+  state: DailyNotifierState,
+  kind: AiAttemptKind,
+  date: string,
+): boolean {
+  const entry = state.aiAttempts?.[aiAttemptKey(kind, date)]
+  return (entry?.count ?? 0) >= AI_ATTEMPT_MAX_PER_DAY
 }
 
 /** Returns a new state with the attempt recorded and entries older than 48h
@@ -108,12 +123,9 @@ export function recordAiNarrativeAttempt(
 }
 
 // Minimum tracked seconds before a day has enough signal to be worth a recap.
-// Matches the 'partial' threshold from the renderer quality model.
+// Matches the 'partial' threshold from the renderer quality model. An empty or
+// barely-tracked day produces no notification at all: silence over invention.
 export const NOTIFY_MIN_SECONDS = 45 * 60
-
-// The carryover nudge catches you once you're settled — after ~1h of work that
-// morning, not the instant you open the laptop (§4.2).
-export const CARRYOVER_MIN_WORK_SECONDS = 60 * 60
 
 export type SchedulerDecision =
   | { fire: true; targetDate: string }
@@ -130,12 +142,17 @@ export interface DailySummaryDecisionInput {
   state: DailyNotifierState
   todaySecondsTracked: number
   dailySummaryEnabled: boolean
+  /** Notification consent (briefs.md): no brief fires before the person has
+   *  consented to notifications — onboarding done AND the OS permission
+   *  granted. The notifier computes this once per check. */
+  notificationsConsented: boolean
   todayDateString: string
   /** Earliest hour the wrap may fire; defaults to the standard 18:00. */
   eveningWrapHour?: number
 }
 
 export function decideDailySummary(input: DailySummaryDecisionInput): SchedulerDecision {
+  if (!input.notificationsConsented) return { fire: false, reason: 'no-notification-consent' }
   if (!input.dailySummaryEnabled) return { fire: false, reason: 'disabled' }
   if (input.state.lastDailySummaryDate === input.todayDateString) {
     return { fire: false, reason: 'already-fired-today' }
@@ -157,6 +174,8 @@ export interface YesterdayRecapDecisionInput {
   state: DailyNotifierState
   yesterdaySecondsTracked: number
   morningNudgeEnabled: boolean
+  /** Notification consent — see DailySummaryDecisionInput. */
+  notificationsConsented: boolean
   todayDateString: string
   yesterdayDateString: string
   /** Morning-recap window; defaults to the standard 05:00–noon. */
@@ -165,6 +184,7 @@ export interface YesterdayRecapDecisionInput {
 }
 
 export function decideYesterdayRecap(input: YesterdayRecapDecisionInput): SchedulerDecision {
+  if (!input.notificationsConsented) return { fire: false, reason: 'no-notification-consent' }
   if (!input.morningNudgeEnabled) return { fire: false, reason: 'disabled' }
   if (input.state.lastYesterdayRecapDate === input.todayDateString) {
     return { fire: false, reason: 'already-fired-today' }
@@ -184,31 +204,53 @@ export function decideYesterdayRecap(input: YesterdayRecapDecisionInput): Schedu
   return { fire: true, targetDate: input.yesterdayDateString }
 }
 
-// ─── Carryover nudge (§4.2) ───────────────────────────────────────────────────
-// Fires after 1–2 hours of work that morning — always, regardless of whether a
-// recap was generated yesterday. The "here's what to pick up" nudge.
+// ─── Weekly brief (briefs.md) ─────────────────────────────────────────────────
+// Fires at the week boundary — Monday morning, inside the same rhythm-derived
+// morning window as the morning brief — and opens the completed week's wrap
+// (the rolling 7-day window ending on Sunday, so the wrap covers Mon–Sun).
+// A missed window is skipped, never delivered late into the week: if Monday's
+// morning window passes without a fire, that week's brief simply doesn't
+// happen (briefs.md §Scheduling and delivery).
 
-export interface CarryoverNudgeDecisionInput {
+/** Minimum tracked seconds across the week before there is enough signal for a
+ *  weekly brief. A near-empty week produces silence over invention. Kept above
+ *  the daily floor: one thin day is not a week story. */
+export const WEEKLY_NOTIFY_MIN_SECONDS = 2 * 3600
+
+export interface WeeklyBriefDecisionInput {
   now: Date
   state: DailyNotifierState
-  todaySecondsTracked: number
-  morningNudgeEnabled: boolean
-  todayDateString: string
-  yesterdayDateString: string
-  /** Hour after which the carryover nudge stops offering; defaults to 14:00. */
-  carryoverEndHour?: number
+  /** Total tracked seconds across the completed week (anchor-6 … anchor). */
+  weekSecondsTracked: number
+  weeklyBriefEnabled: boolean
+  /** Notification consent — see DailySummaryDecisionInput. */
+  notificationsConsented: boolean
+  /** The completed week's last day (yesterday when today is Monday) — the
+   *  anchor date the week wrap opens on, and the once-per-week state key. */
+  weekAnchorDate: string
+  /** Morning window shared with the morning brief; rhythm-derived. */
+  morningStartHour?: number
+  morningEndHour?: number
 }
 
-export function decideCarryoverNudge(input: CarryoverNudgeDecisionInput): SchedulerDecision {
-  if (!input.morningNudgeEnabled) return { fire: false, reason: 'disabled' }
-  if (input.state.lastCarryoverNudgeDate === input.todayDateString) {
-    return { fire: false, reason: 'already-fired-today' }
+export function decideWeeklyBrief(input: WeeklyBriefDecisionInput): SchedulerDecision {
+  if (!input.notificationsConsented) return { fire: false, reason: 'no-notification-consent' }
+  if (!input.weeklyBriefEnabled) return { fire: false, reason: 'disabled' }
+  // The week boundary: local Monday. Clock changes and timezone travel resolve
+  // through the same local calendar every other gate uses, so a re-crossed
+  // boundary can't re-fire (the anchor key below already recorded the week).
+  if (input.now.getDay() !== 1) return { fire: false, reason: 'not-week-boundary' }
+  if (input.state.lastWeeklyBriefAnchor === input.weekAnchorDate) {
+    return { fire: false, reason: 'already-fired-this-week' }
   }
-  // Late morning / very early afternoon — once you're settled into the day.
-  const carryoverEndHour = input.carryoverEndHour ?? STANDARD_WINDOWS.carryoverEndHour
-  if (input.now.getHours() >= carryoverEndHour) return { fire: false, reason: 'after-early-afternoon' }
-  if (input.todaySecondsTracked < CARRYOVER_MIN_WORK_SECONDS) {
-    return { fire: false, reason: 'not-settled-in-yet' }
+  const morningStartHour = input.morningStartHour ?? STANDARD_WINDOWS.morningStartHour
+  const morningEndHour = input.morningEndHour ?? STANDARD_WINDOWS.morningEndHour
+  if (!hasReachedLocalTime(input.now, morningStartHour)) return { fire: false, reason: `before-${morningStartHour}` }
+  // Past the window: skip the week, never deliver late (missed windows skip).
+  if (input.now.getHours() >= morningEndHour) return { fire: false, reason: 'window-passed' }
+  if (input.weekSecondsTracked < WEEKLY_NOTIFY_MIN_SECONDS) {
+    return { fire: false, reason: 'insufficient-week-activity' }
   }
-  return { fire: true, targetDate: input.todayDateString }
+  return { fire: true, targetDate: input.weekAnchorDate }
 }
+

@@ -20,8 +20,17 @@ import { mergeTimelineEpisodes, shouldReanalyzeBlockWithAI, writeTimelineBlockRe
 import { getBlockLabelOverride, setBlockLabelOverride, writeAIBlockLabel } from '../db/queries'
 import { generateWorkBlockInsight, generateDayRegroupPlan } from './ai'
 import { absenceSpannedBy, formatAbsenceRange, partitionAtRealAbsences } from '../lib/absenceGuard'
+import { buildDaySnapshot } from '../lib/daySnapshot'
+import { appendDayAnalysisVersion } from '../db/dayAnalysisVersions'
+import { interpretationAgentEnabled } from '../lib/interpretationEval'
+import { getSettings } from './settings'
 
 export type BlockInsightTrigger = 'user' | 'background' | 'system'
+
+/** Bumped whenever the regroup/relabel analysis semantics change (prompts,
+ *  merge rules, absence guard), so a stored analysis version records WHICH
+ *  pipeline produced it (DEV-206: reproducible, inspectable versions). */
+export const ANALYZE_DAY_PROMPT_VERSION = 1
 
 export interface AnalyzeTimelineDayDeps {
   // A freeform note about what the user actually did (from the wrap flow / the
@@ -90,8 +99,23 @@ export async function analyzeTimelineDay(
   const userHint = deps.userHint?.trim() || undefined
   const resolveLiveSession = deps.resolveLiveSession ?? (() => null)
   const triggerSource = deps.triggerSource ?? 'user'
-  const regroupPlan = deps.regroupPlan ?? ((blocks, opts) => generateDayRegroupPlan(blocks, opts))
-  const blockInsight = deps.blockInsight ?? ((block, opts) => generateWorkBlockInsight(block, opts))
+
+  // The interpretation-agent live switch (DEV-206): OFF by default, and gated
+  // on the offline fixture eval (lib/interpretationEval). The packet-based
+  // runtime is not wired yet, so an early flip is honored honestly: say so
+  // and run the direct pipeline — never silently pretend the agent ran.
+  try {
+    if (interpretationAgentEnabled(getSettings())) {
+      console.warn('[timeline] interpretationAgentEnabled is set, but the packet-based interpretation runtime is not wired yet; running the direct regroup/relabel pipeline')
+    }
+  } catch { /* settings unavailable in some harnesses — the direct pipeline is the default either way */ }
+  // The models that actually wrote this run's regroup plan and relabels —
+  // recorded on the analysis version row (DEV-206) so an old analysis stays
+  // attributable to the model and prompt that produced it.
+  const modelsUsed = new Set<string>()
+  const onModel = (model: string) => { if (model) modelsUsed.add(model) }
+  const regroupPlan = deps.regroupPlan ?? ((blocks, opts) => generateDayRegroupPlan(blocks, { ...opts, onModel }))
+  const blockInsight = deps.blockInsight ?? ((block, opts) => generateWorkBlockInsight(block, { ...opts, onModel }))
 
   const materialize = (): DayTimelinePayload =>
     materializeTimelineDayProjection(db, dateStr, resolveLiveSession(dateStr))
@@ -244,5 +268,55 @@ export async function analyzeTimelineDay(
   }
 
   const refreshed = materialize()
+
+  // DEV-206: a run that wrote product state is a new ANALYSIS VERSION of this
+  // day — append it to the ledger with the facts it produced (the same
+  // snapshot hash the wraps key on), the models that wrote it, and a compact
+  // record of what it said. A run that changed nothing recorded no divergence
+  // and appends nothing.
+  if (changed) {
+    try {
+      const snapshot = buildDaySnapshot(refreshed)
+      appendDayAnalysisVersion(db, {
+        kind: 'timeline',
+        periodKey: dateStr,
+        factsHash: snapshot.factsHash,
+        model: modelsUsed.size > 0 ? [...modelsUsed].join(',') : null,
+        promptVersion: ANALYZE_DAY_PROMPT_VERSION,
+        triggerSource,
+        source: modelsUsed.size > 0 ? 'ai' : 'deterministic',
+        payload: {
+          summary: `${refreshed.blocks.length} blocks${merged ? ', neighbours merged' : ''}${attempted > 0 ? `, ${attempted} relabel${attempted === 1 ? '' : 's'} attempted` : ''}${failures.length > 0 ? `, ${failures.length} failed` : ''}`,
+          merged,
+          attempted,
+          failureCount: failures.length,
+          blockCount: refreshed.blocks.length,
+          blockLabels: refreshed.blocks
+            .filter((block) => !block.isLive)
+            .slice(0, 30)
+            .map((block) => block.label.current.slice(0, 80)),
+          // Versioned inference (agent-runtime spec): each proposed piece of
+          // understanding with its source evidence refs and confidence, so an
+          // old version answers "what did it claim, from what, how surely".
+          inferences: refreshed.blocks
+            .filter((block) => !block.isLive)
+            .slice(0, 30)
+            .map((block) => ({
+              blockId: block.id,
+              label: block.label.current.slice(0, 80),
+              labelSource: block.label.source,
+              confidence: block.label.confidence,
+              evidenceSessionIds: block.sessions
+                .map((session) => session.id)
+                .filter((id) => id >= 0)
+                .slice(0, 12),
+            })),
+        },
+      })
+    } catch (versionError) {
+      console.warn(`[timeline] failed to record analysis version for ${dateStr}:`, versionError)
+    }
+  }
+
   return { payload: refreshed, changed, merged, attempted, failures }
 }

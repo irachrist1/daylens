@@ -42,6 +42,7 @@ import { registerSearchHandlers } from '../src/main/ipc/search.handlers.ts'
 import { registerSyncHandlers } from '../src/main/ipc/sync.handlers.ts'
 import { registerConnectorHandlers } from '../src/main/ipc/connectors.handlers.ts'
 import { registerExportHandlers } from '../src/main/ipc/export.handlers.ts'
+import { registerScreenContextHandlers } from '../src/main/ipc/screenContext.handlers.ts'
 import { registerDistractionAlerterHandlers } from '../src/main/services/distractionAlerter.ts'
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -63,6 +64,7 @@ const REGISTER_FNS: Array<[string, () => void]> = [
   ['sync', registerSyncHandlers],
   ['connectors', registerConnectorHandlers],
   ['export', registerExportHandlers],
+  ['screenContext', registerScreenContextHandlers],
   ['distractionAlerter', registerDistractionAlerterHandlers],
 ]
 

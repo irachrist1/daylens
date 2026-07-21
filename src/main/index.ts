@@ -112,6 +112,7 @@ import { registerSyncHandlers } from './ipc/sync.handlers'
 import { startMcpServer, stopMcpServer } from './services/mcpServer'
 import { initDb, closeDb, getDb } from './services/database'
 import { startAIUsageRetentionSchedule, stopAIUsageRetentionSchedule } from './services/aiUsageRetention'
+import { recoverInterruptedTurns } from './services/agentTurnState'
 import { runPendingDerivedStateReset } from './core/projections/metadata'
 import { hasApiKey, initSettings, getSettings, setSettings } from './services/settings'
 import { getCurrentSession, getLinuxTrackingDiagnostics, startTracking, stopTracking, trackingStatus } from './services/tracking'
@@ -140,6 +141,7 @@ import { registerLinearConnector } from './connectors/linear/adapter'
 import { registerGranolaConnector } from './connectors/granola/adapter'
 import { registerConnectorHandlers } from './ipc/connectors.handlers'
 import { registerExportHandlers } from './ipc/export.handlers'
+import { registerScreenContextHandlers } from './ipc/screenContext.handlers'
 import { getLinuxDesktopDiagnostics, syncLinuxLaunchOnLogin } from './services/linuxDesktop'
 import {
   performUninstallCleanup,
@@ -1291,6 +1293,18 @@ app.whenReady()
     }
     initDb()
 
+    // DEV-200 restart recovery: an agent turn interrupted by a quit or crash
+    // (still marked running / waiting on a card) has no live promise anymore,
+    // so its checkpoint degrades to a clean paused(restart) row the chat
+    // offers to resume — incomplete work is marked accurately, never assumed
+    // done (agent-runtime-and-context.md §Sessions and interruption).
+    try {
+      const recovered = recoverInterruptedTurns(getDb())
+      if (recovered > 0) console.log(`[agent:turn-state] recovered ${recovered} interrupted turn(s) as paused`)
+    } catch (error) {
+      console.warn('[agent:turn-state] restart recovery failed:', error)
+    }
+
     // AI-telemetry retention: deferred first pass after launch, then
     // daily. Wired here — not in startBackgroundServices — because the DB
     // needs pruning even when tracking is disabled or paused.
@@ -1325,6 +1339,7 @@ app.whenReady()
     registerGranolaConnector()
     registerConnectorHandlers()
     registerExportHandlers()
+    registerScreenContextHandlers()
 
     // IPC: renderer drains any pending notification-route the main process
     // queued before the renderer's listener was attached.

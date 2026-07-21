@@ -8,6 +8,7 @@ import { fireTestDailySummaryNotification } from './dailySummaryNotifier'
 export type TestNotificationKind =
   | 'evening-wrap'
   | 'morning-brief'
+  | 'weekly-brief'
   | 'idle-reminder'
   | 'focus-nudge'
 
@@ -27,6 +28,11 @@ const HARNESS_COPY: Record<TestNotificationKind, { title: string; body: string; 
     title: 'Yesterday, in one line',
     body: 'Yesterday you shipped Intercom support, cleared the version regression, and pushed main.',
     route: '/wrapped?date=2026-07-06&source=daily-summary',
+  },
+  'weekly-brief': {
+    title: 'Your week, wrapped',
+    body: 'A week carried by the notification rebuild, with Thursday the biggest day.',
+    route: '/wrapped?period=week&date=2026-07-06&source=weekly-brief',
   },
   'idle-reminder': {
     title: 'Daylens',
@@ -48,14 +54,15 @@ export async function fireTestNotification(kind: TestNotificationKind): Promise<
   try {
     switch (kind) {
       case 'evening-wrap':
-      case 'morning-brief': {
+      case 'morning-brief':
+      case 'weekly-brief': {
         const result = await fireTestDailySummaryNotification(kind)
         if (result.ok) return { kind, ok: true }
         const fallback = HARNESS_COPY[kind]
         const shown = deliverNotification({
           title: fallback.title,
           body: fallback.body,
-          actionText: kind === 'morning-brief' ? 'Open' : undefined,
+          actionText: kind !== 'evening-wrap' ? 'Open' : undefined,
           onClick: fallback.route ? () => openDailySummaryRoute(fallback.route!) : undefined,
           surface: `harness:${kind}`,
         })
@@ -98,6 +105,7 @@ export async function fireAllTestNotifications(): Promise<{
   const kinds: TestNotificationKind[] = [
     'evening-wrap',
     'morning-brief',
+    'weekly-brief',
     'idle-reminder',
     'focus-nudge',
   ]

@@ -1,7 +1,9 @@
 import { app, ipcMain } from 'electron'
 import { randomUUID } from 'node:crypto'
-import type { AIAgentQuestionEvent } from '@shared/types'
-import { cancelAIRequest } from '../lib/aiCancellation'
+import type { AgentTurnCheckpointView, AIAgentQuestionEvent } from '@shared/types'
+import { cancelAIRequest, pauseAIRequest } from '../lib/aiCancellation'
+import { closeTurnCheckpoint, listPausedTurns } from '../services/agentTurnState'
+import { getModelCostCatalog, type ModelCatalogRequestEntry } from '../services/modelCatalog'
 import { appendDeletionJournalEntry } from '../services/deletionJournal'
 import { getThreadMessagesPage, updateAIMessageFeedback, writeAIBlockLabel } from '../db/queries'
 import { getDb } from '../services/database'
@@ -19,6 +21,8 @@ import {
 } from '../services/ai'
 import { getWrappedNarrative } from '../services/wrappedNarrative'
 import { getWrappedPeriodWrap } from '../services/wrappedPeriodNarrative'
+import { listDayAnalysisVersions } from '../db/dayAnalysisVersions'
+import { computePeriodRange } from '../lib/wrappedPeriodRange'
 import { askWrappedQuestion } from '../services/wrappedQuestion'
 import { getWrapProviderState } from '../services/aiOrchestration'
 import { getWrapPreflight } from '../services/wrapPreflight'
@@ -113,6 +117,11 @@ export function registerAIHandlers(): void {
       onStreamEvent: (streamEvent) => {
         event.sender.send(IPC.AI.STREAM_EVENT, streamEvent)
       },
+      // DEV-200: the turn's one visible state machine — running / waiting on
+      // a card / paused / terminal — pushed as it transitions.
+      onPhaseEvent: (phaseEvent) => {
+        event.sender.send(IPC.AI.TURN_PHASE, phaseEvent)
+      },
       onAgentQuestion: (question) => new Promise<string>((resolve) => {
         const questionId = randomUUID()
         const timeout = setTimeout(() => {
@@ -147,6 +156,30 @@ export function registerAIHandlers(): void {
   // Returns whether a matching turn was still running.
   ipcMain.handle(IPC.AI.CANCEL_MESSAGE, (_e, payload: { clientRequestId: string }): boolean => {
     return cancelAIRequest(payload.clientRequestId)
+  })
+
+  // DEV-200: pause the in-flight turn. The provider stream stops like a
+  // cancel, but the turn settles as a persisted checkpoint the user can
+  // resume — including after an app restart. Cancel stays distinct.
+  ipcMain.handle(IPC.AI.PAUSE_MESSAGE, (_e, payload: { clientRequestId: string }): boolean => {
+    return pauseAIRequest(payload.clientRequestId)
+  })
+
+  // DEV-200: the paused turns of a thread (or all threads), for rendering
+  // resumable rows when a conversation is opened after a pause or restart.
+  ipcMain.handle(IPC.AI.LIST_PAUSED_TURNS, (_e, payload: { threadId?: number | null } = {}): AgentTurnCheckpointView[] => {
+    return listPausedTurns(getDb(), payload.threadId ?? null)
+  })
+
+  // DEV-200: discard a paused turn — the explicit "don't resume this" choice.
+  ipcMain.handle(IPC.AI.DISCARD_PAUSED_TURN, (_e, payload: { checkpointId: string }): boolean => {
+    return closeTurnCheckpoint(getDb(), payload.checkpointId)
+  })
+
+  // DEV-201: per-model cost lines (typical question in USD + questions per
+  // dollar) and the managed allowance in money and estimated questions.
+  ipcMain.handle(IPC.AI.GET_MODEL_COSTS, async (_e, payload: { models: ModelCatalogRequestEntry[] }) => {
+    return getModelCostCatalog(payload.models ?? [])
   })
 
   ipcMain.handle(IPC.AI.GET_STARTER_SUGGESTIONS, async (): Promise<AIStarterSuggestionResult> => {
@@ -238,6 +271,25 @@ export function registerAIHandlers(): void {
 
   ipcMain.handle(IPC.AI.GET_WRAP_PROVIDER_STATE, async () => {
     return getWrapProviderState()
+  })
+
+  // DEV-206: the version history of a day's AI analyses — every generation of
+  // the day wrap and every timeline regroup/relabel run, newest first, with
+  // facts hash, model, prompt version, and why each version replaced the last.
+  // Old versions stay inspectable; retirements name the correction that
+  // invalidated them. With `period` set, serves the period wrap's history
+  // instead (rows are keyed by the period's start date, derived here from the
+  // same range math the wrap itself uses).
+  ipcMain.handle(IPC.AI.GET_DAY_ANALYSIS_HISTORY, (_e, payload: { date: string; period?: WrappedPeriod }) => {
+    const db = getDb()
+    if (payload.period) {
+      const periodKey = computePeriodRange(payload.period, payload.date).startDate
+      return { day: listDayAnalysisVersions(db, payload.period, periodKey), timeline: [] }
+    }
+    return {
+      day: listDayAnalysisVersions(db, 'day', payload.date),
+      timeline: listDayAnalysisVersions(db, 'timeline', payload.date),
+    }
   })
 
   // Pre-flight data quality check: honest, specific

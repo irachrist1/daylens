@@ -43,7 +43,21 @@ import {
 } from '../core/query/attributionResolvers'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { deriveTitleFromMessage, isWeakThreadTitle, parseGeneratedThreadTitle, type ThreadTitleContext } from '../lib/threadTitles'
-import { abortError, isAbortError, registerAICancellation, runWithAbortSignal, unregisterAICancellation } from '../lib/aiCancellation'
+import { abortError, consumePauseRequest, isAbortError, pausedError, registerAICancellation, runWithAbortSignal, unregisterAICancellation } from '../lib/aiCancellation'
+import {
+  adoptTurnCheckpointForResume,
+  agentTurnCheckpointsAvailable,
+  closeTurnCheckpoint,
+  getTurnCheckpoint,
+  lookupActiveTurnCheckpoint,
+  markTurnPaused,
+  markTurnRunning,
+  markTurnWaiting,
+  openTurnCheckpoint,
+  recordTurnStatus,
+  registerActiveTurnCheckpoint,
+  unregisterActiveTurnCheckpoint,
+} from '../services/agentTurnState'
 import { getDb } from '../services/database'
 import { workMemoryPromptBlock, chatMemoryPromptBlock, getWorkMemoryProfile, getClientMemory, findClientScopeForWrite, clientScope as clientScopeId } from '../services/workMemoryProfile'
 import { looksLikeMemoryInstruction, extractMemoryOps } from '../ai/memoryWrite'
@@ -58,8 +72,11 @@ import {
   touchThreadLastMessage,
 } from '../services/artifacts'
 import { getApiKey, getSettings } from '../services/settings'
-import { getCurrentSession } from '../services/tracking'
+import { getCurrentSession, flushCurrentSession } from '../services/tracking'
+import { localDayBounds } from '../lib/localDate'
 import type {
+  AgentTurnCheckpointView,
+  AIAgentTurnPhaseEvent,
   AIArtifactKind,
   AIProviderMode,
   AIChatSendRequest,
@@ -157,6 +174,9 @@ interface SendMessageOptions {
    *  wires this to the renderer's question card; the bench scripts it. When
    *  absent the agent is told to answer with its most defensible reading. */
   onAgentQuestion?: (question: AgentQuestion) => Promise<string>
+  /** The turn's visible state machine (DEV-200): running / awaiting_user /
+   *  paused / terminal transitions, pushed to the renderer as they happen. */
+  onPhaseEvent?: (event: AIAgentTurnPhaseEvent) => void
   /** When set and DAYLENS_AI_TRACE_DIR is configured, the trace file is
    *  written as <scenarioId>.json so the behavioural harness can match it. */
   traceScenarioId?: string | null
@@ -2981,6 +3001,9 @@ export async function generateWorkBlockInsight(
     // the "done for the day?" wrap flow). Used as a strong grounding hint when
     // the evidence alone is ambiguous — never overrides the evidence wholesale.
     userHint?: string
+    /** Reports the provider model that actually produced the insight, so the
+     *  day-analysis version ledger (DEV-206) can record which model wrote it. */
+    onModel?: (model: string) => void
   },
 ): Promise<WorkContextInsight> {
   const systemPrompt = [
@@ -2995,7 +3018,7 @@ export async function generateWorkBlockInsight(
   ].join(' ')
 
   try {
-    const { text } = await withTimeout(
+    const { text, config } = await withTimeout(
       executeTextAIJob(
         {
           jobType: options?.jobType ?? (block.isLive ? 'block_label_preview' : 'block_label_finalize'),
@@ -3017,6 +3040,7 @@ export async function generateWorkBlockInsight(
       BLOCK_INSIGHT_TIMEOUT_MS,
       'Block insight timed out',
     )
+    options?.onModel?.(config.model)
     const parsed = parseWorkBlockInsight(text)
 
     // §3.5 / invariant 3: even the model may not name a block after a raw machine
@@ -3110,7 +3134,12 @@ function dayRegroupPrompt(blocks: WorkContextBlock[], userHint?: string): string
 // combined evidence and produces one coherent title (§3.3).
 export async function generateDayRegroupPlan(
   blocks: WorkContextBlock[],
-  options?: { userHint?: string },
+  options?: {
+    userHint?: string
+    /** Reports the provider model that actually produced the plan, so the
+     *  day-analysis version ledger (DEV-206) can record which model wrote it. */
+    onModel?: (model: string) => void
+  },
 ): Promise<number[][] | null> {
   if (blocks.length < 2) return null
 
@@ -3123,7 +3152,7 @@ export async function generateDayRegroupPlan(
   ].join(' ')
 
   try {
-    const { text } = await withTimeout(
+    const { text, config } = await withTimeout(
       executeTextAIJob(
         {
           jobType: 'block_cleanup_relabel',
@@ -3137,6 +3166,7 @@ export async function generateDayRegroupPlan(
       DAY_REGROUP_TIMEOUT_MS,
       'Day regroup timed out',
     )
+    options?.onModel?.(config.model)
     return parseDayRegroupGroups(text, blocks.length)
   } catch (error) {
     console.warn('[timeline] AI day regroup failed:', error)
@@ -3236,18 +3266,65 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
     // A user-initiated Stop is not a provider failure: nothing was persisted,
     // so surface a plain, recognizable cancellation instead of a branded error.
     if (cancelController.signal.aborted || isAbortError(err)) {
+      // Pause and cancel both abort the provider stream, but they settle
+      // differently (DEV-200): a pause persists the turn's checkpoint as a
+      // resumable row (surviving app restart), while cancel stays what it
+      // always was — the turn is discarded, checkpoint and all.
+      if (consumePauseRequest(cancelKey)) {
+        const checkpointId = lookupActiveTurnCheckpoint(cancelKey)
+        let paused: AgentTurnCheckpointView | null = null
+        if (checkpointId) {
+          try {
+            paused = markTurnPaused(getDb(), checkpointId, 'user')
+          } catch (error) {
+            console.warn('[agent:turn-state] pause checkpoint settle failed:', error)
+          }
+        }
+        if (cancelKey && options.onPhaseEvent) {
+          options.onPhaseEvent({ requestId: cancelKey, phase: 'paused', waitKind: null, checkpointId: paused?.id ?? null, pauseKind: 'user' })
+        }
+        const pausedErr = pausedError()
+        if (recorder) recorder.finish(undefined, pausedErr.message)
+        throw pausedErr
+      }
+      settleTurnCheckpointAfterAbandon(cancelKey, 'cancelled', options)
       const cancelled = abortError()
       if (recorder) recorder.finish(undefined, cancelled.message)
       throw cancelled
     }
+    // A failed turn is not resumable state: the error card owns the retry of
+    // the same question, so keeping a checkpoint would double-represent it.
+    settleTurnCheckpointAfterAbandon(cancelKey, 'failed', options)
     const friendly = friendlyChatError(err)
     if (recorder) {
       recorder.finish(undefined, friendly.message)
     }
     throw friendly
   } finally {
+    unregisterActiveTurnCheckpoint(cancelKey)
     if (cancelKey) unregisterAICancellation(cancelKey, cancelController)
     if (recorder) setCurrentTrace(null)
+  }
+}
+
+// Terminal settle for an abandoned turn (cancel / failure): the checkpoint —
+// if this turn ever opened one — is deleted, and the phase event says which
+// terminal state the machine reached.
+function settleTurnCheckpointAfterAbandon(
+  cancelKey: string | null,
+  phase: 'cancelled' | 'failed',
+  options: SendMessageOptions,
+): void {
+  const checkpointId = lookupActiveTurnCheckpoint(cancelKey)
+  if (checkpointId) {
+    try {
+      closeTurnCheckpoint(getDb(), checkpointId)
+    } catch (error) {
+      console.warn('[agent:turn-state] checkpoint close failed:', error)
+    }
+  }
+  if (cancelKey && options.onPhaseEvent) {
+    options.onPhaseEvent({ requestId: cancelKey, phase, waitKind: null, checkpointId: null, pauseKind: null })
   }
 }
 
@@ -3256,6 +3333,15 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
   const db = getDb()
   const conversationId = getOrCreateConversation(db)
   let threadId = payload.threadId ?? null
+  // A resume rejoins the thread its checkpoint belongs to (DEV-200) — the
+  // renderer may resume from a draft view that never adopted the thread the
+  // paused turn was persisted under, and creating a second thread here would
+  // orphan the first.
+  if (threadId == null && payload.resumeOfCheckpointId) {
+    try {
+      threadId = getTurnCheckpoint(db, payload.resumeOfCheckpointId)?.threadId ?? null
+    } catch { /* fall through to normal thread resolution */ }
+  }
   if (threadId == null) {
     // First send from a new-chat draft: adopt (or create) the draft thread and
     // title it from the message.
@@ -3394,15 +3480,68 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
 
   const requestId = payload.clientRequestId ?? null
   const startedAt = Date.now()
+
+  // ── The turn's resumable checkpoint (DEV-200). Opened before the agent loop
+  //    starts; a resume ADOPTS the paused row (paused → running) instead of
+  //    opening a new one. The row is honest outstanding-work state, not
+  //    provider session state: this resumed turn rebuilds its context packet
+  //    from scratch inside runChatAgentTurn, so the answer reflects the day as
+  //    it is NOW, exactly as the runtime spec prescribes. If the checkpoint
+  //    the renderer asked to resume is already gone, the send proceeds as a
+  //    fresh turn — the question still gets answered.
+  let checkpoint: AgentTurnCheckpointView | null = null
+  if (agentTurnCheckpointsAvailable(db)) {
+    try {
+      checkpoint = (payload.resumeOfCheckpointId
+        ? adoptTurnCheckpointForResume(db, payload.resumeOfCheckpointId, { clientRequestId: requestId })
+        : null)
+        ?? openTurnCheckpoint(db, { threadId, clientRequestId: requestId, question: userMessage })
+      if (requestId) registerActiveTurnCheckpoint(requestId, checkpoint.id)
+    } catch (error) {
+      console.warn('[agent:turn-state] checkpoint open failed; turn runs without pause persistence:', error)
+      checkpoint = null
+    }
+  }
+  const emitPhase = (
+    phase: AIAgentTurnPhaseEvent['phase'],
+    waitKind: AIAgentTurnPhaseEvent['waitKind'] = null,
+  ) => {
+    if (requestId && options.onPhaseEvent) {
+      options.onPhaseEvent({ requestId, phase, waitKind, checkpointId: checkpoint?.id ?? null, pauseKind: null })
+    }
+  }
+  emitPhase('running')
+
   let agentResult: Awaited<ReturnType<typeof runChatAgentTurn>>
   try {
     agentResult = await runChatAgentTurn(question, prior, {
       db,
       config: agentConfig,
       model: options.model,
-      onStreamEvent: requestId && options.onStreamEvent
-        ? (event) => options.onStreamEvent?.({ requestId, delta: event.delta, snapshot: event.snapshot, status: event.status, step: event.step })
-        : undefined,
+      onStreamEvent: (event) => {
+        // The last status line rides the checkpoint so a paused turn can say
+        // what it was doing ("Paused while searching your timeline").
+        if (checkpoint && event.status) {
+          try {
+            recordTurnStatus(db, checkpoint.id, event.status)
+          } catch { /* display state only — never fail the turn over it */ }
+        }
+        if (requestId && options.onStreamEvent) {
+          options.onStreamEvent({ requestId, delta: event.delta, snapshot: event.snapshot, status: event.status, step: event.step })
+        }
+      },
+      // Agent-initiated waits and the user pause are ONE machine: the card
+      // kinds report through here, persist on the checkpoint, and reach the
+      // renderer as the same phase events a pause does.
+      onPhase: (event) => {
+        if (checkpoint) {
+          try {
+            if (event.phase === 'awaiting_user' && event.waitKind) markTurnWaiting(db, checkpoint.id, event.waitKind)
+            else if (event.phase === 'running') markTurnRunning(db, checkpoint.id)
+          } catch { /* display state only */ }
+        }
+        emitPhase(event.phase, event.waitKind)
+      },
       askUser: options.onAgentQuestion
         ?? (async () => '(No answer is available right now — pick the most defensible reading, answer it, and say in one clause what you assumed.)'),
       artifactDir: agentArtifactDir(),
@@ -3411,6 +3550,25 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
       signal: getAmbientAbortSignal() ?? undefined,
       trackingStart,
       threadId,
+      // Agent-applied corrections (DEV-199) behave exactly like Settings-
+      // applied ones: same live-session resolution, same pre-merge session
+      // flush, same projection invalidation — one corrections machinery.
+      corrections: {
+        resolveLiveSession: (date) => {
+          const live = getCurrentSession()
+          if (!live) return null
+          const [fromMs, toMs] = localDayBounds(date)
+          return Date.now() <= fromMs || live.startTime >= toMs ? null : live
+        },
+        onBeforeApply: (command) => {
+          if (command.kind === 'merge') flushCurrentSession()
+        },
+        onApplied: (date) => {
+          invalidateProjectionScope('timeline', 'correction_command', { date })
+          invalidateProjectionScope('apps', 'correction_command', { date })
+          invalidateProjectionScope('insights', 'correction_command', { date })
+        },
+      },
     })
   } catch (error) {
     if (!isAbortError(error)) {
@@ -3460,6 +3618,17 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
       console.warn('[ai:chat] context packet message binding failed:', error)
     }
   }
+  // The turn completed and the transcript owns it now — the checkpoint (fresh
+  // or adopted through a resume) leaves the outstanding-work ledger.
+  if (checkpoint) {
+    try {
+      closeTurnCheckpoint(db, checkpoint.id)
+    } catch (error) {
+      console.warn('[agent:turn-state] checkpoint close failed:', error)
+    }
+    unregisterActiveTurnCheckpoint(requestId)
+  }
+  emitPhase('completed')
   return turnResult
 }
 

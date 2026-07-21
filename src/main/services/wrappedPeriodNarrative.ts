@@ -31,6 +31,7 @@ import { getStoredWrappedNarrative, putStoredWrappedNarrative } from '../db/wrap
 import { computePeriodRange } from '../lib/wrappedPeriodRange'
 import { rollupSnapshots, bucketTotals } from '../lib/wrappedPeriodFacts'
 import {
+  PERIOD_WRAP_PROMPT_VERSION,
   buildPeriodFallbackNarrative,
   buildPeriodPrompts,
   buildPeriodRepairMessage,
@@ -39,6 +40,7 @@ import {
   parsePeriodWrapResponse,
   validatePeriodNarrativeObject,
 } from '../lib/wrappedPeriodNarrative'
+import { appendDayAnalysisVersion } from '../db/dayAnalysisVersions'
 
 interface ProviderRunner {
   (
@@ -171,6 +173,19 @@ function isDeckNarrative(value: unknown): value is WrappedPeriodNarrative {
   return Boolean(value && typeof value === 'object' && typeof (value as WrappedPeriodNarrative).lines === 'object')
 }
 
+export interface WrappedPeriodWrapOptions {
+  triggerSource?: AIInvocationSource
+  force?: boolean
+  /** How a STORED narrative whose facts hash no longer matches the period is
+   *  treated. 'reconcile' (the default, in-app opens of a closed period):
+   *  stored prose is re-grounded against the current facts without spending a
+   *  call. 'regenerate' (notification delivery): a brief must be generated
+   *  from the facts at delivery time, never a stale cache, so a mismatch
+   *  spends a call to regenerate; if that fails the result is the
+   *  deterministic fallback, which the notifier treats as silence. */
+  onStale?: 'reconcile' | 'regenerate'
+}
+
 /** Facts + narrative for a period. Facts always come from snapshots; the
  *  narrative is AI when a provider is configured, else the deterministic
  *  baseline (the renderer gates on provider state and shows the connect message
@@ -178,7 +193,7 @@ function isDeckNarrative(value: unknown): value is WrappedPeriodNarrative {
 export async function getWrappedPeriodWrap(
   period: WrappedPeriod,
   anchorDate: string,
-  options: { triggerSource?: AIInvocationSource; force?: boolean } = {},
+  options: WrappedPeriodWrapOptions = {},
 ): Promise<{ facts: WrappedPeriodFacts; narrative: WrappedPeriodNarrative }> {
   const facts = buildWrappedPeriodFacts(period, anchorDate)
   const narrative = await getWrappedPeriodNarrative(facts, options)
@@ -187,7 +202,7 @@ export async function getWrappedPeriodWrap(
 
 async function getWrappedPeriodNarrative(
   facts: WrappedPeriodFacts,
-  options: { triggerSource?: AIInvocationSource; force?: boolean } = {},
+  options: WrappedPeriodWrapOptions = {},
 ): Promise<WrappedPeriodNarrative> {
   const factsHash = computePeriodFactsHash(facts)
   const db = getDb()
@@ -200,15 +215,61 @@ async function getWrappedPeriodNarrative(
     if (stored && isDeckNarrative(stored.narrative)) {
       // A closed period never silently regenerates. An open one is live: show
       // the stored wrap while the facts still match, regenerate when they grew.
-      if (!open || stored.factsHash === factsHash) {
+      if (stored.factsHash === factsHash) {
         return { ...stored.narrative, generatedAt: stored.generatedAt }
+      }
+      if (!open && options.onStale !== 'regenerate') {
+        // A closed period's facts moved under the stored prose (corrections
+        // delete the stored row at write time, so this is the rare leftover,
+        // e.g. a snapshot rebuilt by a newer builder). Re-ground every piece
+        // against the current facts rather than serving lines that could
+        // contradict the cards; pieces that fail fall back per slide.
+        if (stored.narrative.source === 'ai') {
+          const reground = validatePeriodNarrativeObject(
+            {
+              lines: stored.narrative.lines ?? {},
+              question: stored.narrative.question,
+              reflection: stored.narrative.reflection,
+            },
+            facts,
+            factsHash,
+          )
+          if (reground.narrative) {
+            return { ...reground.narrative, generatedAt: stored.generatedAt }
+          }
+        }
+        return buildPeriodFallbackNarrative(facts, factsHash)
       }
     }
   }
 
-  const persist = (result: WrappedPeriodNarrative): WrappedPeriodNarrative => {
+  // Every persist also appends to the analysis version ledger (DEV-206): what
+  // this analysis said, from which facts, by which model and prompt version,
+  // and why it replaced the previous one — never a silent overwrite.
+  const persist = (result: WrappedPeriodNarrative, model: string | null = null): WrappedPeriodNarrative => {
     const generatedAt = Date.now()
     putStoredWrappedNarrative(db, facts.period, periodKey, result, factsHash, generatedAt)
+    try {
+      appendDayAnalysisVersion(db, {
+        kind: facts.period,
+        periodKey,
+        factsHash,
+        model,
+        promptVersion: PERIOD_WRAP_PROMPT_VERSION,
+        triggerSource: options.triggerSource ?? 'user',
+        source: result.source === 'ai' ? 'ai' : 'fallback',
+        payload: {
+          lead: result.lead,
+          lines: result.lines,
+          question: result.question,
+          reflection: result.reflection,
+        },
+        reason: options.force ? 'manual-regenerate' : undefined,
+        now: generatedAt,
+      })
+    } catch (versionError) {
+      console.warn(`[ai] failed to record analysis version for ${facts.period} ${periodKey}:`, versionError)
+    }
     return { ...result, generatedAt }
   }
 
@@ -227,7 +288,7 @@ async function getWrappedPeriodNarrative(
     .join('\n\n')
 
   try {
-    const { text } = await withTimeout(
+    const { text, config } = await withTimeout(
       executeTextAIJob(
         {
           jobType: 'wrapped_period_narrative',
@@ -241,6 +302,7 @@ async function getWrappedPeriodNarrative(
       NARRATIVE_TIMEOUT_MS,
       'wrapped_period_narrative timed out',
     )
+    const model = config.model
 
     const parsed = parsePeriodWrapResponse(text)
     if (!parsed) return persist(fallback)
@@ -282,7 +344,7 @@ async function getWrappedPeriodNarrative(
       }
     }
 
-    return persist(narrative ?? fallback)
+    return persist(narrative ?? fallback, narrative ? model : null)
   } catch (error) {
     console.warn(`[ai] wrapped_period_narrative failed for ${facts.period} ${facts.anchorDate}:`, error)
     // A transient failure is not a generated wrap — return the floor without

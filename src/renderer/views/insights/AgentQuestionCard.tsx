@@ -26,7 +26,9 @@ export function AgentQuestionCard({ question, onAnswer, onDismiss }: AgentQuesti
         maxWidth: 560,
       }}
     >
-      <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: 'var(--color-text-primary)' }}>
+      {/* pre-line: correction previews (DEV-199) arrive as multi-line cards —
+          each delta on its own line — and must not collapse into one blob. */}
+      <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: 'var(--color-text-primary)', whiteSpace: 'pre-line', lineHeight: 1.5 }}>
         {question.question}
       </p>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>

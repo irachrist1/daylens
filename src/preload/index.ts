@@ -9,6 +9,9 @@ import type {
   AIChatSendRequest,
   AIChatStreamEvent,
   AIAgentQuestionEvent,
+  AIAgentTurnPhaseEvent,
+  AIModelCostCatalog,
+  AgentTurnCheckpointView,
   AIActionWidget,
   AIActionUndo,
   AIActionCommitResult,
@@ -16,6 +19,7 @@ import type {
   AIChatTurnResult,
   AIStarterSuggestionResult,
   AIWrappedNarrative,
+  DayAnalysisVersionSummary,
   AISurfaceSummary,
   AIThreadMessage,
   AIThreadSettings,
@@ -34,6 +38,8 @@ import type {
   ConnectorListing,
   ConnectorSyncSummary,
   HistoryExportPlan,
+  ScreenContextBacklogFrame,
+  ScreenContextStatus,
   HistoryExportProgress,
   HistoryExportRunResult,
   HistoryExportVerification,
@@ -296,6 +302,18 @@ const api = {
   ai: {
     sendMessage: (payload: AIChatSendRequest): Promise<AIChatTurnResult> => ipcRenderer.invoke(IPC.AI.SEND_MESSAGE, payload),
     cancelMessage: (clientRequestId: string): Promise<boolean> => ipcRenderer.invoke(IPC.AI.CANCEL_MESSAGE, { clientRequestId }),
+    pauseMessage: (clientRequestId: string): Promise<boolean> => ipcRenderer.invoke(IPC.AI.PAUSE_MESSAGE, { clientRequestId }),
+    listPausedTurns: (threadId?: number | null): Promise<AgentTurnCheckpointView[]> =>
+      ipcRenderer.invoke(IPC.AI.LIST_PAUSED_TURNS, { threadId }),
+    discardPausedTurn: (checkpointId: string): Promise<boolean> =>
+      ipcRenderer.invoke(IPC.AI.DISCARD_PAUSED_TURN, { checkpointId }),
+    getModelCosts: (models: Array<{ provider: AIProviderMode; modelId: string }>): Promise<AIModelCostCatalog> =>
+      ipcRenderer.invoke(IPC.AI.GET_MODEL_COSTS, { models }),
+    onTurnPhase: (callback: (event: AIAgentTurnPhaseEvent) => void): (() => void) => {
+      const handler = (_e: Electron.IpcRendererEvent, event: AIAgentTurnPhaseEvent) => callback(event)
+      ipcRenderer.on(IPC.AI.TURN_PHASE, handler)
+      return () => { ipcRenderer.removeListener(IPC.AI.TURN_PHASE, handler) }
+    },
     getStarterSuggestions: (): Promise<AIStarterSuggestionResult> => ipcRenderer.invoke(IPC.AI.GET_STARTER_SUGGESTIONS),
     onStream: (callback: (event: AIChatStreamEvent) => void): (() => void) => {
       const handler = (_e: Electron.IpcRendererEvent, event: AIChatStreamEvent) => callback(event)
@@ -329,6 +347,8 @@ const api = {
       ipcRenderer.invoke(IPC.AI.GET_WRAPPED_PERIOD_NARRATIVE, { period, anchorDate, force }),
     getWrapProviderState: (): Promise<WrapProviderState> =>
       ipcRenderer.invoke(IPC.AI.GET_WRAP_PROVIDER_STATE),
+    getDayAnalysisHistory: (date: string, period?: WrappedPeriod): Promise<{ day: DayAnalysisVersionSummary[]; timeline: DayAnalysisVersionSummary[] }> =>
+      ipcRenderer.invoke(IPC.AI.GET_DAY_ANALYSIS_HISTORY, { date, period }),
     getWrapPreflight: (date: string): Promise<WrapPreflightResult> =>
       ipcRenderer.invoke(IPC.AI.GET_WRAP_PREFLIGHT, { date }),
     askWrapped: (payload: WrappedAskRequest): Promise<WrappedAskResult> =>
@@ -539,6 +559,30 @@ const api = {
       ipcRenderer.on(IPC.CONNECTORS.PROGRESS, handler)
       return () => { ipcRenderer.removeListener(IPC.CONNECTORS.PROGRESS, handler) }
     },
+  },
+  screenContext: {
+    // DEV-198: the screen-context experiment surface. Status, the explicit
+    // consent decision, pause/resume, revoke, backlog with Retry/Delete, the
+    // per-source deletion offers, and the full wipe. All local-only.
+    status: (): Promise<ScreenContextStatus> => ipcRenderer.invoke(IPC.SCREEN_CONTEXT.STATUS),
+    enable: (): Promise<{ ok: boolean; reason: string | null; status: ScreenContextStatus }> =>
+      ipcRenderer.invoke(IPC.SCREEN_CONTEXT.ENABLE),
+    setPaused: (paused: boolean): Promise<{ ok: boolean; reason: string | null; status: ScreenContextStatus }> =>
+      ipcRenderer.invoke(IPC.SCREEN_CONTEXT.SET_PAUSED, paused),
+    revoke: (payload: { wipeEverything?: boolean } = {}): Promise<{ ok: boolean; reason: string | null; status: ScreenContextStatus }> =>
+      ipcRenderer.invoke(IPC.SCREEN_CONTEXT.REVOKE, payload),
+    listBacklog: (): Promise<{ frames: ScreenContextBacklogFrame[]; totals: { frames: number; bytes: number } }> =>
+      ipcRenderer.invoke(IPC.SCREEN_CONTEXT.LIST_BACKLOG),
+    retryFrame: (frameId: string): Promise<{ ok: boolean; reason: string | null }> =>
+      ipcRenderer.invoke(IPC.SCREEN_CONTEXT.RETRY_FRAME, frameId),
+    deleteFrame: (frameId: string): Promise<{ ok: boolean; reason: string | null }> =>
+      ipcRenderer.invoke(IPC.SCREEN_CONTEXT.DELETE_FRAME, frameId),
+    deleteForSource: (source: string): Promise<{ ok: boolean; deleted: number }> =>
+      ipcRenderer.invoke(IPC.SCREEN_CONTEXT.DELETE_FOR_SOURCE, source),
+    wipe: (): Promise<{ ok: boolean; deleted: number }> =>
+      ipcRenderer.invoke(IPC.SCREEN_CONTEXT.WIPE),
+    diagnosticSample: (): Promise<{ captured: boolean; reason: string | null }> =>
+      ipcRenderer.invoke(IPC.SCREEN_CONTEXT.DIAGNOSTIC_SAMPLE),
   },
   export: {
     // DEV-196: full-history export. Plans, progress, and verification reports

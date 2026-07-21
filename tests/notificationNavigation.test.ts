@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { handleDailySummaryNavigation } from '../src/renderer/lib/dailySummaryNavigation.ts'
-import { buildDailyReportRoute, buildEveningWrapRoute, openDailySummaryRoute } from '../src/main/services/dailySummaryNavigation.ts'
+import { buildDailyReportRoute, buildEveningWrapRoute, buildWeeklyBriefRoute, openDailySummaryRoute } from '../src/main/services/dailySummaryNavigation.ts'
 
 function makeEmptyDay(date: string) {
   return {
@@ -85,6 +85,39 @@ test('standalone wrapped route opens the Wrapped overlay', async () => {
 
 test('Evening Wrap notification route targets the Wrapped surface', () => {
   assert.equal(buildEveningWrapRoute('2026-05-12'), '/wrapped?date=2026-05-12&source=evening-wrap')
+})
+
+test('Weekly Brief notification route targets the week wrap anchored on the completed week', () => {
+  assert.equal(buildWeeklyBriefRoute('2026-05-10'), '/wrapped?period=week&date=2026-05-10&source=weekly-brief')
+})
+
+test('the weekly brief route opens the PERIOD wrap, never a day deck', async () => {
+  const openedPeriods: Array<{ period: string; anchorDate: string }> = []
+  const openedDays: string[] = []
+  const navigatedRoutes: string[] = []
+
+  await handleDailySummaryNavigation(buildWeeklyBriefRoute('2026-05-10'), {
+    getTimelineDay: async (date) => makeEmptyDay(date),
+    openWrapped: ({ day }) => { openedDays.push(day.date) },
+    openPeriodWrapped: ({ period, anchorDate }) => { openedPeriods.push({ period, anchorDate }) },
+    navigate: (route) => { navigatedRoutes.push(route) },
+    todayString: () => '2026-05-11',
+  })
+
+  assert.deepEqual(openedPeriods, [{ period: 'week', anchorDate: '2026-05-10' }])
+  assert.deepEqual(openedDays, [], 'no day deck opened')
+  assert.deepEqual(navigatedRoutes, [])
+})
+
+test('a period route without an openPeriodWrapped dep still opens a day wrap rather than nothing (old renderer)', async () => {
+  const openedDays: string[] = []
+  await handleDailySummaryNavigation('/wrapped?period=week&date=2026-05-10&source=weekly-brief', {
+    getTimelineDay: async (date) => makeEmptyDay(date),
+    openWrapped: ({ day }) => { openedDays.push(day.date) },
+    navigate: () => {},
+    todayString: () => '2026-05-11',
+  })
+  assert.deepEqual(openedDays, ['2026-05-10'])
 })
 
 test('daily report route includes the report date for Morning Brief click-through', () => {

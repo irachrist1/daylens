@@ -22,6 +22,7 @@ import { ipc } from '../lib/ipc'
 import { EntityMemorySection } from './settings/EntityMemorySection'
 import { SuppliedMemorySection } from './settings/SuppliedMemorySection'
 import { FileAccessSection } from './settings/FileAccessSection'
+import { ScreenContextSection } from './settings/ScreenContextSection'
 import { ContextPacketSection } from './settings/ContextPacketSection'
 import { ConnectionsSection } from './settings/ConnectionsSection'
 import { ExportSection } from './settings/ExportSection'
@@ -1143,7 +1144,7 @@ function TrackingControlsContent({
 type SectionId =
   | 'general' | 'notifications' | 'billing' | 'usage'
   | 'ai' | 'memory' | 'entities' | 'fileAccess'
-  | 'labels' | 'clients' | 'connections' | 'privacy' | 'export'
+  | 'labels' | 'clients' | 'connections' | 'privacy' | 'screenContext' | 'export'
   | 'mcp' | 'enrichment' | 'capture' | 'updates' | 'help'
 
 interface SectionDef { id: SectionId; label: string; keywords: string }
@@ -1175,6 +1176,7 @@ const SECTION_GROUPS: SectionGroup[] = [
       { id: 'clients', label: 'Clients', keywords: 'project attribution company work' },
       { id: 'connections', label: 'Connections', keywords: 'connector connected sources external google calendar outlook github linear granola ics import sync disconnect scopes' },
       { id: 'privacy', label: 'Privacy & tracking', keywords: 'pause exclude excluded incognito private analytics local data' },
+      { id: 'screenContext', label: 'Screen context', keywords: 'experiment screenshot screen capture sample frame ocr consent opt-in backlog quarantine retry delete wipe' },
       { id: 'export', label: 'Export your data', keywords: 'export download backup take your data portability history json jsonl csv manifest verify complete local' },
     ],
   },
@@ -1212,6 +1214,7 @@ function SectionIcon({ id }: { id: SectionId }) {
     clients: <><rect x="2.3" y="5" width="11.4" height="7.6" rx="1.2" /><path d="M6 5V3.6h4V5" /></>,
     connections: <><path d="M6.8 9.2 9.2 6.8" /><path d="M7.6 4.4 9 3a2.4 2.4 0 0 1 3.4 3.4l-1.4 1.4" /><path d="M8.4 11.6 7 13a2.4 2.4 0 0 1-3.4-3.4L5 8.2" /></>,
     privacy: <path d="M8 1.9 13 3.7v4.1c0 3-2.2 5-5 6.3-2.8-1.3-5-3.3-5-6.3V3.7Z" />,
+    screenContext: <><rect x="2" y="3" width="12" height="8.4" rx="1.4" /><path d="M5.6 13.4h4.8" /><circle cx="8" cy="7.2" r="1.7" /></>,
     export: <><path d="M8 9.8V2.8" /><path d="M5.2 5.4 8 2.6l2.8 2.8" /><path d="M3 9.6v3.2h10V9.6" /></>,
     mcp: <><rect x="2" y="3" width="12" height="10" rx="1.6" /><path d="M4.6 6.6 7 8.5 4.6 10.4" /><path d="M8.4 10.4h3" /></>,
     enrichment: <><circle cx="8" cy="8" r="2.2" /><path d="M8 1.8v2.4M8 11.8v2.4M1.8 8h2.4M11.8 8h2.4" /></>,
@@ -3404,6 +3407,17 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
         </SectionPage>
       )
       break
+    case 'screenContext':
+      content = (
+        <SectionPage
+          title="Screen context"
+          description="An opt-in experiment: fleeting screen snapshots, read once for useful details and then destroyed — everything stays on this machine, and you can leave and wipe it all at any time."
+          maxWidth={760}
+        >
+          <ScreenContextSection />
+        </SectionPage>
+      )
+      break
     case 'export':
       content = (
         <SectionPage
@@ -3614,7 +3628,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       break
     case 'notifications':
       content = (
-        <SectionPage title="Notifications" description="Your morning brief, evening wrap, and focus alerts.">
+        <SectionPage title="Notifications" description="Your morning brief, evening wrap, weekly brief, and focus alerts.">
           <div>
             <SettingsRow
               first
@@ -3624,8 +3638,18 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
             />
             <SettingsRow
               title="Morning brief"
-              description="Short morning recap of yesterday and the day ahead."
+              description="One honest line about what yesterday actually was."
               control={<Toggle checked={settings.morningNudgeEnabled ?? true} onChange={(value) => void persist({ morningNudgeEnabled: value })} />}
+            />
+            <SettingsRow
+              title="Weekly brief"
+              description="Monday morning, the completed week's wrap."
+              control={<Toggle checked={settings.weeklyBriefEnabled ?? true} onChange={(value) => void persist({ weeklyBriefEnabled: value })} />}
+            />
+            <SettingsRow
+              title="Activity-free notification text"
+              description="Notifications say only that a brief is ready — no activity on the lock screen."
+              control={<Toggle checked={settings.activityFreeNotificationText ?? false} onChange={(value) => void persist({ activityFreeNotificationText: value })} />}
             />
             <SettingsRow
               title="Distraction alerts"

@@ -187,29 +187,31 @@ export class ScreenContextLifecycle {
     return listFramesInState(this.db, ['failed', 'quarantined'])
   }
 
-  /** Attempt a capture. Privacy gate first, then scheduler, then backlog cap —
-   *  each refusal is measured by reason (a closed enum), never by content. */
-  captureFrame(
-    input: CapturedFrameInput,
+  /** The pre-pixel decision: privacy gate first, then scheduler, then backlog
+   *  cap — each refusal is measured by reason (a closed enum), never by
+   *  content. The sampler (DEV-198) calls this BEFORE reading any pixels, so
+   *  a blocked context never even reaches the OS screen API. */
+  evaluateCapture(
+    trigger: CapturedFrameInput['trigger'],
     gate: ScreenCaptureGateContext,
     environment: ScreenSamplingEnvironment,
-  ): CaptureAttemptResult {
-    this.measure('screen_context_capture', { outcome: 'attempted', trigger: input.trigger })
+  ): { allowed: boolean; reason: string | null } {
+    this.measure('screen_context_capture', { outcome: 'attempted', trigger })
 
     const gateDecision = evaluateCaptureGate(gate)
     if (!gateDecision.allowed) {
       this.measure('screen_context_capture', {
-        outcome: 'blocked', blocked_reason: gateDecision.reason ?? 'unknown', trigger: input.trigger,
+        outcome: 'blocked', blocked_reason: gateDecision.reason ?? 'unknown', trigger,
       })
-      return { captured: false, reason: gateDecision.reason, frame: null }
+      return { allowed: false, reason: gateDecision.reason }
     }
 
-    const schedule = evaluateSamplingSchedule(this.scheduler, this.now(), input.trigger, environment)
+    const schedule = evaluateSamplingSchedule(this.scheduler, this.now(), trigger, environment)
     if (!schedule.allowed) {
       this.measure('screen_context_capture', {
-        outcome: 'blocked', blocked_reason: schedule.reason ?? 'unknown', trigger: input.trigger,
+        outcome: 'blocked', blocked_reason: schedule.reason ?? 'unknown', trigger,
       })
-      return { captured: false, reason: schedule.reason, frame: null }
+      return { allowed: false, reason: schedule.reason }
     }
 
     if (this.backlogCapReached()) {
@@ -218,10 +220,45 @@ export class ScreenContextLifecycle {
         this.notify('backlog_cap_reached')
       }
       this.measure('screen_context_capture', {
-        outcome: 'blocked', blocked_reason: 'backlog_cap', trigger: input.trigger,
+        outcome: 'blocked', blocked_reason: 'backlog_cap', trigger,
         backlog_bucket: backlogBucket(getBacklogTotals(this.db).frames),
       })
-      return { captured: false, reason: 'backlog_cap', frame: null }
+      return { allowed: false, reason: 'backlog_cap' }
+    }
+
+    return { allowed: true, reason: null }
+  }
+
+  /** Attempt a capture. `attemptAlreadyMeasured` lets the sampler's two-phase
+   *  flow (decide without pixels → read pixels → store) count one attempt,
+   *  not two. */
+  captureFrame(
+    input: CapturedFrameInput,
+    gate: ScreenCaptureGateContext,
+    environment: ScreenSamplingEnvironment,
+    options: { attemptAlreadyMeasured?: boolean } = {},
+  ): CaptureAttemptResult {
+    if (options.attemptAlreadyMeasured) {
+      // Re-run the pure checks without re-measuring the attempt — the state
+      // may have moved between the pixel read and now.
+      const gateDecision = evaluateCaptureGate(gate)
+      const schedule = gateDecision.allowed
+        ? evaluateSamplingSchedule(this.scheduler, this.now(), input.trigger, environment)
+        : null
+      const reason = !gateDecision.allowed
+        ? gateDecision.reason
+        : schedule && !schedule.allowed
+          ? schedule.reason
+          : this.backlogCapReached() ? 'backlog_cap' as const : null
+      if (reason) {
+        this.measure('screen_context_capture', {
+          outcome: 'blocked', blocked_reason: reason, trigger: input.trigger,
+        })
+        return { captured: false, reason, frame: null }
+      }
+    } else {
+      const decision = this.evaluateCapture(input.trigger, gate, environment)
+      if (!decision.allowed) return { captured: false, reason: decision.reason, frame: null }
     }
 
     const stored = this.frameStore.write(`pending_${input.capturedAt}`, input.bytes)

@@ -33,6 +33,7 @@ import {
   type LineGuardContext,
   type WrapLineRejection,
 } from './wrapNarrativeShared'
+import { buildPeriodFactTable, groundingFormsForRuntime } from './wrapFactTable'
 
 function periodWord(period: WrappedPeriod): string {
   return period === 'week' ? 'week' : period === 'month' ? 'month' : 'year'
@@ -56,6 +57,11 @@ const PERIOD_ANGLES = [
   'This one, lead with the contrast between the loud days and the quiet ones, plainly.',
   'This one, lead with the person: what this stretch says about how they work.',
 ] as const
+
+/** Bumped whenever the period wrap's prompt semantics change (directives,
+ *  contract, slide asks), so a stored analysis version records WHICH prompt
+ *  produced it (DEV-206: reproducible, inspectable versions). */
+export const PERIOD_WRAP_PROMPT_VERSION = 1
 
 export function computePeriodFactsHash(facts: WrappedPeriodFacts): string {
   const bucket = (s: number) => Math.round(s / 60)
@@ -103,6 +109,9 @@ function guardContext(facts: WrappedPeriodFacts, slides: WrapSlideSpec[]): LineG
     // Period facts carry no output evidence (no git/notes enrichment rides a
     // period wrap today), so completion claims are always unverified here.
     outputVerified: false,
+    // The fact-table backstop: every numeric token in a line must match the
+    // period's fact table or a number the writer was shown.
+    groundedNumericForms: groundingFormsForRuntime(buildPeriodFactTable(facts), durationSource),
   }
 }
 
@@ -283,6 +292,25 @@ export function mergePeriodWrapRepair(
 // Template text must never be shown as the wrap. This baseline is
 // the internal last resort when a CONNECTED provider returns unusable output:
 // every slide renders its deterministic fallbackLine.
+
+// ─── Fact-only weekly brief line (deterministic) ─────────────────────────────
+// The weekly brief's honest floor, mirroring the evening recap's
+// factOnlyRecapLine: when no provider can write the brief, the notification
+// carries a line made ONLY of the week's summed frozen-snapshot facts — the
+// same totals the week wrap and Timeline show — or nothing at all.
+// Fallback order: this line, then silence. Never a canned teaser.
+
+export function factOnlyWeeklyLine(facts: WrappedPeriodFacts): string | null {
+  if (facts.period !== 'week') return null
+  if (facts.totalSeconds <= 0 || facts.daysWithActivity <= 0) return null
+  const total = formatHm(facts.totalSeconds)
+  const days = facts.daysWithActivity === 1
+    ? 'one tracked day'
+    : `${facts.daysWithActivity} tracked days`
+  const top = facts.threads[0]
+  const thread = top?.subject ? `, the biggest thread ${top.subject}` : ''
+  return `${total} on screen across ${days}${thread}.`
+}
 
 export function buildPeriodFallbackNarrative(
   facts: WrappedPeriodFacts,

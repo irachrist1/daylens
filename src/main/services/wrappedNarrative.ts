@@ -19,17 +19,21 @@ import {
 } from './aiOrchestration'
 import { buildDayWrapFacts } from '../../renderer/lib/dayWrapScenes'
 import {
+  DAY_WRAP_PROMPT_VERSION,
   buildFallbackNarrative,
   buildWrappedPrompts,
   buildWrappedRepairMessage,
   computeFactsHash,
   mergeWrapRepair,
   parseWrapResponse,
+  reconcileStoredNarrative,
   validateWrappedNarrativeObject,
 } from '../lib/wrappedNarrative'
+import { buildDayFactTable } from '../lib/wrapFactTable'
 import { getDb } from './database'
 import { resolveDayEnrichment } from './enrichmentResolve'
 import { getStoredWrappedNarrative, putStoredWrappedNarrative } from '../db/wrappedNarrativeStore'
+import { appendDayAnalysisVersion } from '../db/dayAnalysisVersions'
 
 interface ProviderRunner {
   (
@@ -62,9 +66,23 @@ function isDeckNarrative(value: unknown): value is AIWrappedNarrative {
   return Boolean(value && typeof value === 'object' && typeof (value as AIWrappedNarrative).lines === 'object')
 }
 
+export interface WrappedNarrativeOptions {
+  triggerSource?: AIInvocationSource
+  force?: boolean
+  /** How a STORED narrative whose facts hash no longer matches the day is
+   *  treated. 'reconcile' (the default, in-app opens): stored prose is
+   *  re-grounded against the current facts and any piece that would contradict
+   *  the cards falls back deterministically, without spending a call.
+   *  'regenerate' (notification delivery): a brief must be generated from the
+   *  facts at delivery time, never a stale cache, so a mismatch spends a call
+   *  to regenerate; if that fails the result is the deterministic fallback,
+   *  which the notifier treats as silence. */
+  onStale?: 'reconcile' | 'regenerate'
+}
+
 export async function getWrappedNarrative(
   payload: DayTimelinePayload,
-  options: { triggerSource?: AIInvocationSource; force?: boolean } = {},
+  options: WrappedNarrativeOptions = {},
 ): Promise<AIWrappedNarrative> {
   const facts = buildDayWrapFacts(payload)
   const db = getDb()
@@ -72,24 +90,64 @@ export async function getWrappedNarrative(
   // from stored rows — no tool loop, never blocks. Absent → null, never invented.
   const enrichment = resolveDayEnrichment(db, facts.date)
   const factsHash = computeFactsHash(facts, enrichment)
+  // The one deterministic fact table for this day — the substrate every model
+  // line is validated against, computed before and independently of any model.
+  const factTable = buildDayFactTable(facts, payload.blocks, facts.date, enrichment)
   // Keyed by the DATE, not the facts hash, so today's wrap is stable as the day
   // accrues more activity (it does not rebuild every open). Only Regenerate replaces it.
   const periodKey = facts.date
 
-  // A wrap is never silently regenerated (DEV-118 / wrapped.md §3.3): a stored
-  // wrap is shown as-is, with its real generated-at time. Only an explicit
-  // Regenerate (force) spends a new call and overwrites it.
+  // A wrap is never silently regenerated: a stored wrap whose facts still hold
+  // is shown as-is, with its real generated-at time. When the facts moved
+  // (corrections invalidate the stored row at write time, so in practice this
+  // is today accruing activity), the stored prose is re-grounded rather than
+  // trusted — a line that would contradict the current cards cannot render.
   if (!options.force) {
     const stored = getStoredWrappedNarrative<AIWrappedNarrative>(db, 'day', periodKey)
     if (stored && isDeckNarrative(stored.narrative)) {
-      return { ...stored.narrative, generatedAt: stored.generatedAt }
+      if (stored.factsHash === factsHash) {
+        return { ...stored.narrative, generatedAt: stored.generatedAt }
+      }
+      if (options.onStale !== 'regenerate') {
+        const reconciled = reconcileStoredNarrative(stored.narrative, facts, factsHash, enrichment, factTable)
+        if (reconciled) return { ...reconciled, generatedAt: stored.generatedAt }
+        // Nothing of the stored prose grounds anymore: show the honest
+        // deterministic narrative without spending a call. Regenerate (force)
+        // or notification delivery produces a fresh one.
+        return buildFallbackNarrative(facts, factsHash)
+      }
+      // onStale 'regenerate': fall through and generate from the current facts.
     }
   }
 
   // Persist a freshly produced wrap and stamp it with its generation time.
-  const persist = (result: AIWrappedNarrative): AIWrappedNarrative => {
+  // Every persist also appends to the analysis version ledger (DEV-206): what
+  // this analysis said, from which facts, by which model and prompt version,
+  // and why it replaced the previous one — never a silent overwrite.
+  const persist = (result: AIWrappedNarrative, model: string | null = null): AIWrappedNarrative => {
     const generatedAt = Date.now()
     putStoredWrappedNarrative(db, 'day', periodKey, result, factsHash, generatedAt)
+    try {
+      appendDayAnalysisVersion(db, {
+        kind: 'day',
+        periodKey,
+        factsHash,
+        model,
+        promptVersion: DAY_WRAP_PROMPT_VERSION,
+        triggerSource: options.triggerSource ?? 'user',
+        source: result.source === 'ai' ? 'ai' : 'fallback',
+        payload: {
+          lead: result.lead,
+          lines: result.lines,
+          question: result.question,
+          reflection: result.reflection,
+        },
+        reason: options.force ? 'manual-regenerate' : undefined,
+        now: generatedAt,
+      })
+    } catch (versionError) {
+      console.warn(`[ai] failed to record analysis version for ${periodKey}:`, versionError)
+    }
     return { ...result, generatedAt }
   }
 
@@ -117,7 +175,7 @@ export async function getWrappedNarrative(
     .join('\n\n')
 
   try {
-    const { text } = await withTimeout(
+    const { text, config } = await withTimeout(
       executeTextAIJob(
         {
           jobType: 'wrapped_narrative',
@@ -131,10 +189,11 @@ export async function getWrappedNarrative(
       NARRATIVE_TIMEOUT_MS,
       'wrapped_narrative timed out',
     )
+    const model = config.model
 
     const parsed = parseWrapResponse(text)
     if (!parsed) return persist(fallback)
-    let { narrative, rejections } = validateWrappedNarrativeObject(parsed, facts, factsHash, enrichment)
+    let { narrative, rejections } = validateWrappedNarrativeObject(parsed, facts, factsHash, enrichment, factTable)
 
     // ONE repair round (wrapped-agent-plan: verify + at most one repair call).
     // The writer gets its own rejected lines back with the exact violations and
@@ -161,7 +220,7 @@ export async function getWrappedNarrative(
           'wrapped_narrative repair timed out',
         )
         const merged = mergeWrapRepair(parsed, repairText, rejections)
-        const second = validateWrappedNarrativeObject(merged, facts, factsHash, enrichment)
+        const second = validateWrappedNarrativeObject(merged, facts, factsHash, enrichment, factTable)
         if (second.narrative) {
           narrative = second.narrative
           rejections = second.rejections
@@ -175,7 +234,7 @@ export async function getWrappedNarrative(
       }
     }
 
-    return persist(narrative ?? fallback)
+    return persist(narrative ?? fallback, narrative ? model : null)
   } catch (error) {
     console.warn(`[ai] wrapped_narrative failed for ${facts.date}:`, error)
     // A transient failure is not a generated wrap — return the floor without

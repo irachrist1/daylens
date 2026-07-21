@@ -369,6 +369,18 @@ export interface SecondaryDisplayVisibleSpan {
   presence: 'visible'
 }
 
+/** One durable entity the day's evidence supports naming — a project, client,
+ *  person, meeting, or repository from the entity ledger whose evidence spans
+ *  overlap the day's surviving (trusted, undeleted) blocks. The wrap's
+ *  "what the day was about" scene reads these; seconds are the overlap with
+ *  the surviving blocks, so deleted evidence can never lend an entity time. */
+export interface DayWrapEntity {
+  id: string
+  type: 'project' | 'client' | 'person' | 'meeting' | 'repository'
+  name: string
+  seconds: number
+}
+
 export interface DayTimelinePayload {
   date: string
   sessions: AppSession[]
@@ -393,6 +405,9 @@ export interface DayTimelinePayload {
   // counted in totalSeconds. Captured-only meetings need no entry here: they
   // ARE blocks. Absent when no calendar signal is stored for the day.
   scheduledMeetings?: TimelineScheduledMeeting[]
+  // Additive: the durable entities the day's evidence supports naming.
+  // Absent on payloads built before the entity ledger existed.
+  dayEntities?: DayWrapEntity[]
 }
 
 /** One scheduled calendar event as the Timeline day view shows it (DEV-189).
@@ -845,6 +860,101 @@ export interface AIAgentQuestionEvent {
   allowFreeText: boolean
 }
 
+// ─── Agent turn pause/resume (DEV-200) ───────────────────────────────────────
+// ONE visible state machine for a long-running agent turn. Agent-initiated
+// waits (the permission / confirmation / clarification cards, which all ride
+// the askUser channel) and the user-initiated pause are phases of the same
+// machine, not separate mechanisms. A paused turn persists as a checkpoint row
+// so it survives an app restart; resume re-runs the question against a FRESH
+// context packet (the day may have moved), which is exactly the degradation
+// the runtime spec prescribes — provider session state is an execution detail
+// rebuilt from the Daylens thread plus a fresh packet.
+
+/** Lifecycle phase of one agent turn. Terminal phases (`completed`,
+ *  `cancelled`, `failed`) delete the checkpoint — the durable transcript owns
+ *  finished turns; the checkpoint ledger only ever holds outstanding work. */
+export type AgentTurnPhase =
+  | 'running'
+  | 'awaiting_user'
+  | 'paused'
+  | 'completed'
+  | 'cancelled'
+  | 'failed'
+
+/** Why an agent-initiated wait is holding the turn — which card is up. */
+export type AgentTurnWaitKind =
+  | 'clarification'
+  | 'file_permission'
+  | 'memory_confirmation'
+  | 'correction_confirmation'
+
+/** Why a paused turn is paused: the user paused it, or a restart interrupted
+ *  it mid-flight and recovery degraded it to a clean resumable checkpoint. */
+export type AgentTurnPauseKind = 'user' | 'restart'
+
+/** Phase-transition event for the in-flight turn, pushed to the renderer so
+ *  the chat shows one honest state line (working / waiting on you / paused). */
+export interface AIAgentTurnPhaseEvent {
+  requestId: string
+  phase: AgentTurnPhase
+  /** Set while phase === 'awaiting_user': which card is holding the turn. */
+  waitKind: AgentTurnWaitKind | null
+  /** Set when phase === 'paused': the persisted checkpoint to resume from. */
+  checkpointId: string | null
+  pauseKind: AgentTurnPauseKind | null
+}
+
+/** A persisted resumable turn, as listed for the renderer. */
+export interface AgentTurnCheckpointView {
+  id: string
+  threadId: number | null
+  /** The user's question, verbatim — resume re-asks exactly this. */
+  question: string
+  phase: Extract<AgentTurnPhase, 'running' | 'awaiting_user' | 'paused'>
+  pauseKind: AgentTurnPauseKind | null
+  waitKind: AgentTurnWaitKind | null
+  /** Last tool status line before the pause, for honest display ("Paused
+   *  while searching your timeline"). Never raw arguments or payloads. */
+  lastStatus: string | null
+  createdAt: number
+  updatedAt: number
+}
+
+// ─── Model picker costs (DEV-201) ────────────────────────────────────────────
+// Cost transparency in money and estimated questions — never raw tokens first
+// (billing-and-entitlements.md §Usage metering). Costs are computed in the
+// main process from the same pricing table billing settlement estimates use,
+// so the picker can never quote a different price than the meter charges.
+
+/** Per-model cost line for the picker. */
+export interface AIModelCostEntry {
+  provider: AIProviderMode
+  modelId: string
+  /** Estimated cost of one typical Daylens question on this model, in USD. */
+  typicalQuestionCostUsd: number
+  /** Whole typical questions one US dollar covers on this model. */
+  questionsPerUsd: number
+}
+
+/** Managed-allowance view for the picker, derived from the validated billing
+ *  snapshot — remaining credit in money and estimated questions. */
+export interface AIManagedAllowanceView {
+  grantedUsd: number
+  remainingUsd: number
+  /** Whole typical questions the remaining credit still covers on the managed
+   *  default tier. Null when there is no meaningful figure to divide. */
+  estimatedQuestionsRemaining: number | null
+  canUseManagedAI: boolean
+  /** Plain-language reason when managed AI cannot serve a turn right now. */
+  unavailableReason: string | null
+}
+
+export interface AIModelCostCatalog {
+  models: AIModelCostEntry[]
+  /** Null when this build has no billing service or it reports unavailable. */
+  allowance: AIManagedAllowanceView | null
+}
+
 /** One file whose contents were disclosed to the model during a turn
  *  (DEV-184). Shown in the answer's sources row; the full record lives in the
  *  file_disclosures ledger. */
@@ -1052,6 +1162,11 @@ export interface AIChatSendRequest {
   clientRequestId?: string | null
   threadId?: number | null
   transform?: AIAnswerTransformKind | null
+  /** Set when this send resumes a paused turn (DEV-200): the checkpoint is
+   *  adopted by this turn (paused → running) and deleted when the turn
+   *  completes. The answer is rebuilt from a fresh context packet — never a
+   *  replay of stale in-flight state. */
+  resumeOfCheckpointId?: string | null
 }
 
 export interface AIDailyReportPreparationResult {
@@ -1463,6 +1578,47 @@ export interface AIWrappedNarrative {
    *  the UI shows an honest "generated <when>" marker instead of "just now" on
    *  every open. Absent only for a transient, un-persisted result. */
   generatedAt?: number
+}
+
+// ─── Versioned day analysis (DEV-206) ────────────────────────────────────────
+// Every AI analysis of a day (the day wrap, the period wraps that contain it,
+// and the timeline regroup/relabel run) is recorded as an append-only version:
+// what it said, when, from which facts (facts hash), by which model and prompt
+// version, and why it replaced the previous one. Old versions stay inspectable;
+// a correction retires the current version instead of silently diverging.
+
+export type DayAnalysisKind = 'day' | 'week' | 'month' | 'year' | 'timeline'
+
+export type DayAnalysisReason =
+  | 'initial'
+  | 'facts-changed'
+  | 'correction'
+  | 'deletion'
+  | 'evidence-change'
+  | 'manual-regenerate'
+  | 'regenerated'
+
+export interface DayAnalysisVersionSummary {
+  kind: DayAnalysisKind
+  /** The date for 'day'/'timeline'; the period's start date otherwise. */
+  periodKey: string
+  /** 1-based, per (kind, periodKey). */
+  version: number
+  factsHash: string
+  /** The provider model that wrote it; null for deterministic output. */
+  model: string | null
+  promptVersion: number
+  triggerSource: string
+  source: 'ai' | 'fallback' | 'deterministic'
+  /** Why this version exists (what replaced the previous one). */
+  reason: DayAnalysisReason
+  /** One representative line of what this version said (the wrap lead, or a
+   *  short summary for a timeline analysis run). */
+  lead: string | null
+  createdAt: number
+  /** Set when a later correction/deletion retired this version. */
+  retiredAt: number | null
+  retiredReason: 'correction' | 'deletion' | 'evidence-change' | 'superseded' | null
 }
 
 /** A question asked from inside a wrap slide, answered in context. */
@@ -2133,6 +2289,21 @@ export interface AppSettings {
   aiReportPersonalizationEnabled?: boolean
   dailySummaryEnabled?: boolean
   morningNudgeEnabled?: boolean
+  /** The weekly brief: fires at the week boundary and opens the week's wrap.
+   *  Independently disableable like the other briefs (briefs.md). */
+  weeklyBriefEnabled?: boolean
+  /** Activity-free notification text (briefs.md §Notification content and
+   *  privacy): when true, brief notifications say only that the brief is ready
+   *  ("Your evening wrap is ready") — no activity content on the lock screen —
+   *  without losing the brief itself. */
+  activityFreeNotificationText?: boolean
+  /** The interpretation-agent live switch (agent-runtime-and-context.md,
+   *  DEV-206): OFF by default. Turning it on routes automatic day analysis
+   *  through the packet-based interpretation agent instead of the direct
+   *  regroup/relabel pipeline — allowed only once the offline fixture eval
+   *  (interpretationEval) passes for the packaged runtime. Until that runtime
+   *  lands, the flag is honored but the direct pipeline still runs (logged). */
+  interpretationAgentEnabled?: boolean
   distractionAlertThresholdMinutes?: number
   distractionAlertsEnabled?: boolean
   notificationPermissionState?: NotificationPermissionState
@@ -2170,6 +2341,68 @@ export interface AppSettings {
   screenContextExperimentEnabled?: boolean
   // Ad-hoc pause for screen sampling only; core tracking is untouched.
   screenContextPaused?: boolean
+  // Unix ms of the explicit consent decision (DEV-198) — shown in the
+  // experiment status so the person can see exactly when they agreed.
+  // Cleared on revoke.
+  screenContextConsentAt?: number
+}
+
+// ─── Screen-context experiment surface (DEV-198) ─────────────────────────────
+// The renderer-facing status and backlog shapes. Deliberately content-free
+// beyond what the person may inspect about their own frames: app identity,
+// timing, byte size, lifecycle state, and a bounded structural error — never
+// OCR text, titles, or derived evidence content.
+
+export interface ScreenContextBacklogFrame {
+  id: string
+  capturedAt: number
+  trigger: string
+  appName: string | null
+  appBundleId: string | null
+  state: string
+  byteSize: number
+  retryCount: number
+  lastError: string | null
+  nextRetryAt: number | null
+}
+
+export interface ScreenContextExclusionOffer {
+  /** The excluded app as the person excluded it (name or bundle id). */
+  source: string
+  frameCount: number
+  evidenceCount: number
+}
+
+export interface ScreenContextStatus {
+  /** The experiment exists on macOS and Windows only. */
+  supportedPlatform: boolean
+  /** Consent can be offered: supported platform AND core tracking already
+   *  consented and working (the experiment never leads onboarding). */
+  eligible: boolean
+  /** Honest reason when not eligible; null when eligible. */
+  eligibilityReason: string | null
+  enabled: boolean
+  paused: boolean
+  consentAt: number | null
+  /** Whether an OS capture sampler is wired in this build (macOS via
+   *  ScreenCaptureKit / Windows via Windows.Graphics.Capture, both through
+   *  the Electron capturer). False → sampling can never be active. */
+  samplerInstalled: boolean
+  /** True only while the sampler loop is running WITH consent and not paused
+   *  — the exact signal the persistent indicator shows. */
+  samplerActive: boolean
+  /** Which adapter is wired ('macos-screencapturekit', 'windows-graphics-capture',
+   *  'fake' in tests), or null when none is. */
+  samplerKind: string | null
+  backlog: { frames: number; bytes: number }
+  backlogCapReached: boolean
+  quarantinedCount: number
+  /** Derived screen evidence rows currently stored (local-only). */
+  evidenceCount: number
+  lastCapturedAt: number | null
+  /** Excluded apps that still have screen-context records — each one is an
+   *  explicit offer to delete the prior evidence for that source. */
+  exclusionOffers: ScreenContextExclusionOffer[]
 }
 
 export type BillingAccessMode = 'free_credit' | 'subscription' | 'local_pass' | 'own_key' | 'none' | 'unavailable'
@@ -2673,6 +2906,11 @@ export const IPC = {
   AI: {
     SEND_MESSAGE: 'ai:send-message',
     CANCEL_MESSAGE: 'ai:cancel-message',
+    PAUSE_MESSAGE: 'ai:pause-message',
+    TURN_PHASE: 'ai:turn-phase',
+    LIST_PAUSED_TURNS: 'ai:list-paused-turns',
+    DISCARD_PAUSED_TURN: 'ai:discard-paused-turn',
+    GET_MODEL_COSTS: 'ai:get-model-costs',
     STREAM_EVENT: 'ai:stream-event',
     AGENT_QUESTION: 'ai:agent-question',
     AGENT_ANSWER: 'ai:agent-answer',
@@ -2686,6 +2924,7 @@ export const IPC = {
     GET_APP_NARRATIVE: 'ai:get-app-narrative',
     GET_WRAPPED_NARRATIVE: 'ai:get-wrapped-narrative',
     GET_WRAPPED_PERIOD_NARRATIVE: 'ai:get-wrapped-period-narrative',
+    GET_DAY_ANALYSIS_HISTORY: 'ai:get-day-analysis-history',
     GET_WRAP_PROVIDER_STATE: 'ai:get-wrap-provider-state',
     GET_WRAP_PREFLIGHT: 'ai:get-wrap-preflight',
     ASK_WRAPPED: 'ai:ask-wrapped',
@@ -2792,6 +3031,22 @@ export const IPC = {
     APPLY_CORRECTION: 'entities:apply-correction',
     UNDO_CORRECTION: 'entities:undo-correction',
     CREATE_PROJECT: 'entities:create-project',
+  },
+  SCREEN_CONTEXT: {
+    // The screen-context experiment surface (DEV-198). Consent, pause, and
+    // revoke gate the DEV-197 lifecycle; backlog/quarantine inspection with
+    // explicit Retry/Delete; and the full wipe that removes every raw frame
+    // AND every derived record. All local — nothing here touches the network.
+    STATUS: 'screen-context:status',
+    ENABLE: 'screen-context:enable',
+    SET_PAUSED: 'screen-context:set-paused',
+    REVOKE: 'screen-context:revoke',
+    LIST_BACKLOG: 'screen-context:list-backlog',
+    RETRY_FRAME: 'screen-context:retry-frame',
+    DELETE_FRAME: 'screen-context:delete-frame',
+    DELETE_FOR_SOURCE: 'screen-context:delete-for-source',
+    WIPE: 'screen-context:wipe',
+    DIAGNOSTIC_SAMPLE: 'screen-context:diagnostic-sample',
   },
   FILE_ACCESS: {
     LIST_GRANTS: 'file-access:list-grants',

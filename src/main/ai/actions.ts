@@ -360,6 +360,17 @@ export function attachActionWidgets<T extends { actionWidgets?: AIActionWidget[]
 // ── Commit (runs the real manual-edit pipeline, only on confirm) ────────────
 
 function commitRename(db: Database.Database, action: AIRenameBlockProposal): AIActionCommitResult {
+  // Preview expiry (DEV-200): a confirmed preview applies only to the target
+  // it previewed. If the block is gone (merged away, re-corrected) or its
+  // label changed since the card was built, the preview EXPIRES instead of
+  // applying to something the person never saw.
+  const target = loadDayBlocks(db, action.date).find((block) => block.id === action.blockId)
+  if (!target) {
+    return { ok: false, summary: '', error: 'That block changed since this preview — it no longer exists. Ask again for a fresh preview.' }
+  }
+  if (labelOf(target) !== action.previousLabel) {
+    return { ok: false, summary: '', error: `That block changed since this preview — it is now “${labelOf(target)}”. Ask again for a fresh preview.` }
+  }
   const { date, priorOverride } = applyBlockLabelCorrection(db, {
     blockId: action.blockId,
     date: action.date,

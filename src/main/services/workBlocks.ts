@@ -16,6 +16,8 @@ import {
   deleteDaySnapshotRow,
   type WebsiteVisitRecord,
 } from '../db/queries'
+import { deleteWrappedNarrativesForDate } from '../db/wrappedNarrativeStore'
+import { entitiesForDayWrap } from './entities/dayEntities'
 import { isWorkIntentRole } from '@shared/types'
 import type {
   AppDetailPayload,
@@ -26,6 +28,7 @@ import type {
   BlockConfidence,
   BoundaryReason,
   DayTimelinePayload,
+  DayWrapEntity,
   DistractionCostPayload,
   DocumentRef,
   HistoryDayPayload,
@@ -1787,8 +1790,10 @@ export function writeIgnoredBlockReviewBackstop(
   const { date, blockId, evidenceKey, originalBlockJson } = input
   const now = Date.now()
   // A deletion the Timeline honors must reach the period wraps too — drop the
-  // day's frozen snapshot so week/month/year facts rebuild from what remains.
+  // day's frozen snapshot so week/month/year facts rebuild from what remains,
+  // and the stored wrap prose written over the deleted block with it.
   deleteDaySnapshotRow(db, date)
+  deleteWrappedNarrativesForDate(db, date, 'deletion')
   const rows = db.prepare(`
     SELECT
       id,
@@ -1864,8 +1869,11 @@ export function writeTimelineBlockReview(
   const now = Date.now()
   // Corrections change every totalling surface, period wraps included: the
   // day's frozen snapshot is a cache of the pre-correction facts, so drop it
-  // and let the next wrap read refreeze from the corrected timeline.
+  // and let the next wrap read refreeze from the corrected timeline. The
+  // stored wrap narrative was written over the pre-correction facts too, so
+  // it goes with the snapshot rather than contradicting the corrected day.
   deleteDaySnapshotRow(db, dateStr)
+  deleteWrappedNarrativesForDate(db, dateStr, 'correction')
   const existingCorrection = existing ? parseReviewJson(existing.correction_json) : {}
   const nextCorrection: Record<string, unknown> = { ...existingCorrection }
 
@@ -4493,8 +4501,10 @@ function invalidateTimelineDay(db: Database.Database, dateStr: string): void {
 export function invalidateTimelineDayBlocks(db: Database.Database, dateStr: string): void {
   invalidateTimelineDay(db, dateStr)
   // The day's underlying evidence changed (purge, split, exclusion, journal
-  // replay) — the frozen snapshot that feeds period wraps is stale with it.
+  // replay) — the frozen snapshot that feeds period wraps is stale with it,
+  // and so is any stored wrap narrative written over the purged evidence.
   deleteDaySnapshotRow(db, dateStr)
+  deleteWrappedNarrativesForDate(db, dateStr, 'evidence-change')
 }
 
 type CarriedAiLabel = { label: string; narrative: string | null; confidence: number }
@@ -5710,6 +5720,16 @@ export function getTimelineDayPayload(
   // draws, never a block, never a second of totalSeconds (the #3/#21 rule:
   // no calendar event becomes claimed work without supporting evidence).
   const scheduledMeetings = resolveScheduledMeetingsForDay(db, dateStr, blocks)
+  // The durable entities this day's evidence supports naming, intersected
+  // with the surviving blocks above so deleted evidence lends no entity time.
+  // The wrap's "what the day was about" scene reads these; a database without
+  // the entity ledger simply yields none.
+  let dayEntities: DayWrapEntity[] = []
+  try {
+    dayEntities = entitiesForDayWrap(db, dateStr, blocks)
+  } catch {
+    dayEntities = []
+  }
   // Invariant 7: the blocks are the canonical day facts. Every downstream
   // total (Timeline, Apps, AI, recap) reads this same partition instead of
   // independently summing raw sessions.
@@ -5738,6 +5758,7 @@ export function getTimelineDayPayload(
     siteCount: websites.length,
     secondaryDisplay,
     scheduledMeetings,
+    dayEntities,
   }
 }
 

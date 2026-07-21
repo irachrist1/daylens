@@ -10,7 +10,7 @@ import { createDefaultOnboardingState, normalizeOnboardingState } from '../lib/o
 import { ensureSecureStore, getSecureStore } from './secureStore'
 
 // We keep a synchronous in-memory cache after first load
-let _store: { get: (k: string, d?: unknown) => unknown; set: (k: string, v: unknown) => void } | null = null
+let _store: { get: (k: string, d?: unknown) => unknown; set: (k: string, v: unknown) => void; delete?: (k: string) => void } | null = null
 
 async function getStore() {
   if (!_store) {
@@ -55,6 +55,9 @@ const DEFAULTS: AppSettings = {
   aiReportPersonalizationEnabled: false,
   dailySummaryEnabled: true,
   morningNudgeEnabled: true,
+  weeklyBriefEnabled: true,
+  activityFreeNotificationText: false,
+  interpretationAgentEnabled: false,
   distractionAlertThresholdMinutes: 10,
   distractionAlertsEnabled: true,
   mcpServerEnabled: false,
@@ -131,6 +134,9 @@ export function getSettings(): AppSettings {
     aiReportPersonalizationEnabled: (_store.get('aiReportPersonalizationEnabled', false) as boolean),
     dailySummaryEnabled: (_store.get('dailySummaryEnabled', true) as boolean),
     morningNudgeEnabled: (_store.get('morningNudgeEnabled', true) as boolean),
+    weeklyBriefEnabled: (_store.get('weeklyBriefEnabled', true) as boolean),
+    activityFreeNotificationText: (_store.get('activityFreeNotificationText', false) as boolean),
+    interpretationAgentEnabled: (_store.get('interpretationAgentEnabled', false) as boolean),
     distractionAlertThresholdMinutes: (_store.get('distractionAlertThresholdMinutes', 10) as number),
     distractionAlertsEnabled: (_store.get('distractionAlertsEnabled', true) as boolean),
     mcpServerEnabled: (_store.get('mcpServerEnabled', false) as boolean),
@@ -146,6 +152,11 @@ export function getSettings(): AppSettings {
     activityColorOverrides: sanitizeActivityColorOverrides(_store.get('activityColorOverrides', {})),
     dimLeisureBlocks: (_store.get('dimLeisureBlocks', true) as boolean),
     connectedSourcesEnabled: (_store.get('connectedSourcesEnabled', true) as boolean),
+    // Screen-context experiment (DEV-197/DEV-198). Absent means not consented;
+    // the experiment surface (screenContext/experiment.ts) is the only writer.
+    screenContextExperimentEnabled: (_store.get('screenContextExperimentEnabled', false) as boolean),
+    screenContextPaused: (_store.get('screenContextPaused', false) as boolean),
+    screenContextConsentAt: (_store.get('screenContextConsentAt', undefined) as number | undefined),
   }
 }
 
@@ -185,7 +196,11 @@ export async function setSettings(partial: Partial<AppSettings>): Promise<void> 
     }
   }
   for (const [k, v] of Object.entries(entries)) {
-    store.set(k, v)
+    // electron-store refuses `set(key, undefined)` — an explicit undefined in
+    // a partial means "clear this setting" (e.g. screenContextConsentAt on
+    // revoke), which is a delete.
+    if (v === undefined) store.delete?.(k)
+    else store.set(k, v)
   }
 }
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
-import type { WrappedAskResult } from '@shared/types'
+import type { DayAnalysisVersionSummary, WrappedAskResult } from '@shared/types'
 import type { WrapDeckMeta, WrapSlideSpec } from '../../lib/wrapDeck'
 import { resolveSlideLine } from '../../lib/wrapDeck'
 import { buildWrapExportModels, exportButtonLabel, saveSlideButtonLabel, saveWrapExport, type WrapExportState, type WrapSlideSaveState } from './wrapExport'
@@ -39,7 +39,7 @@ function themeFor(palette: WrapPalette, spec: WrapSlideSpec, index: number): The
 }
 
 export default function WrapDeck({
-  slides, meta, narrative, seed, exportStem, generatedLabel, onRegenerate, onClose, ask, finaleExtra,
+  slides, meta, narrative, seed, exportStem, generatedLabel, onRegenerate, onClose, ask, finaleExtra, history,
 }: {
   slides: WrapSlideSpec[]
   meta: WrapDeckMeta
@@ -55,6 +55,10 @@ export default function WrapDeck({
   ask: WrapAskInvoke
   /** One extra finale button, e.g. "Open timeline". */
   finaleExtra?: { label: string; onClick: () => void }
+  /** DEV-206: this wrap's analysis versions, newest first. When present, the
+   *  finale shows "analysis v<N>" with an expandable history — what each
+   *  version was, when it was written, and why it replaced the previous one. */
+  history?: DayAnalysisVersionSummary[] | null
 }) {
   const reduced = prefersReducedMotion()
   const palette = useMemo(() => pickPalette(seed), [seed])
@@ -201,6 +205,7 @@ export default function WrapDeck({
           exportState={exportState} onExport={exportAll}
           generatedLabel={generatedLabel} onRegenerate={onRegenerate}
           onRestart={restart} onClose={onClose} finaleExtra={finaleExtra}
+          history={history}
         />
       )
       : (
@@ -392,7 +397,7 @@ function ThinkingDots({ accent }: { accent: string }) {
 
 // ─── Finale ─────────────────────────────────────────────────────────────────────
 
-function FinaleSlide({ meta, theme, slides, narrative, exportState, onExport, generatedLabel, onRegenerate, onRestart, onClose, finaleExtra }: {
+function FinaleSlide({ meta, theme, slides, narrative, exportState, onExport, generatedLabel, onRegenerate, onRestart, onClose, finaleExtra, history }: {
   meta: WrapDeckMeta
   theme: Theme
   slides: WrapSlideSpec[]
@@ -404,7 +409,10 @@ function FinaleSlide({ meta, theme, slides, narrative, exportState, onExport, ge
   onRestart: () => void
   onClose: () => void
   finaleExtra?: { label: string; onClick: () => void }
+  history?: DayAnalysisVersionSummary[] | null
 }) {
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const currentVersion = history?.[0]?.version ?? null
   // The card shows the deck's own biggest stat slides, top three.
   const statRows = slides
     .filter((s) => s.kind === 'stat' && s.stat?.sublabel && s.stat.seconds != null)
@@ -435,10 +443,40 @@ function FinaleSlide({ meta, theme, slides, narrative, exportState, onExport, ge
       {generatedLabel && (
         <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.45)', marginTop: 16, pointerEvents: 'all' }}>
           generated {generatedLabel}
+          {currentVersion != null && currentVersion > 0 && (
+            <> · <button onClick={(e) => { e.stopPropagation(); setHistoryOpen((open) => !open) }} style={linkButton}>
+              analysis v{currentVersion}
+            </button></>
+          )}
           {onRegenerate && (
             <> · <button onClick={(e) => { e.stopPropagation(); onRegenerate() }} style={linkButton}>Regenerate</button></>
           )}
         </p>
+      )}
+
+      {historyOpen && history && history.length > 0 && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            marginTop: 10, maxWidth: 'min(440px, 84vw)', maxHeight: 180, overflowY: 'auto',
+            borderRadius: 12, padding: '12px 16px', pointerEvents: 'all', textAlign: 'left',
+            background: 'rgba(0,0,0,0.35)', border: '1px solid rgba(255,255,255,0.12)',
+          }}
+        >
+          {history.map((entry) => (
+            <div key={`${entry.kind}:${entry.version}`} style={{ padding: '5px 0', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+              <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.7)' }}>
+                v{entry.version} · {historyWhen(entry.createdAt)} · {historyReason(entry.reason)}
+                {entry.retiredReason ? ` · retired by ${historyRetirement(entry.retiredReason)}` : ''}
+              </div>
+              {entry.lead && (
+                <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.45)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {entry.lead}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
       )}
 
       <div style={finaleActions}>
@@ -463,3 +501,40 @@ export const cardSurface: CSSProperties = {
 }
 export const finaleActions: CSSProperties = { display: 'flex', gap: 12, marginTop: 28, pointerEvents: 'all', flexWrap: 'wrap', justifyContent: 'center' }
 const linkButton: CSSProperties = { background: 'none', border: 'none', color: 'rgba(255,255,255,0.7)', textDecoration: 'underline', cursor: 'pointer', fontSize: 12, padding: 0 }
+
+// ─── Analysis version history (DEV-206) ─────────────────────────────────────
+// Plain words for why a version exists — never a raw enum, never a model name
+// in product copy (the model rides the stored row for inspection, not the UI).
+
+function historyReason(reason: DayAnalysisVersionSummary['reason']): string {
+  switch (reason) {
+    case 'initial': return 'first analysis'
+    case 'facts-changed': return "written from the day's newer facts"
+    case 'correction': return 'rewritten after your correction'
+    case 'deletion': return 'rewritten after a deletion'
+    case 'evidence-change': return 'rewritten after the evidence changed'
+    case 'manual-regenerate': return 'you asked for a regenerate'
+    case 'regenerated': return 'regenerated'
+    default: return reason
+  }
+}
+
+function historyRetirement(reason: NonNullable<DayAnalysisVersionSummary['retiredReason']>): string {
+  switch (reason) {
+    case 'correction': return 'a correction'
+    case 'deletion': return 'a deletion'
+    case 'evidence-change': return 'an evidence change'
+    case 'superseded': return 'a newer version'
+    default: return reason
+  }
+}
+
+function historyWhen(ms: number): string {
+  const diff = Date.now() - ms
+  if (diff < 60_000) return 'just now'
+  const mins = Math.round(diff / 60_000)
+  if (mins < 60) return `${mins}m ago`
+  const hours = Math.round(mins / 60)
+  if (hours < 24) return `${hours}h ago`
+  return `${Math.round(hours / 24)}d ago`
+}

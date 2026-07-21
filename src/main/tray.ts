@@ -129,7 +129,9 @@ export function createTray(controller: TrayController): boolean {
 
     tray = new Tray(icon, TRAY_GUID)
     trayError = null
-    tray.setToolTip('Daylens — tracking quietly')
+    tray.setToolTip(screenSamplingActive
+      ? 'Daylens — screen sampling ON (experiment)'
+      : 'Daylens — tracking quietly')
 
     if (process.platform === 'darwin') {
       tray.setPressedImage(icon)
@@ -172,6 +174,22 @@ export function destroyTray(): void {
   clearTrayWindowListeners()
   tray?.destroy()
   tray = null
+}
+
+// Screen-context experiment (DEV-198): the persistent indicator. While screen
+// sampling is actually running, the tray says so — the tooltip is wired to the
+// sampler's one active/inactive signal so it can never disagree with reality.
+let screenSamplingActive = false
+
+export function setTrayScreenSamplingIndicator(active: boolean): void {
+  screenSamplingActive = active
+  tray?.setToolTip(active
+    ? 'Daylens — screen sampling ON (experiment)'
+    : 'Daylens — tracking quietly')
+}
+
+export function isTrayScreenSamplingIndicatorOn(): boolean {
+  return screenSamplingActive
 }
 
 export function hasTray(): boolean {

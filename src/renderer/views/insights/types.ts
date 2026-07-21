@@ -14,9 +14,12 @@ export interface AltProvider {
 // `cancelled`: the user hit Stop mid-generation — the turn was aborted in the
 // main process, nothing was persisted, and the row must never read as a
 // completed answer.
+// `paused` (DEV-200): the user paused the turn (or a restart interrupted it) —
+// a resumable checkpoint is persisted in the main process; Resume re-runs the
+// question with fresh facts, Discard drops it. Distinct from `cancelled`.
 export type ThreadMessage = Omit<AIThreadMessage, 'id'> & {
   id: string | number
-  state: 'pending' | 'complete' | 'error' | 'cancelled'
+  state: 'pending' | 'complete' | 'error' | 'cancelled' | 'paused'
   // Classified error context for the branded error card (Retry + rate-limit
   // auto-retry hint + switch-provider on a hard wall). Present only when
   // state === 'error'.
@@ -27,6 +30,17 @@ export type ThreadMessage = Omit<AIThreadMessage, 'id'> & {
     code: AIProviderErrorCode
     // Other configured providers to offer as a one-tap switch on a hard wall.
     alternateProviders?: AltProvider[]
+  }
+  // Present only when state === 'paused'. checkpointId may briefly be null
+  // right after an optimistic pause, until the main process confirms the
+  // persisted checkpoint over the turn-phase channel.
+  pausedInfo?: {
+    checkpointId: string | null
+    question: string
+    // Why it is paused ('user' | 'restart') and what it was doing, for honest
+    // display ("Paused while searching your timeline").
+    pauseKind: 'user' | 'restart'
+    lastStatus: string | null
   }
 }
 
