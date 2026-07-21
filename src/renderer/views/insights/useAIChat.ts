@@ -13,6 +13,8 @@ import type {
   BillingAccessSnapshot,
   FocusSession,
   AIAgentQuestionEvent,
+  AIAgentTurnPhaseEvent,
+  AgentTurnWaitKind,
 } from '@shared/types'
 import { useProjectionResource } from '../../hooks/useProjectionResource'
 import { track } from '../../lib/analytics'
@@ -22,11 +24,14 @@ import { sanitizeIpcError } from '../../lib/ipcError'
 import { sanitizeForRender } from '../../../shared/aiSanitize'
 import { clearStreamingSnapshot, setStreamingSnapshot } from './streamingStore'
 import {
+  appendPausedCheckpoints,
+  attachPausedCheckpointId,
   beginTurn,
   cancelTurn,
   classifyTurnFailure,
   completeTurn,
   failTurn,
+  pauseTurn,
   prependEarlierMessages,
   removeTurn,
   shouldAdoptThreadAfterTurn,
@@ -65,11 +70,20 @@ let rememberedThreadId: number | null | undefined = undefined
 
 type SendOptions = {
   contextOverride?: ThreadMessage['contextSnapshot']
-  trigger?: 'freeform' | 'suggested' | 'retry'
+  trigger?: 'freeform' | 'suggested' | 'retry' | 'resume'
   // Bounds the rate-limit auto-retry so it fires at most once per turn.
   autoRetryCount?: number
   // When set, the main process rewrites the prior answer into this form.
   transform?: AnswerTransform | null
+  // DEV-200: this send resumes the given paused checkpoint — the main process
+  // adopts it, rebuilds the context packet fresh, and deletes it on success.
+  resumeOfCheckpointId?: string | null
+}
+
+/** The in-flight turn's visible state, from the main-process phase events. */
+export type TurnPhaseState = {
+  phase: 'running' | 'awaiting_user'
+  waitKind: AgentTurnWaitKind | null
 }
 
 // A turn that never resolves must still leave "Thinking" — convert a stuck
@@ -107,15 +121,21 @@ export function useAIChat() {
   const [reducedMotion, setReducedMotion] = useState(false)
   // The agent's pending clarifying question, if any.
   const [agentQuestion, setAgentQuestion] = useState<AIAgentQuestionEvent | null>(null)
+  // The in-flight turn's phase (DEV-200): running vs waiting on a card. One
+  // visible state machine — the paused state lives on the message row itself.
+  const [turnPhase, setTurnPhase] = useState<TurnPhaseState | null>(null)
 
   const loadingRef = useRef(false)
   loadingRef.current = loading
   // The turn currently in flight, so Stop knows which request to abort — and
   // which synthetic rows to flip to `cancelled`.
-  const inFlightTurnRef = useRef<{ requestId: string; assistantId: string; userId: string } | null>(null)
+  const inFlightTurnRef = useRef<{ requestId: string; assistantId: string; userId: string; prompt: string } | null>(null)
   // Requests the user cancelled: when their promise later settles (resolve OR
   // reject), the result is dropped so a cancelled turn never mutates the view.
   const cancelledRequestsRef = useRef<Set<string>>(new Set())
+  // Requests the user PAUSED (DEV-200): the row already shows its paused
+  // state, so the turn's paused rejection is swallowed, never an error card.
+  const pausedRequestsRef = useRef<Set<string>>(new Set())
   // Track the most recently requested thread so a slow getThread response for
   // a thread the user already navigated away from never clobbers the view.
   const latestRequestedThreadRef = useRef<number | null>(null)
@@ -280,6 +300,29 @@ export function useAIChat() {
     })
   }, [])
 
+  // The turn's state machine (DEV-200): phase transitions pushed from main.
+  // running / awaiting_user drive the live state line; 'paused' confirms the
+  // persisted checkpoint id on the (already optimistically paused) row.
+  useEffect(() => {
+    return ipc.ai.onTurnPhase((event: AIAgentTurnPhaseEvent) => {
+      const inFlight = inFlightTurnRef.current
+      if (event.phase === 'paused') {
+        if (event.checkpointId) {
+          const assistantId = `assistant:${event.requestId}`
+          setMessages((current) => attachPausedCheckpointId(current, assistantId, event.checkpointId!))
+        }
+        return
+      }
+      // Phase lines only describe the CURRENT in-flight turn.
+      if (!inFlight || inFlight.requestId !== event.requestId) return
+      if (event.phase === 'running' || event.phase === 'awaiting_user') {
+        setTurnPhase({ phase: event.phase, waitKind: event.waitKind })
+      } else {
+        setTurnPhase(null)
+      }
+    })
+  }, [])
+
   useEffect(() => {
     const media = window.matchMedia('(prefers-reduced-motion: reduce)')
     const sync = () => setReducedMotion(media.matches)
@@ -309,9 +352,15 @@ export function useAIChat() {
     setThreadLoading(true)
     setHasEarlierMessages(false)
     try {
-      const detail = await ipc.ai.getThread(threadId)
+      // Paused turns ride along with the history (DEV-200): a turn paused in
+      // an earlier session — or interrupted by a restart — reappears as a
+      // resumable row at the end of the conversation, never silently lost.
+      const [detail, pausedTurns] = await Promise.all([
+        ipc.ai.getThread(threadId),
+        ipc.ai.listPausedTurns(threadId).catch(() => []),
+      ])
       if (latestRequestedThreadRef.current !== threadId) return
-      setMessages(threadMessagesFromHistory(detail.messages))
+      setMessages(appendPausedCheckpoints(threadMessagesFromHistory(detail.messages), pausedTurns))
       setHasEarlierMessages(detail.hasEarlier)
     } catch (error) {
       // Surface the failure as an inline error rather than silently keeping a
@@ -505,7 +554,8 @@ export function useAIChat() {
     autoRetryTimeoutsRef.current = {}
 
     setLoading(true)
-    inFlightTurnRef.current = { requestId, assistantId, userId }
+    inFlightTurnRef.current = { requestId, assistantId, userId, prompt }
+    setTurnPhase({ phase: 'running', waitKind: null })
     setMessages((current) => beginTurn(current, { userId, assistantId, prompt, createdAt }))
 
     // Race the turn against a hard timeout so a stuck request always
@@ -524,6 +574,7 @@ export function useAIChat() {
           clientRequestId: requestId,
           threadId: activeThreadId,
           transform: options?.transform ?? null,
+          resumeOfCheckpointId: options?.resumeOfCheckpointId ?? null,
         }),
         timeoutPromise,
       ]) as AIChatTurnResult
@@ -532,6 +583,11 @@ export function useAIChat() {
       // the cancelled row with a fake "completed" answer.
       if (cancelledRequestsRef.current.has(requestId)) {
         cancelledRequestsRef.current.delete(requestId)
+        return
+      }
+      // Same for a paused turn — the paused row must stay paused.
+      if (pausedRequestsRef.current.has(requestId)) {
+        pausedRequestsRef.current.delete(requestId)
         return
       }
 
@@ -563,6 +619,12 @@ export function useAIChat() {
       // already showing its cancelled state.
       if (cancelledRequestsRef.current.has(requestId)) {
         cancelledRequestsRef.current.delete(requestId)
+        return
+      }
+      // A paused turn's rejection is the pause settling, not a failure — the
+      // row is already showing its resumable paused state (DEV-200).
+      if (pausedRequestsRef.current.has(requestId)) {
+        pausedRequestsRef.current.delete(requestId)
         return
       }
       const sanitized = sanitizeIpcError(
@@ -606,6 +668,7 @@ export function useAIChat() {
       if (timeoutHandle !== undefined) window.clearTimeout(timeoutHandle)
       if (inFlightTurnRef.current?.requestId === requestId) inFlightTurnRef.current = null
       setLoading(false)
+      setTurnPhase(null)
       clearStreamingSnapshot(assistantId)
     }
   }, [activeThreadId, hasApiKey, analyticsContext, activeModel, refreshThreadList])
@@ -627,11 +690,58 @@ export function useAIChat() {
     cancelledRequestsRef.current.add(inFlight.requestId)
     void ipc.ai.cancelMessage(inFlight.requestId).catch(() => { /* turn may already be settling */ })
     setAgentQuestion(null)
+    setTurnPhase(null)
     setMessages((current) => cancelTurn(current, inFlight.assistantId))
     clearStreamingSnapshot(inFlight.assistantId)
     // Free the composer immediately; the aborted promise settles in the
     // background and is dropped.
     setLoading(false)
+  }, [])
+
+  // Pause the in-flight turn (DEV-200). The provider stream stops like Stop
+  // does, but the main process persists a resumable checkpoint (surviving app
+  // restart) and the row flips to a paused state with Resume/Discard — never
+  // the discarded `cancelled` state. The checkpoint id arrives over the
+  // turn-phase channel a beat later and fills into the row.
+  const pauseGeneration = useCallback(() => {
+    const inFlight = inFlightTurnRef.current
+    if (!inFlight) return
+    inFlightTurnRef.current = null
+    pausedRequestsRef.current.add(inFlight.requestId)
+    void ipc.ai.pauseMessage(inFlight.requestId).catch(() => { /* turn may already be settling */ })
+    setAgentQuestion(null)
+    setTurnPhase(null)
+    setMessages((current) => pauseTurn(current, inFlight.assistantId, {
+      question: inFlight.prompt,
+      checkpointId: null,
+    }))
+    clearStreamingSnapshot(inFlight.assistantId)
+    setLoading(false)
+  }, [])
+
+  // Resume a paused turn: the pair is re-run in place as a fresh send that
+  // adopts the checkpoint — main rebuilds the context packet from the current
+  // facts, so the answer reflects the day as it is NOW.
+  const resumePausedTurn = useCallback(async (message: ThreadMessage) => {
+    if (loadingRef.current) return
+    const info = message.pausedInfo
+    if (!info?.checkpointId) return
+    const userId = String(message.id).replace(/^assistant:/, 'user:')
+    setMessages((current) => removeTurn(current, message.id, userId))
+    await handleSend(info.question, { trigger: 'resume', resumeOfCheckpointId: info.checkpointId })
+  }, [handleSend])
+
+  // Discard a paused turn — the explicit "don't resume this" choice, distinct
+  // from both Stop (which never had a checkpoint) and Resume.
+  const discardPausedTurn = useCallback(async (message: ThreadMessage) => {
+    const info = message.pausedInfo
+    const userId = String(message.id).replace(/^assistant:/, 'user:')
+    setMessages((current) => removeTurn(current, message.id, userId))
+    if (info?.checkpointId) {
+      try {
+        await ipc.ai.discardPausedTurn(info.checkpointId)
+      } catch { /* the row is gone locally; a stale checkpoint resurfaces on reload and can be discarded again */ }
+    }
   }, [])
 
   const handleRetry = useCallback(async (index: number, message: ThreadMessage) => {
@@ -956,6 +1066,7 @@ export function useAIChat() {
     actionWidgetState,
     reducedMotion,
     agentQuestion,
+    turnPhase,
     latestCompletedAssistantId,
     // resource status (for the load gate + ConnectAI refresh)
     initialLoading: providerResource.loading && !providerResource.data,
@@ -964,6 +1075,9 @@ export function useAIChat() {
     // actions
     submitMessage,
     cancelGeneration,
+    pauseGeneration,
+    resumePausedTurn,
+    discardPausedTurn,
     handleSend,
     handleRetry,
     handleErrorRetry,

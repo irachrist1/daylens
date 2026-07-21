@@ -381,6 +381,12 @@ export async function deleteThread(threadId: number): Promise<void> {
   // Also remove the ai_messages rows referencing this thread (no FK, do it explicitly).
   db.prepare(`DELETE FROM ai_messages WHERE thread_id = ?`).run(threadId)
   db.prepare(`DELETE FROM ai_threads WHERE id = ?`).run(threadId)
+  // Paused-turn checkpoints carry the thread's question text (DEV-200) — they
+  // go with the thread, same as its messages. Guarded: the table exists only
+  // from migration v65 on.
+  try {
+    db.prepare(`DELETE FROM agent_turn_checkpoints WHERE thread_id = ?`).run(threadId)
+  } catch { /* pre-v65 database */ }
   // Confirmed memory survives thread deletion — only the thread reference
   // clears; declined-proposal text loses its supporting evidence with the
   // thread, so it is purged (memory-and-entities.md §Conversational memory).

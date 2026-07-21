@@ -3097,6 +3097,30 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 65,
+    description:
+      'Agent turn checkpoints (DEV-200): a long-running agent turn can be paused and resumed, and a paused turn survives an app restart. agent_turn_checkpoints holds ONLY outstanding turns — a row is opened when the agent loop starts, moves through the one visible state machine (running → awaiting_user → running, running → paused), and is DELETED on every terminal phase (completed/cancelled/failed) because the durable thread transcript owns finished turns. The row stores the user question verbatim plus honest state (phase, why it is paused, which card was holding it, the last tool status line) — never in-flight provider session state: resume deliberately re-runs the question against a fresh context packet, per agent-runtime-and-context.md §Sessions and interruption ("provider session state … can be rebuilt from the Daylens thread plus a fresh context packet"). Restart recovery degrades any row still marked running/awaiting_user to paused(restart) — incomplete work is marked accurately, never assumed done. LOCAL-ONLY table: no sync-allowlist key exists for it, so the strict allowlist proves it can never ride a sync payload; it carries conversation text and is not exported.',
+    up: () => {
+      getDb().exec(`
+        CREATE TABLE IF NOT EXISTS agent_turn_checkpoints (
+          id TEXT PRIMARY KEY,
+          thread_id INTEGER,
+          client_request_id TEXT,
+          question TEXT NOT NULL,
+          phase TEXT NOT NULL CHECK (phase IN ('running', 'awaiting_user', 'paused')),
+          pause_kind TEXT CHECK (pause_kind IN ('user', 'restart') OR pause_kind IS NULL),
+          wait_kind TEXT CHECK (wait_kind IN (
+            'clarification', 'file_permission', 'memory_confirmation', 'correction_confirmation'
+          ) OR wait_kind IS NULL),
+          last_status TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_turn_checkpoints_thread ON agent_turn_checkpoints(thread_id);
+      `)
+    },
+  },
 ]
 
 export const LATEST_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0

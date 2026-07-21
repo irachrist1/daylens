@@ -829,6 +829,101 @@ export interface AIAgentQuestionEvent {
   allowFreeText: boolean
 }
 
+// ─── Agent turn pause/resume (DEV-200) ───────────────────────────────────────
+// ONE visible state machine for a long-running agent turn. Agent-initiated
+// waits (the permission / confirmation / clarification cards, which all ride
+// the askUser channel) and the user-initiated pause are phases of the same
+// machine, not separate mechanisms. A paused turn persists as a checkpoint row
+// so it survives an app restart; resume re-runs the question against a FRESH
+// context packet (the day may have moved), which is exactly the degradation
+// the runtime spec prescribes — provider session state is an execution detail
+// rebuilt from the Daylens thread plus a fresh packet.
+
+/** Lifecycle phase of one agent turn. Terminal phases (`completed`,
+ *  `cancelled`, `failed`) delete the checkpoint — the durable transcript owns
+ *  finished turns; the checkpoint ledger only ever holds outstanding work. */
+export type AgentTurnPhase =
+  | 'running'
+  | 'awaiting_user'
+  | 'paused'
+  | 'completed'
+  | 'cancelled'
+  | 'failed'
+
+/** Why an agent-initiated wait is holding the turn — which card is up. */
+export type AgentTurnWaitKind =
+  | 'clarification'
+  | 'file_permission'
+  | 'memory_confirmation'
+  | 'correction_confirmation'
+
+/** Why a paused turn is paused: the user paused it, or a restart interrupted
+ *  it mid-flight and recovery degraded it to a clean resumable checkpoint. */
+export type AgentTurnPauseKind = 'user' | 'restart'
+
+/** Phase-transition event for the in-flight turn, pushed to the renderer so
+ *  the chat shows one honest state line (working / waiting on you / paused). */
+export interface AIAgentTurnPhaseEvent {
+  requestId: string
+  phase: AgentTurnPhase
+  /** Set while phase === 'awaiting_user': which card is holding the turn. */
+  waitKind: AgentTurnWaitKind | null
+  /** Set when phase === 'paused': the persisted checkpoint to resume from. */
+  checkpointId: string | null
+  pauseKind: AgentTurnPauseKind | null
+}
+
+/** A persisted resumable turn, as listed for the renderer. */
+export interface AgentTurnCheckpointView {
+  id: string
+  threadId: number | null
+  /** The user's question, verbatim — resume re-asks exactly this. */
+  question: string
+  phase: Extract<AgentTurnPhase, 'running' | 'awaiting_user' | 'paused'>
+  pauseKind: AgentTurnPauseKind | null
+  waitKind: AgentTurnWaitKind | null
+  /** Last tool status line before the pause, for honest display ("Paused
+   *  while searching your timeline"). Never raw arguments or payloads. */
+  lastStatus: string | null
+  createdAt: number
+  updatedAt: number
+}
+
+// ─── Model picker costs (DEV-201) ────────────────────────────────────────────
+// Cost transparency in money and estimated questions — never raw tokens first
+// (billing-and-entitlements.md §Usage metering). Costs are computed in the
+// main process from the same pricing table billing settlement estimates use,
+// so the picker can never quote a different price than the meter charges.
+
+/** Per-model cost line for the picker. */
+export interface AIModelCostEntry {
+  provider: AIProviderMode
+  modelId: string
+  /** Estimated cost of one typical Daylens question on this model, in USD. */
+  typicalQuestionCostUsd: number
+  /** Whole typical questions one US dollar covers on this model. */
+  questionsPerUsd: number
+}
+
+/** Managed-allowance view for the picker, derived from the validated billing
+ *  snapshot — remaining credit in money and estimated questions. */
+export interface AIManagedAllowanceView {
+  grantedUsd: number
+  remainingUsd: number
+  /** Whole typical questions the remaining credit still covers on the managed
+   *  default tier. Null when there is no meaningful figure to divide. */
+  estimatedQuestionsRemaining: number | null
+  canUseManagedAI: boolean
+  /** Plain-language reason when managed AI cannot serve a turn right now. */
+  unavailableReason: string | null
+}
+
+export interface AIModelCostCatalog {
+  models: AIModelCostEntry[]
+  /** Null when this build has no billing service or it reports unavailable. */
+  allowance: AIManagedAllowanceView | null
+}
+
 /** One file whose contents were disclosed to the model during a turn
  *  (DEV-184). Shown in the answer's sources row; the full record lives in the
  *  file_disclosures ledger. */
@@ -1036,6 +1131,11 @@ export interface AIChatSendRequest {
   clientRequestId?: string | null
   threadId?: number | null
   transform?: AIAnswerTransformKind | null
+  /** Set when this send resumes a paused turn (DEV-200): the checkpoint is
+   *  adopted by this turn (paused → running) and deleted when the turn
+   *  completes. The answer is rebuilt from a fresh context packet — never a
+   *  replay of stale in-flight state. */
+  resumeOfCheckpointId?: string | null
 }
 
 export interface AIDailyReportPreparationResult {
@@ -2728,6 +2828,11 @@ export const IPC = {
   AI: {
     SEND_MESSAGE: 'ai:send-message',
     CANCEL_MESSAGE: 'ai:cancel-message',
+    PAUSE_MESSAGE: 'ai:pause-message',
+    TURN_PHASE: 'ai:turn-phase',
+    LIST_PAUSED_TURNS: 'ai:list-paused-turns',
+    DISCARD_PAUSED_TURN: 'ai:discard-paused-turn',
+    GET_MODEL_COSTS: 'ai:get-model-costs',
     STREAM_EVENT: 'ai:stream-event',
     AGENT_QUESTION: 'ai:agent-question',
     AGENT_ANSWER: 'ai:agent-answer',

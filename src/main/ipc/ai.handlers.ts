@@ -1,7 +1,9 @@
 import { app, ipcMain } from 'electron'
 import { randomUUID } from 'node:crypto'
-import type { AIAgentQuestionEvent } from '@shared/types'
-import { cancelAIRequest } from '../lib/aiCancellation'
+import type { AgentTurnCheckpointView, AIAgentQuestionEvent } from '@shared/types'
+import { cancelAIRequest, pauseAIRequest } from '../lib/aiCancellation'
+import { closeTurnCheckpoint, listPausedTurns } from '../services/agentTurnState'
+import { getModelCostCatalog, type ModelCatalogRequestEntry } from '../services/modelCatalog'
 import { appendDeletionJournalEntry } from '../services/deletionJournal'
 import { getThreadMessagesPage, updateAIMessageFeedback, writeAIBlockLabel } from '../db/queries'
 import { getDb } from '../services/database'
@@ -115,6 +117,11 @@ export function registerAIHandlers(): void {
       onStreamEvent: (streamEvent) => {
         event.sender.send(IPC.AI.STREAM_EVENT, streamEvent)
       },
+      // DEV-200: the turn's one visible state machine — running / waiting on
+      // a card / paused / terminal — pushed as it transitions.
+      onPhaseEvent: (phaseEvent) => {
+        event.sender.send(IPC.AI.TURN_PHASE, phaseEvent)
+      },
       onAgentQuestion: (question) => new Promise<string>((resolve) => {
         const questionId = randomUUID()
         const timeout = setTimeout(() => {
@@ -149,6 +156,30 @@ export function registerAIHandlers(): void {
   // Returns whether a matching turn was still running.
   ipcMain.handle(IPC.AI.CANCEL_MESSAGE, (_e, payload: { clientRequestId: string }): boolean => {
     return cancelAIRequest(payload.clientRequestId)
+  })
+
+  // DEV-200: pause the in-flight turn. The provider stream stops like a
+  // cancel, but the turn settles as a persisted checkpoint the user can
+  // resume — including after an app restart. Cancel stays distinct.
+  ipcMain.handle(IPC.AI.PAUSE_MESSAGE, (_e, payload: { clientRequestId: string }): boolean => {
+    return pauseAIRequest(payload.clientRequestId)
+  })
+
+  // DEV-200: the paused turns of a thread (or all threads), for rendering
+  // resumable rows when a conversation is opened after a pause or restart.
+  ipcMain.handle(IPC.AI.LIST_PAUSED_TURNS, (_e, payload: { threadId?: number | null } = {}): AgentTurnCheckpointView[] => {
+    return listPausedTurns(getDb(), payload.threadId ?? null)
+  })
+
+  // DEV-200: discard a paused turn — the explicit "don't resume this" choice.
+  ipcMain.handle(IPC.AI.DISCARD_PAUSED_TURN, (_e, payload: { checkpointId: string }): boolean => {
+    return closeTurnCheckpoint(getDb(), payload.checkpointId)
+  })
+
+  // DEV-201: per-model cost lines (typical question in USD + questions per
+  // dollar) and the managed allowance in money and estimated questions.
+  ipcMain.handle(IPC.AI.GET_MODEL_COSTS, async (_e, payload: { models: ModelCatalogRequestEntry[] }) => {
+    return getModelCostCatalog(payload.models ?? [])
   })
 
   ipcMain.handle(IPC.AI.GET_STARTER_SUGGESTIONS, async (): Promise<AIStarterSuggestionResult> => {

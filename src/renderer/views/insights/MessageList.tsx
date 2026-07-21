@@ -90,6 +90,12 @@ export interface MessageListProps {
   // "What the AI saw" (DEV-183): opens the read-only context-packet inspector
   // for the exchange behind this assistant message.
   onInspectPacket?: (message: ThreadMessage) => void
+  // DEV-200: resume / discard a paused turn's row.
+  onResumePaused?: (message: ThreadMessage) => void
+  onDiscardPaused?: (message: ThreadMessage) => void
+  // DEV-200: the in-flight turn's phase, for the honest state line on the
+  // pending row ("Waiting for you — file permission").
+  turnPhase?: { phase: 'running' | 'awaiting_user'; waitKind: string | null } | null
   scrollToBottom: () => void
   // Opening a conversation loads only the newest page of its history; when
   // older messages exist, a "Load earlier messages" affordance tops the list.
@@ -139,6 +145,14 @@ function TransformMenu({ onTransform }: { onTransform: (kind: AnswerTransform) =
   )
 }
 
+// Plain-language wait lines for the turn's visible state machine (DEV-200).
+const WAIT_LABEL: Record<string, string> = {
+  clarification: 'Waiting for your answer to its question',
+  file_permission: 'Waiting for you — it asked to open a file',
+  memory_confirmation: 'Waiting for you to confirm a memory',
+  correction_confirmation: 'Waiting for you to confirm a correction',
+}
+
 // Branded header label per error class — never a raw provider/channel string.
 const ERROR_HEADER: Record<AIProviderErrorCode, string> = {
   transient_rate_limit: 'Provider busy',
@@ -170,6 +184,9 @@ function MessageListImpl({
   onDismissActionWidget,
   onFollowUpClick,
   onInspectPacket,
+  onResumePaused,
+  onDiscardPaused,
+  turnPhase,
   scrollToBottom,
   hasEarlier,
   loadingEarlier,
@@ -222,6 +239,15 @@ function MessageListImpl({
                 // above the streaming answer; the "Thinking" placeholder
                 // steps aside once the trail has rows.
                 <>
+                  {/* The turn's visible state machine (DEV-200): when an
+                      agent-initiated card is holding the turn, the pending row
+                      says so — the same machine the Pause button drives. */}
+                  {turnPhase?.phase === 'awaiting_user' && (
+                    <div role="status" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, marginBottom: 8, padding: '4px 10px', borderRadius: 999, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-low)', fontSize: 11.5, fontWeight: 600, color: 'var(--color-text-secondary)' }}>
+                      <IconPauseDot />
+                      {WAIT_LABEL[turnPhase.waitKind ?? ''] ?? 'Waiting for you'}
+                    </div>
+                  )}
                   <LiveActivityTrail messageId={String(message.id)} reducedMotion={reducedMotion} />
                   <StreamingMessage
                     messageId={String(message.id)}
@@ -230,6 +256,43 @@ function MessageListImpl({
                     onSnapshotUpdate={scrollToBottom}
                   />
                 </>
+              ) : message.state === 'paused' ? (
+                // A paused turn (DEV-200): honestly resumable — the question is
+                // kept, nothing half-finished is shown as an answer, and resume
+                // re-runs it against the CURRENT facts (the day may have moved).
+                // Distinct from Stop, which discards the turn.
+                <div style={{ borderRadius: 12, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-low)', padding: '12px 14px', display: 'grid', gap: 8 }}>
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12, fontWeight: 700, color: 'var(--color-text-secondary)' }}>
+                    <IconPauseDot />
+                    {message.pausedInfo?.pauseKind === 'restart'
+                      ? 'Paused — the app closed while this was running'
+                      : 'Paused'}
+                  </div>
+                  <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.55 }}>
+                    {message.pausedInfo?.lastStatus
+                      ? `It was working on: ${message.pausedInfo.lastStatus}. `
+                      : ''}
+                    Resume picks the question back up with your latest activity — no half answer is kept.
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      onClick={() => onResumePaused?.(message)}
+                      disabled={!message.pausedInfo?.checkpointId || !onResumePaused}
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 13px', borderRadius: 9, border: 'none', background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)', fontSize: 12.5, fontWeight: 700, cursor: message.pausedInfo?.checkpointId ? 'pointer' : 'default', opacity: message.pausedInfo?.checkpointId ? 1 : 0.6 }}
+                    >
+                      Resume
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onDiscardPaused?.(message)}
+                      disabled={!onDiscardPaused}
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 13px', borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-secondary)', fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}
+                    >
+                      Discard
+                    </button>
+                  </div>
+                </div>
               ) : message.state === 'cancelled' ? (
                 // An honestly-stopped turn — no partial text presented as an
                 // answer, no error card. Retry re-runs the question in place.
@@ -487,6 +550,16 @@ function MessageListImpl({
         )
       ))}
     </div>
+  )
+}
+
+// Small pause glyph for the paused row and the waiting state line.
+function IconPauseDot() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <rect x="4" y="3" width="3" height="10" rx="1.2" />
+      <rect x="9" y="3" width="3" height="10" rx="1.2" />
+    </svg>
   )
 }
 

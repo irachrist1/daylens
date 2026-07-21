@@ -9,6 +9,9 @@ import type {
   AIChatSendRequest,
   AIChatStreamEvent,
   AIAgentQuestionEvent,
+  AIAgentTurnPhaseEvent,
+  AIModelCostCatalog,
+  AgentTurnCheckpointView,
   AIActionWidget,
   AIActionUndo,
   AIActionCommitResult,
@@ -299,6 +302,18 @@ const api = {
   ai: {
     sendMessage: (payload: AIChatSendRequest): Promise<AIChatTurnResult> => ipcRenderer.invoke(IPC.AI.SEND_MESSAGE, payload),
     cancelMessage: (clientRequestId: string): Promise<boolean> => ipcRenderer.invoke(IPC.AI.CANCEL_MESSAGE, { clientRequestId }),
+    pauseMessage: (clientRequestId: string): Promise<boolean> => ipcRenderer.invoke(IPC.AI.PAUSE_MESSAGE, { clientRequestId }),
+    listPausedTurns: (threadId?: number | null): Promise<AgentTurnCheckpointView[]> =>
+      ipcRenderer.invoke(IPC.AI.LIST_PAUSED_TURNS, { threadId }),
+    discardPausedTurn: (checkpointId: string): Promise<boolean> =>
+      ipcRenderer.invoke(IPC.AI.DISCARD_PAUSED_TURN, { checkpointId }),
+    getModelCosts: (models: Array<{ provider: AIProviderMode; modelId: string }>): Promise<AIModelCostCatalog> =>
+      ipcRenderer.invoke(IPC.AI.GET_MODEL_COSTS, { models }),
+    onTurnPhase: (callback: (event: AIAgentTurnPhaseEvent) => void): (() => void) => {
+      const handler = (_e: Electron.IpcRendererEvent, event: AIAgentTurnPhaseEvent) => callback(event)
+      ipcRenderer.on(IPC.AI.TURN_PHASE, handler)
+      return () => { ipcRenderer.removeListener(IPC.AI.TURN_PHASE, handler) }
+    },
     getStarterSuggestions: (): Promise<AIStarterSuggestionResult> => ipcRenderer.invoke(IPC.AI.GET_STARTER_SUGGESTIONS),
     onStream: (callback: (event: AIChatStreamEvent) => void): (() => void) => {
       const handler = (_e: Electron.IpcRendererEvent, event: AIChatStreamEvent) => callback(event)
