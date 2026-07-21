@@ -319,6 +319,19 @@ export function ensureSearchSchema(db: Database.Database): void {
 // or deleted moment leaves the index in the same transaction that removes its
 // record.
 export function ensureMemorySearchSchema(db: Database.Database): void {
+  // On a rebuild path (memory_records dropped and recreated) the FTS5 table
+  // and its content view survive the DROP. We cannot CREATE them again while
+  // they exist: memory_records_fts_content matches FTS5's reserved '_content'
+  // shadow-table suffix, so SQLite rejects any CREATE of that name while
+  // memory_records_fts is present ("object name reserved for internal use") —
+  // the reserved-name check fires before IF NOT EXISTS is even considered.
+  // Drop the vtable first to lift the shadow-name reservation, then the view,
+  // then recreate from scratch. On the fresh path these are no-ops.
+  db.exec(`
+    DROP TABLE IF EXISTS memory_records_fts;
+    DROP VIEW IF EXISTS memory_records_fts_content;
+  `)
+
   db.exec(`
     CREATE VIEW IF NOT EXISTS memory_records_fts_content AS
     SELECT

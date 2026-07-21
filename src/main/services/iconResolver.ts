@@ -1156,7 +1156,7 @@ function loadCacheEntry(cacheKey: string, overrides?: IconResolverOverrides): Di
   const inMemory = memoryCache.get(cacheKey)
   if (inMemory) {
     if (isExpired(inMemory)) {
-      iconWarn('cache expired (memory)', { cacheKey, source: inMemory.source })
+      iconLog('cache expired (memory)', { cacheKey, source: inMemory.source })
       removeCacheEntry(cacheKey, overrides)
       return null
     }
@@ -1177,7 +1177,7 @@ function loadCacheEntry(cacheKey: string, overrides?: IconResolverOverrides): Di
       return null
     }
     if (isExpired(parsed)) {
-      iconWarn('cache expired (disk)', { cacheKey, source: parsed.source })
+      iconLog('cache expired (disk)', { cacheKey, source: parsed.source })
       removeCacheEntry(cacheKey, overrides)
       return null
     }
@@ -1417,7 +1417,7 @@ async function resolveAppIconUncached(
     }
   }
 
-  iconWarn('resolve app icon: miss', {
+  iconLog('resolve app icon: miss', {
     request: describeRequest(normalized),
   })
   return { dataUrl: null, source: 'miss' }
@@ -1478,7 +1478,7 @@ async function resolveSiteIconUncached(
     }
   }
 
-  iconWarn('resolve site icon: miss', {
+  iconLog('resolve site icon: miss', {
     request: describeRequest(normalized),
   })
   return { dataUrl: null, source: 'miss' }
@@ -1535,7 +1535,7 @@ async function resolveArtifactIconUncached(
     }
   }
 
-  iconWarn('resolve artifact icon: miss', {
+  iconLog('resolve artifact icon: miss', {
     request: describeRequest(normalized),
   })
   return { dataUrl: null, source: 'miss' }
