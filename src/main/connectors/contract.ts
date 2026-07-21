@@ -132,6 +132,10 @@ export interface ConnectorSyncPage {
    *  are missing from it (provider deletions → local tombstones). Omit for
    *  partial/incremental pages — omission never tombstones. */
   presentSourceRecordIds?: string[]
+  /** Explicit provider deletions on an INCREMENTAL page (e.g. Google
+   *  Calendar's `status: "cancelled"` items under syncToken semantics).
+   *  Ingest tombstones each id it knows; unknown ids are ignored. */
+  deletedSourceRecordIds?: string[]
 }
 
 // ─── Adapter interface ───────────────────────────────────────────────────────

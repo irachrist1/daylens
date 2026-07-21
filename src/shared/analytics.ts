@@ -87,6 +87,16 @@ export const ANALYTICS_EVENT = {
   WEEKLY_ACTIVE_USER: 'weekly_active_user',
   RETAINED_DAY_1: 'retained_day_1',
   RETAINED_DAY_7: 'retained_day_7',
+
+  // Screen-context experiment measurement contract: consent transitions,
+  // capture attempts/blocks by closed-enum reason, extraction outcomes with
+  // latency/size/backlog BUCKETS only. No event may carry an image, OCR text,
+  // title, URL, domain, application name, filename, person, project, client,
+  // evidence identifier, or exact activity timestamp.
+  SCREEN_CONTEXT_CONSENT: 'screen_context_consent',
+  SCREEN_CONTEXT_CAPTURE: 'screen_context_capture',
+  SCREEN_CONTEXT_EXTRACTION: 'screen_context_extraction',
+  SCREEN_CONTEXT_BACKLOG: 'screen_context_backlog',
 } as const
 
 export type AnalyticsEventName = (typeof ANALYTICS_EVENT)[keyof typeof ANALYTICS_EVENT]
@@ -217,6 +227,12 @@ const SAFE_STRING_KEYS = new Set([
   'step_name',
   'subscription_status',
   'plan',
+  // Screen-context measurement vocabulary — closed enums and buckets only.
+  'outcome',
+  'blocked_reason',
+  'latency_bucket',
+  'byte_bucket',
+  'backlog_bucket',
 ])
 
 const SAFE_NUMBER_KEYS = new Set([
@@ -247,6 +263,7 @@ const SAFE_NUMBER_KEYS = new Set([
   'step_index',
   'total_steps',
   'price',
+  'retry_count',
 ])
 
 const SAFE_BOOLEAN_KEYS = new Set([
@@ -260,6 +277,7 @@ const SAFE_BOOLEAN_KEYS = new Set([
   'reused_context',
   'has_completed_onboarding',
   'has_date_context',
+  'added_new_fact',
 ])
 
 const SAFE_ARRAY_KEYS = new Set([

@@ -16,7 +16,7 @@ concurrency:
 jobs:
   typecheck:
     name: typecheck
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -30,7 +30,7 @@ jobs:
 
   lint:
     name: lint
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -47,7 +47,7 @@ jobs:
 
   test:
     name: test
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -97,7 +97,7 @@ jobs:
 
   contracts-web-billing:
     name: contracts-web-billing
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -114,6 +114,10 @@ jobs:
 
   windows:
     name: windows-native-rebuild
+    # GitHub-hosted Windows (Blacksmith provides Linux runners only). Kept off
+    # pull_request so PRs consume zero GitHub-hosted minutes; Windows native
+    # rebuild coverage comes from pushes to main.
+    if: github.event_name != 'pull_request'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -140,7 +144,7 @@ jobs:
             node_modules/@paymoapp/active-window/build/Release
           key: native-build-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       # Typecheck is platform-independent and owned by the typecheck job above.
-      # Hermetic suite runs on ubuntu-latest/test; this job only proves Windows
+      # Hermetic suite runs on the Linux test job; this job only proves Windows
       # native modules compile under electron-rebuild (skipped when the exact
       # lockfile already compiled successfully and is cached).
       - name: Rebuild native modules for Electron

@@ -1,31 +1,23 @@
 name: Verify Linux Runtime
 
+# Full packaging + smoke is heavy, so this stays off PRs entirely — PRs run
+# just the essential checks in ci.yml and remote-parity.yml. Linux coverage
+# comes from merges to main, the nightly schedule below, and manual dispatch,
+# matching the macOS and Windows verifies.
 on:
   push:
     branches:
       - main
-  pull_request:
-    # Full packaging + smoke is expensive; on PRs only run when
-    # packaging-relevant inputs change. Pushes to main and manual
-    # dispatches always run unconditionally.
-    paths:
-      - "electron-builder.config.js"
-      - "forge.config.ts"
-      - "build/**"
-      - "scripts/**"
-      - "src/main/**"
-      - "src/native/**"
-      - "vite.*.config.ts"
-      - "package.json"
-      - "package-lock.json"
-      - ".github/workflows/verify-linux-runtime.yml"
+  schedule:
+    # Nightly safety net at a quiet hour (04:17 UTC), staggered 30 min
+    # after the Windows verify to avoid a self-inflicted burst.
+    - cron: '17 4 * * *'
   workflow_dispatch:
 
 # Queue-latest per ref: cancel superseded runs everywhere, including main.
 # A superseded main build is safe to cancel — the newest commit's run covers
 # it — and without this, batch-merging several PRs fires one full build per
-# merge commit simultaneously. PR runs use refs/pull/N/merge, so they never
-# share a group with main.
+# merge commit simultaneously.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -33,8 +25,9 @@ concurrency:
 jobs:
   verify-linux-runtime:
     timeout-minutes: 120
-    # GitHub-hosted Ubuntu keeps runtime validation available even when external runners queue.
-    runs-on: ubuntu-24.04
+    # Blacksmith-hosted Ubuntu: same drop-in environment as ubuntu-24.04
+    # (sudo, apt, Docker), zero GitHub-hosted minutes.
+    runs-on: blacksmith-4vcpu-ubuntu-2404
 
     steps:
       - name: Check out repository
