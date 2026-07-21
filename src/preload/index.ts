@@ -44,6 +44,7 @@ import type {
   HistoryExportRunResult,
   HistoryExportVerification,
   BillingUsageReport,
+  SpendGuardrailsReport,
   IntercomIdentity,
   CategoryOverrideEffect,
   ClientRecord,
@@ -417,6 +418,8 @@ const api = {
     exportUsageCsv: (from: number, to: number): Promise<{ canceled: boolean; path?: string }> =>
       ipcRenderer.invoke(IPC.BILLING.EXPORT_USAGE_CSV, { from, to }),
     getPayments: (): Promise<PaymentRecord[]> => ipcRenderer.invoke(IPC.BILLING.GET_PAYMENTS),
+    getSpendGuardrails: (): Promise<SpendGuardrailsReport> =>
+      ipcRenderer.invoke(IPC.BILLING.GET_SPEND_GUARDRAILS),
   },
   intercom: {
     getIdentity: (): Promise<IntercomIdentity> => ipcRenderer.invoke(IPC.INTERCOM.GET_IDENTITY),

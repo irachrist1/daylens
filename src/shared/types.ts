@@ -2283,6 +2283,16 @@ export interface AppSettings {
   aiActiveBlockPreview?: boolean
   aiPromptCachingEnabled?: boolean
   aiSpendSoftLimitUsd?: number
+  /** DEV-228 kill switch: false stops every machine-initiated AI call
+   *  (background and system triggers of background job types) immediately.
+   *  User-initiated calls always run. Default true. */
+  backgroundAiEnabled?: boolean
+  /** DEV-228: each feature's daily spend budget in USD. Applies to every
+   *  feature unless overridden per feature below. Default $0.50. */
+  aiFeatureDailyBudgetUsd?: number
+  /** Per-feature budget overrides, keyed by the user-facing feature name
+   *  from shared/aiFeatures.ts (the same names the Usage screen shows). */
+  aiFeatureBudgetOverridesUsd?: Record<string, number>
   aiRedactFilePaths?: boolean
   aiRedactEmails?: boolean
   allowThirdPartyWebsiteIconFallback?: boolean // false = keep website icons local/browser-cache only
@@ -2519,6 +2529,19 @@ export interface BillingUsageJobSummary {
   cacheWriteTokens: number
   tokens: number
   costUsd: number | null
+}
+
+/** DEV-228: what the Usage screen's Background AI card shows — the kill
+ *  switch state plus each feature's daily budget and spend so far today. */
+export interface SpendGuardrailsReport {
+  backgroundAiEnabled: boolean
+  defaultDailyBudgetUsd: number
+  features: Array<{
+    feature: string
+    budgetUsd: number
+    spentTodayUsd: number
+    exhausted: boolean
+  }>
 }
 
 export interface BillingUsageHourlyPoint {
@@ -2960,6 +2983,7 @@ export const IPC = {
     EXPORT_USAGE_CSV: 'billing:export-usage-csv',
     REFRESH: 'billing:refresh',
     GET_PAYMENTS: 'billing:get-payments',
+    GET_SPEND_GUARDRAILS: 'billing:get-spend-guardrails',
   },
   PROJECTIONS: {
     INVALIDATED: 'projections:invalidated',

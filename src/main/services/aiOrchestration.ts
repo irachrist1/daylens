@@ -10,6 +10,7 @@ import { getBillingAccess, getManagedAIConfig } from './billing'
 import { selectJobProvider } from '../lib/providerRouting'
 import { getProviderBreakerState, recordProviderHardFailure, resetProviderBreaker } from './providerCircuitBreaker'
 import { abortError, getAmbientAbortSignal, isAbortError } from '../lib/aiCancellation'
+import { evaluateFeatureBudget, fireRunawaySpendAlertOnce } from './aiSpendGuardrails'
 import type {
   AIInvocationSource,
   AIJobType,
@@ -546,6 +547,31 @@ export async function executeTextAIJob(
 
   const settings = await getSettingsAsync()
   const definition = JOB_DEFINITIONS[payload.jobType]
+
+  // DEV-228 spend guardrails. Same machine-initiated predicate as the circuit
+  // breaker below: background job types not explicitly triggered by the user.
+  // Neither guard ever blocks something the user asked for on screen.
+  if (!definition.foreground && payload.triggerSource !== 'user') {
+    if (settings.backgroundAiEnabled === false) {
+      throw new Error(
+        `Background AI is switched off; skipping ${payload.jobType}. Turn it back on in Settings → Usage.`,
+      )
+    }
+    const verdict = evaluateFeatureBudget(getDb(), settings, payload.jobType)
+    if (verdict.exhausted) {
+      // The alert fires on the first blocked call — exactly when a runaway
+      // loop would otherwise keep spending silently.
+      fireRunawaySpendAlertOnce(verdict)
+      capture(ANALYTICS_EVENT.AI_JOB_FAILED, {
+        failure_kind: 'feature_budget_exhausted',
+        job_type: payload.jobType,
+        trigger_source: payload.triggerSource,
+      })
+      throw new Error(
+        `${verdict.feature} hit its daily AI budget ($${verdict.spentUsd.toFixed(2)} of $${verdict.budgetUsd.toFixed(2)}); skipping ${payload.jobType} until tomorrow. Budgets live in Settings → Usage.`,
+      )
+    }
+  }
 
   // Provider circuit breaker: machine-initiated runs of background job
   // types (`foreground: false` in JOB_DEFINITIONS) are refused outright while

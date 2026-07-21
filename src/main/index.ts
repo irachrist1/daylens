@@ -132,6 +132,7 @@ import { fireTestDailyNotification } from './services/notificationHarness'
 import { consumePendingNavigationRoute } from './services/dailySummaryNavigation'
 import { registerCommandPaletteShortcut, unregisterCommandPaletteShortcut } from './services/commandPalette'
 import { registerDistractionAlerterHandlers, resetDistractionStateOnResume, setDistractionAlertWindow, startDistractionAlerter } from './services/distractionAlerter'
+import { setSpendAlertWindow } from './services/aiSpendGuardrails'
 import { startExternalSignalCollection, stopExternalSignalCollection } from './services/externalSignals'
 import { startConnectorSyncSchedule, stopConnectorSyncSchedule } from './connectors/service'
 import { registerGoogleCalendarConnector } from './connectors/googleCalendar/adapter'
@@ -598,6 +599,7 @@ function startBackgroundServices(): void {
       startSync()
       startDailySummaryNotifier(mainWindow)
       setDistractionAlertWindow(mainWindow)
+      setSpendAlertWindow(mainWindow)
       startDistractionAlerter()
     }
     backgroundServicesStarted = true
@@ -1055,6 +1057,7 @@ function createWindow(): BrowserWindow {
       mainWindow = null
       setDailySummaryNotificationWindow(null)
       setDistractionAlertWindow(null)
+      setSpendAlertWindow(null)
     }
   })
 
@@ -1348,6 +1351,7 @@ app.whenReady()
     mainWindow = createWindow()
     setDailySummaryNotificationWindow(mainWindow)
     setDistractionAlertWindow(mainWindow)
+    setSpendAlertWindow(mainWindow)
     if (!REAL_DAY_HARNESS) ensureTray()
     initUpdater(mainWindow, { diagnosticsOnly: SMOKE_TEST })
 
@@ -1449,6 +1453,7 @@ app.on('activate', () => {
     mainWindow = createWindow()
     setDailySummaryNotificationWindow(mainWindow)
     setDistractionAlertWindow(mainWindow)
+    setSpendAlertWindow(mainWindow)
     ensureTray()
     startBackgroundServices()
   } else {

@@ -9,6 +9,7 @@ import type {
   AppUsageSummary,
   BillingAccessSnapshot,
   BillingUsageReport,
+  SpendGuardrailsReport,
   ClientRecord,
   TrackingDiagnosticsPayload,
   NotificationPermissionState,
@@ -18,6 +19,7 @@ import type {
   EnrichmentSourcesState,
 } from '@shared/types'
 import { ACTIVITY_COLOR_CHOICES, ACTIVITY_COLOR_GROUPS, applyAppearanceSettings } from '@shared/activityColors'
+import { formatJobFeature } from '@shared/aiFeatures'
 import { ipc } from '../lib/ipc'
 import { EntityMemorySection } from './settings/EntityMemorySection'
 import { SuppliedMemorySection } from './settings/SuppliedMemorySection'
@@ -1562,32 +1564,9 @@ function BillingPage({
   )
 }
 
-// Roll the raw `job_type` of each AI call up into a user-facing feature so spend
-// is attributed to things people recognise ("Timeline labeling", "AI chat")
-// rather than internal job names. Used by both the chart's "Group: Feature"
-// view and the per-feature breakdown below the chart.
-const JOB_FEATURE_GROUPS: Record<string, string> = {
-  block_label_preview: 'Timeline labeling',
-  block_label_finalize: 'Timeline labeling',
-  block_cleanup_relabel: 'Timeline labeling',
-  attribution_assist: 'Timeline labeling',
-  day_summary: 'Morning brief',
-  wrapped_narrative: 'Evening wrap-up',
-  wrapped_period_narrative: 'Weekly & monthly wrap',
-  week_review: 'Week review',
-  app_narrative: 'App insights',
-  chat_answer: 'AI chat',
-  chat_followup_suggestions: 'Suggestions',
-  search_intent: 'Search',
-  report_generation: 'Reports',
-  memory_write: 'Memory writes',
-  weekly_brief: 'Weekly brief',
-}
-
-function formatJobFeature(feature: string | null | undefined) {
-  if (!feature) return 'Other'
-  return JOB_FEATURE_GROUPS[feature] ?? feature.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
-}
+// The job_type → user-facing feature rollup lives in shared/aiFeatures.ts so
+// the per-feature spend budgets enforced in the main process (DEV-228) use
+// exactly the feature names this screen displays.
 
 // Local-calendar day key (YYYY-MM-DD). Must match the backend's bucketing so a
 // call's day on the chart axis lines up with the day it was aggregated under.
@@ -1622,6 +1601,7 @@ function UsagePage() {
   const [customTo, setCustomTo] = useState(() => new Date().toISOString().slice(0, 10))
   const [report, setReport] = useState<BillingUsageReport | null>(null)
   const [access, setAccess] = useState<BillingAccessSnapshot | null>(null)
+  const [guardrails, setGuardrails] = useState<SpendGuardrailsReport | null>(null)
   const [hoveredChartIndex, setHoveredChartIndex] = useState<number | null>(null)
   const [initialLoading, setInitialLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -1653,6 +1633,30 @@ function UsagePage() {
       .catch(() => { /* access is optional context for summary split */ })
     return () => { cancelled = true }
   }, [])
+
+  const refreshGuardrails = () => {
+    void ipc.billing.getSpendGuardrails()
+      .then(setGuardrails)
+      .catch(() => { /* the card simply stays hidden */ })
+  }
+  useEffect(refreshGuardrails, [])
+
+  // Kill switch + budgets persist through the ordinary settings store, then
+  // the card re-reads the authoritative report from the main process.
+  const persistGuardrailSetting = async (partial: Partial<AppSettings>) => {
+    try {
+      await ipc.settings.set(partial)
+    } finally {
+      refreshGuardrails()
+    }
+  }
+
+  const setFeatureBudget = async (feature: string, budgetUsd: number) => {
+    const current = await ipc.settings.get()
+    const overrides = { ...(current.aiFeatureBudgetOverridesUsd ?? {}) }
+    overrides[feature] = budgetUsd
+    await persistGuardrailSetting({ aiFeatureBudgetOverridesUsd: overrides })
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -2067,6 +2071,55 @@ function UsagePage() {
           <button type="button" onClick={() => void ipc.billing.exportUsageCsv(bounds.from, bounds.to)} style={inlineButtonStyle}>Export CSV</button>
         </div>
       </div>
+
+      {guardrails && (
+        <div style={{ border: '1px solid var(--color-border-ghost)', borderRadius: 10, padding: 18, background: 'var(--color-surface-low)', display: 'grid', gap: 14 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+            <div>
+              <div style={{ fontSize: 16, fontWeight: 560, color: 'var(--color-text-primary)' }}>Background AI</div>
+              <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginTop: 3 }}>
+                AI that runs on its own (labeling, memory writes). Each feature stops for the day when it hits its budget, and you get a notification. Turning this off stops all of it immediately — things you ask for still work.
+              </div>
+            </div>
+            <Toggle
+              checked={guardrails.backgroundAiEnabled}
+              onChange={(value) => void persistGuardrailSetting({ backgroundAiEnabled: value })}
+            />
+          </div>
+          <div style={{ display: 'grid', gap: 8 }}>
+            {guardrails.features.map((item) => (
+              <div key={item.feature} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, fontSize: 12.5 }}>
+                <span style={{ color: 'var(--color-text-primary)', fontWeight: 540, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {item.feature}
+                  {item.exhausted && (
+                    <span style={{ marginLeft: 8, color: 'var(--color-danger, #d4494c)', fontSize: 11.5, fontWeight: 600 }}>
+                      Paused — budget spent
+                    </span>
+                  )}
+                </span>
+                <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+                  <span style={{ color: item.exhausted ? 'var(--color-danger, #d4494c)' : 'var(--color-text-tertiary)' }}>
+                    ${item.spentTodayUsd.toFixed(2)} today of
+                  </span>
+                  <input
+                    type="number"
+                    min={0}
+                    step={0.25}
+                    defaultValue={item.budgetUsd}
+                    onBlur={(event) => {
+                      const next = Math.max(0, Number(event.target.value))
+                      if (Number.isFinite(next) && next !== item.budgetUsd) void setFeatureBudget(item.feature, next)
+                    }}
+                    style={{ width: 72, padding: '4px 6px', borderRadius: 6, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-base)', color: 'var(--color-text-primary)', fontSize: 12.5 }}
+                    aria-label={`${item.feature} daily budget in dollars`}
+                  />
+                  <span style={{ color: 'var(--color-text-tertiary)' }}>/day</span>
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {featureBreakdown && (
         <div style={{ border: '1px solid var(--color-border-ghost)', borderRadius: 10, padding: 18, background: 'var(--color-surface-low)', display: 'grid', gap: 14 }}>
