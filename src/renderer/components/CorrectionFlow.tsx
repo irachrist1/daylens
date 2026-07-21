@@ -5,7 +5,7 @@
 // main process), shows it in a dialog, applies atomically on confirm, and
 // leaves an Undo toast up until the next correction replaces it. Permanent
 // purges never come through here — they keep their native confirm and no undo.
-import { useCallback, useState, type CSSProperties, type ReactNode } from 'react'
+import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from 'react'
 import type { CorrectionCommand, CorrectionPreview } from '@shared/types'
 import { activityCategoryLabel } from '@shared/activityCategories'
 import { ipc } from '../lib/ipc'
@@ -43,6 +43,11 @@ export function useCorrectionFlow(onApplied: () => void | Promise<void>): Correc
   const [applied, setApplied] = useState<AppliedCorrection | null>(null)
   const [undoBusy, setUndoBusy] = useState(false)
   const [undoError, setUndoError] = useState<string | null>(null)
+  // The undo toast fades on its own a few seconds after it appears (DEV-230:
+  // the "attended" confirmation used to stay up forever). Hovering it — reaching
+  // for Undo — pauses the timer, and a mid-undo error keeps it up so the failure
+  // isn't lost. A new correction replaces `applied` and restarts the countdown.
+  const [toastHovered, setToastHovered] = useState(false)
 
   const request = useCallback(async (command: CorrectionCommand): Promise<boolean> => {
     const preview = await ipc.db.previewCorrection(command)
@@ -82,6 +87,12 @@ export function useCorrectionFlow(onApplied: () => void | Promise<void>): Correc
     }
   }
 
+  useEffect(() => {
+    if (!applied || toastHovered || undoBusy || undoError) return
+    const timer = setTimeout(() => setApplied(null), 6000)
+    return () => clearTimeout(timer)
+  }, [applied, toastHovered, undoBusy, undoError])
+
   const undo = async () => {
     if (undoBusy || !applied) return
     setUndoBusy(true)
@@ -119,6 +130,7 @@ export function useCorrectionFlow(onApplied: () => void | Promise<void>): Correc
           error={undoError}
           onUndo={() => { void undo() }}
           onDismiss={() => { setApplied(null); setUndoError(null) }}
+          onHoverChange={setToastHovered}
         />
       )}
     </>
@@ -299,17 +311,21 @@ function CorrectionUndoToast({
   error,
   onUndo,
   onDismiss,
+  onHoverChange,
 }: {
   description: string
   busy: boolean
   error: string | null
   onUndo: () => void
   onDismiss: () => void
+  onHoverChange: (hovered: boolean) => void
 }) {
   return (
     <div
       data-timeline-inspector="true"
       role="status"
+      onMouseEnter={() => onHoverChange(true)}
+      onMouseLeave={() => onHoverChange(false)}
       style={{
         position: 'fixed',
         left: '50%',
