@@ -6,6 +6,7 @@ Changes begin with understanding and end with explicit acceptance.
 
 Read the smallest relevant set:
 
+0. [What actually blocks V2](V2-SHIP-PRIORITIES.md) — the user-facing failures that must ship first, and the rule that every change is graded against the acceptance dossier, not a convenient ticket.
 1. [Product direction](product/product.md) for the product promise and boundaries.
 2. [V2 direction](product/v2.md) for accepted scope, sequencing, and technical boundaries.
 3. The relevant file under `docs/specs` for expected behavior.
