@@ -2312,8 +2312,11 @@ function dedupeByTitle<T>(rows: T[], title: (row: T) => string): T[] {
 function buildAppNarrativeBundle(
   canonicalAppId: string,
   daysOrDate: number | string = 7,
+  // DEV-227: the caller usually already built this payload — at 30 days it
+  // costs ~1s of blocking main-thread work, so it must never be rebuilt.
+  prebuiltDetail?: ReturnType<typeof getAppDetailPayload>,
 ): ReportContextBundle | null {
-  const detail = getAppDetailPayload(getDb(), canonicalAppId, daysOrDate, getCurrentSession())
+  const detail = prebuiltDetail ?? getAppDetailPayload(getDb(), canonicalAppId, daysOrDate, getCurrentSession())
   if (detail.totalSeconds <= 0) return null
 
   // DEV-89: "Often used with" is gone from the Apps view, and the recap no
@@ -2650,13 +2653,12 @@ async function generateAppNarrative(
   daysOrDate: number | string = 7,
   force = false,
 ): Promise<AISurfaceSummary | null> {
-  const bundle = buildAppNarrativeBundle(canonicalAppId, daysOrDate)
+  const detail = getAppDetailPayload(getDb(), canonicalAppId, daysOrDate, getCurrentSession())
+  const bundle = buildAppNarrativeBundle(canonicalAppId, daysOrDate, detail)
   if (!bundle) {
     console.info(`[ai] app_narrative skipped: no bundle (totalSeconds<=0) for ${canonicalAppId} ${daysOrDate}`)
     return null
   }
-
-  const detail = getAppDetailPayload(getDb(), canonicalAppId, daysOrDate, getCurrentSession())
   const scopeKey = appNarrativeScopeKey(detail.canonicalAppId, detail.rangeKey)
   const isDate = typeof daysOrDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(daysOrDate)
   const days = isDate ? 1 : Math.max(1, Number(daysOrDate) || 7)

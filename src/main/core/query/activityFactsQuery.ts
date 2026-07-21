@@ -26,6 +26,12 @@ import {
   legacyAppSessionsAsAppSessions,
   listLegacyAppSessionInputs,
 } from '../evidence/legacyAdapter'
+import {
+  computeRangeEvidenceSignature,
+  getCachedRangeFacts,
+  rangeFactsCacheKeyForDb,
+  storeCachedRangeFacts,
+} from './rangeFactsCache'
 
 export const ACTIVITY_FACTS_QUERY_VERSION = 2
 
@@ -237,6 +243,31 @@ export function queryCorrectedActivityFactsForRange(
   options: QueryCorrectedActivityFactsForRangeOptions = {},
 ): CorrectedActivityRangeFacts {
   const nowMs = options.nowMs ?? Date.now()
+
+  // DEV-227: wall-clock range reads (no explicit nowMs) are memoized behind a
+  // cheap evidence signature — at 30 days the full scan costs ~1s of blocking
+  // main-thread work and the Apps view runs it several times in a row.
+  // Callers that pin nowMs (day queries, tests) want deterministic clipping
+  // and bypass the cache entirely.
+  const cacheable = options.nowMs === undefined
+  let cacheKey: string | null = null
+  let signature: string | null = null
+  if (cacheable) {
+    cacheKey = rangeFactsCacheKeyForDb(db, `${fromMs}:${toMs}:${options.markTrailingOpenSessionLive ? 1 : 0}`)
+    signature = computeRangeEvidenceSignature(
+      db,
+      fromMs,
+      toMs,
+      `${PROJECTION_VERSION}.${ACTIVITY_FACTS_QUERY_VERSION}`,
+      getSettings().focusApps ?? [],
+    )
+    const cached = getCachedRangeFacts<CorrectedActivityRangeFacts>(cacheKey, signature, nowMs)
+    if (cached) {
+      // Shallow-copy the arrays so a caller sorting or splicing its result
+      // cannot reorder the cached facts for the next caller.
+      return { ...cached, sessions: [...cached.sessions], gaps: [...cached.gaps] }
+    }
+  }
   // Evidence is read across the whole window, but an open canonical session
   // is never closed past “now”: the live day’s window runs to midnight and
   // the hours that have not happened yet are not activity.
@@ -289,7 +320,7 @@ export function queryCorrectedActivityFactsForRange(
   const { totalSeconds, focusSeconds } = totalsFromSessions(sessions)
   const gaps = projectGapsFromFocusEvents(events, projectionEndMs)
 
-  return {
+  const facts: CorrectedActivityRangeFacts = {
     projectionVersion: PROJECTION_VERSION,
     queryVersion: ACTIVITY_FACTS_QUERY_VERSION,
     evidenceSource,
@@ -300,6 +331,12 @@ export function queryCorrectedActivityFactsForRange(
     focusEventCount,
     legacySessionCount,
   }
+
+  if (cacheable && cacheKey && signature) {
+    storeCachedRangeFacts(cacheKey, signature, nowMs, toMs > nowMs, facts)
+    return { ...facts, sessions: [...facts.sessions], gaps: [...facts.gaps] }
+  }
+  return facts
 }
 
 /**
