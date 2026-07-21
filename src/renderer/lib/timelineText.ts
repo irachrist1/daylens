@@ -41,7 +41,7 @@ function categoryVerbPhrase(category: WorkContextBlock['dominantCategory']): { v
     case 'entertainment': return { verb: 'watching', noun: 'video content' }
     case 'social': return { verb: 'on', noun: 'social' }
     case 'system': return { verb: 'on', noun: 'system tasks' }
-    default: return { verb: 'spent on', noun: 'mixed work' }
+    default: return { verb: 'on', noun: 'mixed work' }
   }
 }
 

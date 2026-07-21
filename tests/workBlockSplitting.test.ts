@@ -323,29 +323,45 @@ test('a sub-30-minute block with no related neighbour keeps its own block', () =
   db.close()
 })
 
-test('highly coherent blocks split only when they exceed the coherent maximum duration', () => {
+test('a long continuous stretch is one block — no duration ceiling', () => {
   const db = createDb()
-  // A 4-hour single-title stretch stays ONE calendar block under the 5-hour
-  // coherent ceiling ("1, 2, 3, even 5 hours — never a string of slices").
+  // A 4-hour single-title stretch is one calendar block. Decided behavior
+  // (DEV-232): a block ends only on a real absence, sleep, idle, a meeting, or a
+  // kind change — never because it grew "too long".
   insertSession(db, { title: 'Deep work planning - Notion', bundleId: 'notion.id', appName: 'Notion', category: 'writing', startMinute: 0, durationMinutes: 240 })
 
   const blocks = getTimelineDayPayload(db, TEST_DATE).blocks
-  assert.equal(blocks.length, 1, `a 4h coherent stretch stays one block; got ${blocks.length}`)
+  assert.equal(blocks.length, 1, `a 4h continuous stretch stays one block; got ${blocks.length}`)
   db.close()
 })
 
-test('a coherent stretch beyond the 5-hour ceiling still splits', () => {
+test('a stretch past the old 5-hour ceiling still stays one block', () => {
   const db = createDb()
+  // Two contiguous 170-minute halves of the same work — 5h40m with no real gap.
+  // Under the old ceiling this split; with no ceiling it is one continuous block.
   insertSession(db, { title: 'Deep work planning - Notion', bundleId: 'notion.id', appName: 'Notion', category: 'writing', startMinute: 0, durationMinutes: 170 })
   insertSession(db, { title: 'Deep work planning - Notion', bundleId: 'notion.id', appName: 'Notion', category: 'writing', startMinute: 170, durationMinutes: 170 })
 
   const blocks = getTimelineDayPayload(db, TEST_DATE).blocks
 
-  assert.ok(blocks.length >= 2, `expected maximum duration split; got ${blocks.length}`)
-  assert.ok(
-    blocks.every((block) => block.endTime - block.startTime <= 300 * 60_000),
-    `expected every block at or below 300 minutes; got ${blocks.map((block) => Math.round((block.endTime - block.startTime) / 60_000)).join(', ')}`,
-  )
+  assert.equal(blocks.length, 1, `a continuous 5h40m stretch is one block; got ${blocks.length}: ${blocks.map((b) => Math.round((b.endTime - b.startTime) / 60_000) + 'm').join(', ')}`)
+  db.close()
+})
+
+test('a continuous varied dev morning past 3h is one block (DEV-232)', () => {
+  const db = createDb()
+  // The reported bug: a real morning of building — same coding session, varied
+  // window titles across the same editor, no real gap — was chopped at the old
+  // 3-hour base ceiling into fragments named after whichever slice dominated.
+  // Varied titles mean it never qualified for the "highly coherent" 5h lift, so
+  // the base ceiling always won. With no ceiling it stays one block.
+  const files = ['workBlocks.ts', 'analyzeDay.ts', 'Timeline.tsx', 'projections.ts', 'migrations.ts', 'queries.ts', 'ipc.ts', 'types.ts']
+  files.forEach((file, index) => {
+    insertSession(db, { title: `${file} - daylens - Cursor`, bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: index * 30, durationMinutes: 30 })
+  })
+
+  const blocks = getTimelineDayPayload(db, TEST_DATE).blocks
+  assert.equal(blocks.length, 1, `a continuous 4h coding morning is one block; got ${blocks.length}: ${blocks.map((b) => `${b.label.current} ${Math.round((b.endTime - b.startTime) / 60_000)}m`).join(' | ')}`)
   db.close()
 })
 
@@ -561,7 +577,7 @@ test('a stale, never-processed past day is reconstructed on revisit', () => {
 
   // Revisiting an older, unprocessed day rebuilds it more accurately.
   getTimelineDayPayload(db, TEST_DATE)
-  assert.ok(heuristicVersions(db).every((v) => v === 'timeline-v10'), 'stale unprocessed day should be rebuilt')
+  assert.ok(heuristicVersions(db).every((v) => v === 'timeline-v11'), 'stale unprocessed day should be rebuilt')
   db.close()
 })
 
@@ -619,7 +635,7 @@ test('a processed stale day refreshes its category facts in place, without touch
   // too, and stamped so it runs once per heuristic bump.
   const row = db.prepare(`SELECT dominant_category, heuristic_version FROM timeline_blocks WHERE id = ?`).get(blockId) as { dominant_category: string; heuristic_version: string }
   assert.equal(row.dominant_category, 'development')
-  assert.equal(row.heuristic_version, 'timeline-v10')
+  assert.equal(row.heuristic_version, 'timeline-v11')
   db.close()
 })
 
@@ -700,7 +716,7 @@ test('timeline block correction survives rebuild through evidence lineage', () =
   assert.equal(rebuilt.review.state, 'corrected')
   assert.equal(rebuilt.review.source, 'stored_evidence')
   assert.equal(rebuilt.review.correctedLabel, 'Router refactor')
-  assert.ok(heuristicVersions(db).every((v) => v === 'timeline-v10'), 'stale day should rebuild while preserving correction')
+  assert.ok(heuristicVersions(db).every((v) => v === 'timeline-v11'), 'stale day should rebuild while preserving correction')
   db.close()
 })
 

@@ -147,12 +147,15 @@ const SLOW_SWITCH_THRESHOLD_SEC = 15 * 60
 // they are absorbed by the brief-peek pass (BRIEF_PEEK_MAX_ACTIVE_MS) — so this
 // floor stays at a genuine-topic-run length, not the detour cutoff.
 const SUSTAINED_CONTEXT_SHIFT_THRESHOLD_SEC = 5 * 60
-// Block-sizing: the target shape is a large, readable calendar block — 1, 2,
-// 3, even 5 hours — never a string of 20-minute slices. The base ceiling sits
-// at 180 min so a sustained stretch of the same work is not chopped at 2h, and
-// the coalesce pass below re-joins adjacent fragments of the same work up to
-// this same ceiling.
-const TIMELINE_MAX_BLOCK_SPAN_MS = 180 * 60_000
+// Block-sizing (DEV-232, decided: no duration ceiling). A block ends only on a
+// real absence, sleep, idle, a meeting, or a kind change — never because it grew
+// "too long". A continuous working session is one calendar block however long it
+// runs; the AI Analyze-day pass is what optionally subdivides it. These span
+// limits are therefore infinite: they no longer split a candidate, refuse a
+// coalesce, or veto a same-work bridge. They stay as named seams so the
+// merge/split passes still read against one "unbounded" knob rather than
+// scattering the removal across a dozen call sites.
+const TIMELINE_MAX_BLOCK_SPAN_MS = Number.POSITIVE_INFINITY
 // Blocks shorter than this are pure noise on the timeline (e.g. a 50-second
 // "Terminal work" sliver). They are unconditionally merged into an adjacent
 // block instead of being shown standalone.
@@ -187,15 +190,20 @@ const TIMELINE_SLIVER_FOLD_MAX_GAP_MS = REAL_ABSENCE_MIN_MS
 // coarse-segment boundary. Aligned with the 15-minute session break: a real
 // gap (15+ minutes away) always stays split — it is blank space, not work.
 const TIMELINE_SAME_WORK_BRIDGE_GAP_MS = REAL_ABSENCE_MIN_MS
-// Higher ceiling for candidates where every session shares the same
-// (bundleId, compacted window title) pair with no internal gap >= 5 min.
-// Quality bar: a 90-minute block titled "Daylens AI refactor — extract
-// chat_answer from ai.ts" is the right answer, not three 30-minute slices
-// labelled "Cursor" / "Cursor" / "Untitled block".
-const TIMELINE_MAX_COHERENT_BLOCK_SPAN_MS = 300 * 60_000
-const TIMELINE_MAX_ASSISTED_WORK_SPAN_MS = 360 * 60_000
+// Formerly higher ceilings for coherent / assisted-work candidates; also
+// unbounded now (see TIMELINE_MAX_BLOCK_SPAN_MS). Kept as distinct names because
+// the coalesce and bridge passes still branch on whether a pair is an
+// assisted-work pair for reasons other than span.
+const TIMELINE_MAX_COHERENT_BLOCK_SPAN_MS = Number.POSITIVE_INFINITY
+const TIMELINE_MAX_ASSISTED_WORK_SPAN_MS = Number.POSITIVE_INFINITY
 const TIMELINE_SPLIT_GAP_THRESHOLD_MS = 5 * 60_000
 const TIMELINE_MIN_CHILD_SPAN_MS = 15 * 60_000
+// v11: the duration ceiling is gone (DEV-232). Blocks split only on a real
+// absence, sleep, idle, a meeting, or a kind change — never at 3/5/6 hours. The
+// bump reconstructs already-captured, un-processed days that were fragmented by
+// the old ceiling, so a continuous morning re-reads as one block on revisit.
+// (A day already AI/user-processed keeps its boundaries; re-analyze rebuilds it.)
+//
 // Bumped to v9 with: the 15-minute session break (a real activity gap of
 // 15+ minutes ends the block, is never absorbed, and renders as blank
 // space; a new block starts only when activity resumes),
@@ -233,12 +241,12 @@ const TIMELINE_MIN_CHILD_SPAN_MS = 15 * 60_000
 // browsing) — the bump makes refreshStaleBlockCategoryFacts recompute the
 // persisted category facts of every already-processed day in place, so old
 // blocks pick up their real colors immediately (labels/boundaries untouched).
-const TIMELINE_HEURISTIC_VERSION = 'timeline-v10'
+const TIMELINE_HEURISTIC_VERSION = 'timeline-v11'
 
-// A single unbroken block this long is almost never real (~11 hours of
-// continuous engagement is suspicious on its face) — it usually means
-// idle/away detection failed somewhere in the span. Flag it in the logs
-// rather than trusting it silently.
+// A block spanning this many hours is only worth a second look when most of the
+// span is untracked time (see flagSuspiciousUnbrokenBlocks) — the signature of
+// idle/away detection failing somewhere inside it. A continuous session this
+// long with matching active time is legitimate (DEV-232: no duration ceiling).
 const SUSPICIOUS_UNBROKEN_BLOCK_SPAN_MS = 6 * 60 * 60_000
 
 type FormationReason = 'coherent' | 'heuristic' | 'mixed' | 'meeting' | 'longSingleApp'
@@ -5238,6 +5246,12 @@ function flagSuspiciousUnbrokenBlocks(dateStr: string, blocks: WorkContextBlock[
   for (const block of blocks) {
     const spanMs = block.endTime - block.startTime
     if (spanMs < SUSPICIOUS_UNBROKEN_BLOCK_SPAN_MS) continue
+    // With no duration ceiling (DEV-232) a genuinely long continuous session is
+    // valid, so span alone no longer implies a failure. The real "idle/away
+    // detection failed" signature is a long span holding a real absence worth of
+    // untracked time — active time far below the wall-clock span. A continuous
+    // session (active ≈ span, within polling drift) is not flagged.
+    if (spanMs - blockActiveSeconds(block) * 1000 < REAL_ABSENCE_MIN_MS) continue
     const key = `${dateStr}:${block.startTime}:${block.endTime}`
     if (flaggedSuspiciousBlocks.has(key)) continue
     flaggedSuspiciousBlocks.add(key)
