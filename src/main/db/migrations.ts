@@ -3069,6 +3069,32 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 64,
+    description:
+      'Screen-context paired evaluation (DEV-198): the experiment is a MEASUREMENT, not a feature — each target question is answered once from normal evidence and once with screen-derived evidence, and a tester reviews which answer is more accurate, more specific, or unchanged (screen-context.md §Evaluation). screen_eval_pairs stores those pairs locally: the question, both answers, the target-difficulty kind, and the reviewed verdict. The ship-or-kill report is built ONLY from aggregate counts over these rows plus the frame/evidence ledgers — never from the stored text. LOCAL-ONLY like every screen-context table: withheld from the full-history export (named in the omissions manifest), no sync-allowlist key, never in analytics.',
+    up: () => {
+      getDb().exec(`
+        CREATE TABLE IF NOT EXISTS screen_eval_pairs (
+          id TEXT PRIMARY KEY,
+          target_kind TEXT NOT NULL CHECK (target_kind IN (
+            'untitled_native_doc', 'generic_window_title', 'visual_research',
+            'design_spreadsheet', 'false_context_risk', 'protected_surface'
+          )),
+          question TEXT NOT NULL,
+          baseline_answer TEXT,
+          screen_answer TEXT,
+          asked_at INTEGER NOT NULL,
+          verdict TEXT CHECK (verdict IN (
+            'screen_more_accurate', 'screen_more_specific', 'unchanged', 'screen_worse'
+          ) OR verdict IS NULL),
+          reviewed_at INTEGER,
+          created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_screen_eval_pairs_kind ON screen_eval_pairs(target_kind);
+      `)
+    },
+  },
 ]
 
 export const LATEST_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0

@@ -2224,9 +2224,16 @@ export interface ScreenContextStatus {
   enabled: boolean
   paused: boolean
   consentAt: number | null
-  /** Honest build status: no OS capture sampler ships in this build yet, so
-   *  sampling can never be active regardless of consent. */
+  /** Whether an OS capture sampler is wired in this build (macOS via
+   *  ScreenCaptureKit / Windows via Windows.Graphics.Capture, both through
+   *  the Electron capturer). False → sampling can never be active. */
   samplerInstalled: boolean
+  /** True only while the sampler loop is running WITH consent and not paused
+   *  — the exact signal the persistent indicator shows. */
+  samplerActive: boolean
+  /** Which adapter is wired ('macos-screencapturekit', 'windows-graphics-capture',
+   *  'fake' in tests), or null when none is. */
+  samplerKind: string | null
   backlog: { frames: number; bytes: number }
   backlogCapReached: boolean
   quarantinedCount: number
@@ -2844,6 +2851,7 @@ export const IPC = {
     DELETE_FRAME: 'screen-context:delete-frame',
     DELETE_FOR_SOURCE: 'screen-context:delete-for-source',
     WIPE: 'screen-context:wipe',
+    DIAGNOSTIC_SAMPLE: 'screen-context:diagnostic-sample',
   },
   FILE_ACCESS: {
     LIST_GRANTS: 'file-access:list-grants',

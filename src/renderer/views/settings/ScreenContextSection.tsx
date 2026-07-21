@@ -227,8 +227,14 @@ export function ScreenContextSection() {
       <div style={cardStyle}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 13.5, fontWeight: 620, color: 'var(--color-text-primary)' }}>
-            {status.paused ? 'Joined · paused' : 'Joined · on'}
+            {status.paused ? 'Joined · paused' : status.samplerActive ? 'Joined · sampling ON' : 'Joined · on'}
           </span>
+          {status.samplerActive && (
+            <span
+              aria-hidden
+              style={{ width: 8, height: 8, borderRadius: 4, background: '#f87171', display: 'inline-block' }}
+            />
+          )}
           {status.consentAt && (
             <span style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}>
               consented {new Date(status.consentAt).toLocaleDateString()}
@@ -243,12 +249,33 @@ export function ScreenContextSection() {
             {status.paused ? 'Resume sampling' : 'Pause sampling'}
           </button>
         </div>
-        {!status.samplerInstalled && (
+        {status.samplerInstalled ? (
           <span style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.55 }}>
-            Nothing is being captured yet: this build has no screen sampler installed. Your consent prepares the
-            pipeline; when the sampler ships in a later build, a visible indicator will show whenever sampling is
-            active, and everything below applies to what it captures.
+            While sampling is on, the menu-bar icon says so — the indicator follows the sampler itself, never a
+            cached setting. Excluded apps, private windows, password/payment screens, and browsers whose privacy
+            state can’t be verified are refused before any pixel is read. Extraction isn’t installed in this build
+            yet, so captured frames wait, encrypted, in the backlog below until it ships — or until you delete them.
           </span>
+        ) : (
+          <span style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.55 }}>
+            Nothing is being captured: no screen sampler is available on this platform. Your consent prepares the
+            pipeline; everything below applies to whatever a supported build captures.
+          </span>
+        )}
+        {status.samplerInstalled && (
+          <div>
+            <button
+              type="button"
+              style={buttonStyle}
+              disabled={busy || status.paused}
+              onClick={() => void run(async () => {
+                const result = await ipc.screenContext.diagnosticSample()
+                return { ok: result.captured, reason: result.captured ? null : `No frame captured — ${result.reason ?? 'blocked'}.` }
+              })}
+            >
+              Capture a diagnostic sample
+            </button>
+          </div>
         )}
         {status.backlogCapReached && (
           <span style={{ fontSize: 12.5, color: '#fbbf24' }}>

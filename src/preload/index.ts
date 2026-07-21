@@ -547,6 +547,8 @@ const api = {
       ipcRenderer.invoke(IPC.SCREEN_CONTEXT.DELETE_FOR_SOURCE, source),
     wipe: (): Promise<{ ok: boolean; deleted: number }> =>
       ipcRenderer.invoke(IPC.SCREEN_CONTEXT.WIPE),
+    diagnosticSample: (): Promise<{ captured: boolean; reason: string | null }> =>
+      ipcRenderer.invoke(IPC.SCREEN_CONTEXT.DIAGNOSTIC_SAMPLE),
   },
   export: {
     // DEV-196: full-history export. Plans, progress, and verification reports

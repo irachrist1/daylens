@@ -69,6 +69,7 @@ const INTERNAL_TABLES: Record<string, string> = {
   // later accepted change explicitly moves that boundary.
   screen_context_frames: 'screen-context experiment frame-lifecycle ledger — local-only by the experiment boundary',
   screen_context_evidence: 'screen-context experiment derived evidence — local-only by the experiment boundary, never exported',
+  screen_eval_pairs: 'screen-context paired-evaluation questions and answers — local-only experiment material; the report is aggregate-only',
 }
 
 // Columns withheld from otherwise-exported tables.

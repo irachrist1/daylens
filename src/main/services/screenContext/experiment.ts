@@ -46,6 +46,9 @@ export interface ScreenContextExperimentDeps {
   platform?: NodeJS.Platform
   /** True once a real OS capture sampler ships in the build. */
   samplerInstalled?: boolean
+  /** Live sampler state for status (installed builds wire the sampler's own
+   *  getters; absent means never active). */
+  getSamplerState?: () => { active: boolean; kind: string | null }
 }
 
 let deps: ScreenContextExperimentDeps | null = null
@@ -107,6 +110,12 @@ function getLifecycle(db: Database.Database): ScreenContextLifecycle | null {
 
 const measureSink: ScreenContextMeasure = (event, props) => {
   deps?.measure?.(event, props)
+}
+
+/** The sampler shares the experiment's ONE lifecycle instance so gates, rate
+ *  windows, and backlog state cannot fork. Null while unavailable. */
+export function getScreenContextLifecycleForSampler(db: Database.Database): ScreenContextLifecycle | null {
+  return getLifecycle(db)
 }
 
 // ─── Eligibility ──────────────────────────────────────────────────────────────
@@ -187,6 +196,8 @@ export function getScreenContextStatus(db: Database.Database): ScreenContextStat
     paused: settings.screenContextPaused === true,
     consentAt: settings.screenContextConsentAt ?? null,
     samplerInstalled: deps?.samplerInstalled === true,
+    samplerActive: deps?.getSamplerState?.().active === true,
+    samplerKind: deps?.getSamplerState?.().kind ?? null,
     backlog,
     backlogCapReached: cycle ? cycle.backlogCapReached() : false,
     quarantinedCount: cycle ? cycle.quarantined().length : 0,
