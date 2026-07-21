@@ -108,18 +108,21 @@ const UPCOMING_MANIFESTS: ConnectorManifest[] = [
 
 const adapters = new Map<ConnectorId, ConnectorAdapter>()
 const manifests = new Map<ConnectorId, ConnectorManifest>()
+let seeded = false
 
 /** A provider ticket calls this with its working adapter; the manifest flips
  *  to the adapter's own (available: true) and Settings gains the connector. */
 export function registerConnectorAdapter(adapter: ConnectorAdapter): void {
+  ensureRegistered() // registering one provider must never hide the others
   adapters.set(adapter.manifest.id, adapter)
   manifests.set(adapter.manifest.id, adapter.manifest)
 }
 
 function ensureRegistered(): void {
-  if (manifests.size > 0) return
+  if (seeded) return
+  seeded = true
   for (const manifest of UPCOMING_MANIFESTS) {
-    manifests.set(manifest.id, manifest)
+    if (!manifests.has(manifest.id)) manifests.set(manifest.id, manifest)
   }
 }
 

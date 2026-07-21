@@ -43,8 +43,9 @@ jobs:
               dist-release/*.exe
               dist-release/*.blockmap
               dist-release/latest*.yml
-          # GitHub-hosted Ubuntu keeps preview validation available even when external runners queue.
-          - os: ubuntu-24.04
+          # Blacksmith-hosted Ubuntu: same drop-in environment as ubuntu-24.04,
+          # zero GitHub-hosted minutes.
+          - os: blacksmith-4vcpu-ubuntu-2404
             platform: linux
             artifact_name: daylens-preview-linux
             artifact_paths: |

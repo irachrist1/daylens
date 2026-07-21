@@ -218,6 +218,17 @@ export function ingestConnectorPage(
       mergeConnectorCalendarDaySignal(db, date, events, nowMs)
     }
 
+    // Explicit provider deletions on an incremental page (cancellations under
+    // cursor semantics like Google's syncToken). Only known, live records
+    // tombstone; an id this store never ingested is a no-op.
+    for (const deletedId of page.deletedSourceRecordIds ?? []) {
+      const known = getConnectorRecord(db, connectorId, deletedId)
+      if (!known || known.tombstoned_at != null) continue
+      removeConnectorRecordDerivedData(db, known, nowMs)
+      tombstoneConnectorRecord(db, connectorId, deletedId, nowMs)
+      tombstoned += 1
+    }
+
     // Provider deletions → local tombstones (connectors.md §Synchronization).
     // Only when the adapter attests the page is a COMPLETE window view.
     if (page.presentSourceRecordIds) {

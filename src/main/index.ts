@@ -134,6 +134,7 @@ import { registerCommandPaletteShortcut, unregisterCommandPaletteShortcut } from
 import { registerDistractionAlerterHandlers, resetDistractionStateOnResume, setDistractionAlertWindow, startDistractionAlerter } from './services/distractionAlerter'
 import { startExternalSignalCollection, stopExternalSignalCollection } from './services/externalSignals'
 import { startConnectorSyncSchedule, stopConnectorSyncSchedule } from './connectors/service'
+import { registerGoogleCalendarConnector } from './connectors/googleCalendar/adapter'
 import { registerConnectorHandlers } from './ipc/connectors.handlers'
 import { registerExportHandlers } from './ipc/export.handlers'
 import { registerScreenContextHandlers } from './ipc/screenContext.handlers'
@@ -1321,6 +1322,9 @@ app.whenReady()
     registerSyncHandlers()
     registerDistractionAlerterHandlers()
     registerNotificationHandlers()
+    // DEV-188: the first real provider — registering flips google_calendar
+    // from manifest-only to connectable in Settings → Connections.
+    registerGoogleCalendarConnector()
     registerConnectorHandlers()
     registerExportHandlers()
     registerScreenContextHandlers()
