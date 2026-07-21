@@ -863,7 +863,11 @@ function mapMemoryMomentRow(row: MemoryMomentRow): SessionSearchResult {
     : (row.primary_name ?? row.title ?? row.statement)
   const appName = row.record_kind === 'session'
     ? resolveDisplayName(row.app_bundle_id ?? '', row.app_name ?? 'Unknown app')
-    : row.record_kind === 'meeting' ? 'Meeting'
+    // A calendar event is scheduled context, not an attended meeting, until
+    // non-calendar evidence supports it (connectors.md §Google Calendar). The
+    // index states the distinction in the record statement; search results
+    // and context packets keep it visible.
+    : row.record_kind === 'meeting' ? (row.statement.startsWith('Scheduled:') ? 'Scheduled meeting' : 'Meeting')
       : row.record_kind === 'supplied_fact' ? 'You told Daylens' : 'File'
   return {
     type: 'session',

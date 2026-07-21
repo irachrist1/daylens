@@ -288,7 +288,9 @@ test('meetings are findable by name through their entities', () => {
     results.some((r) => r.type === 'entity' && r.id === meeting.id),
     'the meeting entity matches',
   )
-  const moment = results.find((r) => r.type === 'session' && r.appName === 'Meeting')
+  // Calendar-only support = SCHEDULED context (connectors.md §Google
+  // Calendar): the result says so instead of claiming an attended meeting.
+  const moment = results.find((r) => r.type === 'session' && r.appName === 'Scheduled meeting')
   assert.ok(moment, 'the meeting moment is in the results')
   assert.equal(moment?.type === 'session' ? moment.windowTitle : null, 'Acme weekly standup')
 
@@ -296,7 +298,7 @@ test('meetings are findable by name through their entities', () => {
   // changes what the result says without any reindex.
   applyEntityCorrection(db, { kind: 'entity-rename', entityId: meeting.id, name: 'Weekly platform sync' })
   const renamed = searchExact(db, 'platform sync', { limit: 20 })
-  const renamedMoment = renamed.find((r) => r.type === 'session' && r.appName === 'Meeting')
+  const renamedMoment = renamed.find((r) => r.type === 'session' && r.appName === 'Scheduled meeting')
   assert.equal(renamedMoment?.type === 'session' ? renamedMoment.windowTitle : null, 'Weekly platform sync')
 })
 
@@ -379,8 +381,9 @@ test('people resolve and their meetings answer (connected-source envelope); resu
   const person = results.find((r) => r.type === 'entity' && r.entityType === 'person')
   assert.ok(person, 'the person resolves as an entity result')
   assert.equal(person?.type === 'entity' ? person.sourceType : null, 'connected')
-  const momentRow = results.find((r) => r.type === 'session' && r.appName === 'Meeting')
-  assert.ok(momentRow, "searching a person finds the meetings they attended")
+  // A calendar_event envelope alone is scheduled context, not attendance.
+  const momentRow = results.find((r) => r.type === 'session' && r.appName === 'Scheduled meeting')
+  assert.ok(momentRow, "searching a person finds the meetings they were invited to")
   assert.equal(
     momentRow?.type === 'session' ? momentRow.windowTitle : null,
     'Quarterly review with Acme',

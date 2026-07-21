@@ -9,7 +9,7 @@
 // projection and carries only the fields in shared ConnectorListing.
 
 import type Database from 'better-sqlite3'
-import type { ConnectorId, ConnectorListing } from '@shared/types'
+import type { ConnectorId, ConnectorListing, ConnectorSyncSummary } from '@shared/types'
 import { getDb } from '../services/database'
 import {
   appendDeletionJournalEntry,
@@ -60,6 +60,7 @@ export function listConnectorListings(db: Database.Database): ConnectorListing[]
       authKind: manifest.authKind,
       whatItBrings: manifest.whatItBrings,
       scopes: manifest.scopes.map((scope) => ({ ...scope })),
+      lookbackDays: manifest.lookbackDays,
       available: manifest.available,
       authState: connected ? connection.status : 'disconnected',
       accountLabel: connected ? connection.account_label : null,
@@ -74,19 +75,23 @@ export function listConnectorListings(db: Database.Database): ConnectorListing[]
 
 // ─── Connect ─────────────────────────────────────────────────────────────────
 
-export interface ConnectorSyncSummary {
-  status: 'ok' | 'blocked_consent' | 'blocked_disabled' | 'failed' | 'not_connected'
-  ingested: number
-  quarantined: number
-  tombstoned: number
-  error?: string
-}
+export type { ConnectorSyncSummary }
+
+/** Phases a connect reports while it runs, so Settings can show honest
+ *  progress: the authorization hand-off, then the bounded initial import. */
+export type ConnectorConnectPhase = 'authorizing' | 'syncing'
 
 export async function connectConnector(
   db: Database.Database,
   connectorId: ConnectorId,
   config: Record<string, unknown>,
-  options: { adapter?: ConnectorAdapter; gate?: ConnectorIngestGate; nowMs?: number } = {},
+  options: {
+    adapter?: ConnectorAdapter
+    gate?: ConnectorIngestGate
+    nowMs?: number
+    /** Called as the connect advances phases (never with any credential). */
+    onProgress?: (phase: ConnectorConnectPhase) => void
+  } = {},
 ): Promise<ConnectorSyncSummary> {
   const gate = options.gate ?? defaultConnectorGate()
   const gateState = connectorGateState(gate)
@@ -102,6 +107,7 @@ export async function connectConnector(
       ? `${manifest.displayName} is not available to connect yet.`
       : `Unknown connector: ${connectorId}`)
   }
+  options.onProgress?.('authorizing')
   const result = await adapter.connect({ config })
   saveConnectorConnection(db, {
     connectorId,
@@ -109,7 +115,9 @@ export async function connectConnector(
     config: result.config,
     nowMs: options.nowMs,
   })
-  // First sync immediately — connecting should visibly bring data or say why not.
+  // First sync immediately — connecting should visibly bring data or say why
+  // not. The bounded initial lookback runs here, so the phase is reported.
+  options.onProgress?.('syncing')
   return syncConnector(db, connectorId, options)
 }
 
@@ -148,12 +156,23 @@ export async function syncConnector(
     }
   } catch (error) {
     const failures = row.consecutive_failures + 1
-    const retryDelay = computeBackoffMs(adapter.manifest.rateLimit, failures)
+    // "Rate limits … respect provider reset information": an adapter attaches
+    // the provider's retry-after hint to the thrown error and the bounded
+    // backoff honors it (computeBackoffMs still caps it at backoffMaxMs).
+    const providerResetMs = typeof (error as { retryAfterMs?: unknown } | null)?.retryAfterMs === 'number'
+      ? (error as { retryAfterMs: number }).retryAfterMs
+      : null
+    const retryDelay = computeBackoffMs(adapter.manifest.rateLimit, failures, providerResetMs)
     const summary = error instanceof Error ? error.message : 'Sync failed.'
+    // An authorization-shaped failure (expired/revoked/missing token) flags
+    // needs_attention IMMEDIATELY — retrying cannot fix it, only the
+    // reauthorize affordance in Settings can.
+    const needsAttention = failures >= 3
+      || (error as { needsAttention?: unknown } | null)?.needsAttention === true
     recordConnectorSyncFailure(db, connectorId, {
       errorSummary: summary,
       nextRetryAt: nowMs + retryDelay,
-      needsAttention: failures >= 3,
+      needsAttention,
       nowMs,
     })
     return { status: 'failed', ingested: 0, quarantined: 0, tombstoned: 0, error: summary }
