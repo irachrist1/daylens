@@ -156,6 +156,11 @@ function ManagedDetailCard({ source, costs }: { source: AIModelSource; costs: AI
             ${allowance.remainingUsd.toFixed(2)} of ${allowance.grantedUsd.toFixed(2)} left
             {allowance.estimatedQuestionsRemaining != null && ` · about ${allowance.estimatedQuestionsRemaining} questions`}
           </div>
+          {allowance.estimatedQuestionsRemaining === 0 && allowance.canUseManagedAI && (
+            <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', lineHeight: 1.5 }}>
+              Not enough left for a typical question. Your own keys keep working; managed answers resume when the allowance resets.
+            </div>
+          )}
         </div>
       ) : (
         <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', lineHeight: 1.55 }}>Allowance details are unavailable right now.</div>
@@ -266,6 +271,19 @@ export function ModelSelector({
   const focused = filtered[highlightIdx] ?? filtered[0] ?? null
   let lastSourceId: string | null = null
 
+  // Visible notice for a selection that left the catalog (DEV-201): a chat
+  // pinned to a retired model — or a model whose source became unusable — is
+  // told so plainly. Nothing is silently substituted; the pin stays until the
+  // person picks a replacement.
+  const overrideListed = !isOverride || entries.some((entry) =>
+    entry.kind === 'model' && entry.provider === currentProvider && entry.model.id === currentModel)
+  const overrideKnown = Boolean(currentModel && AI_PROVIDER_META[currentProvider]?.models.some((model) => model.id === currentModel))
+  const overrideNotice = overrideListed
+    ? null
+    : overrideKnown
+      ? `This chat is set to ${currentModel}, but that provider isn't usable right now (see below). It stays selected until you pick a replacement.`
+      : `This chat is set to ${currentModel}, which is no longer offered. It stays selected until you pick a replacement.`
+
   return (
     <div
       role="dialog"
@@ -290,6 +308,11 @@ export function ModelSelector({
           />
         </div>
 
+        {overrideNotice && (
+          <div role="status" style={{ padding: '9px 16px', borderBottom: '1px solid var(--color-border-ghost)', background: 'var(--color-accent-dim)', fontSize: 12, lineHeight: 1.5, color: 'var(--color-text-secondary)' }}>
+            {overrideNotice}
+          </div>
+        )}
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 262px', minHeight: 0, flex: 1 }}>
           <div ref={listRef} style={{ overflowY: 'auto', padding: '6px 8px', borderRight: '1px solid var(--color-border-ghost)' }}>
             {filtered.length === 0 ? (
@@ -318,11 +341,16 @@ export function ModelSelector({
                 }
                 if (entry.kind === 'managed') {
                   const allowance = costs?.allowance ?? null
+                  // A remaining balance that cannot fit even one typical
+                  // question is EXPLAINED — never silently substituted.
+                  const cannotFit = allowance != null && allowance.estimatedQuestionsRemaining === 0
                   const subline = !entry.source.available
                     ? entry.source.unavailableReason ?? 'Unavailable right now.'
-                    : allowance
-                      ? `$${allowance.remainingUsd.toFixed(2)} left${allowance.estimatedQuestionsRemaining != null ? ` · about ${allowance.estimatedQuestionsRemaining} questions` : ''}`
-                      : 'Included in your plan'
+                    : cannotFit
+                      ? `$${allowance.remainingUsd.toFixed(2)} left — not enough for a typical question until the allowance resets`
+                      : allowance
+                        ? `$${allowance.remainingUsd.toFixed(2)} left${allowance.estimatedQuestionsRemaining != null ? ` · about ${allowance.estimatedQuestionsRemaining} questions` : ''}`
+                        : 'Included in your plan'
                   return (
                     <div key="managed">
                       <div style={{ padding: '11px 10px 4px', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--color-text-tertiary)' }}>

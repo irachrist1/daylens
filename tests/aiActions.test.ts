@@ -161,3 +161,29 @@ test('the widget gate never proposes sensitive facts and keeps deletes actionabl
     db.close()
   }
 })
+
+test('a rename preview whose target changed EXPIRES instead of applying (DEV-200)', () => {
+  const db = createProductionTestDatabase()
+  try {
+    // The previewed block no longer exists (merged away, re-corrected, or the
+    // day was rebuilt): confirming the stale card must apply NOTHING.
+    const result = commitAction(db, {
+      kind: 'rename_block',
+      proposalId: 'prop-stale-1',
+      surface: 'card',
+      confirmLabel: 'Rename block',
+      blockId: 'block-that-vanished',
+      date: '2026-07-14',
+      previousLabel: 'Deep work',
+      nextLabel: 'Networking',
+      timeRange: '2:00–5:30pm',
+    })
+    assert.equal(result.ok, false)
+    assert.match(result.error ?? '', /changed since this preview/i)
+    // Nothing was written for the phantom target.
+    const overrides = db.prepare('SELECT COUNT(*) AS n FROM block_label_overrides').get() as { n: number }
+    assert.equal(overrides.n, 0)
+  } finally {
+    db.close()
+  }
+})
