@@ -32,7 +32,7 @@ import {
   getIgnoredBlockSpansForRange,
   type CorrectionSpan,
 } from './activityFacts'
-import { resolveMergeChain, type EntityRow } from './entities/entityRepository'
+import { mergeGroupIds, resolveMergeChain, type EntityRow } from './entities/entityRepository'
 
 /** Bump to force a full reindex on upgrade (the version is part of every
  *  day fingerprint, so stale-format days re-project lazily). */
@@ -202,6 +202,30 @@ function applyAttributionTags(
   }
 }
 
+// ─── Scheduled context vs an attended meeting ────────────────────────────────
+// connectors.md §Google Calendar: "A calendar event is scheduled context. It
+// becomes evidence that a meeting occurred only when device activity, call
+// presence, Granola, transcript, or explicit confirmation supports that
+// interpretation." A calendar-shaped evidence ref — the local calendar day
+// signal, a connector's calendar ledger ref, or a calendar_event envelope —
+// is a SCHEDULE claim; anything else (meeting notes, meeting_record
+// envelopes, any future observed source) supports occurrence.
+function isScheduleShapedRef(ref: { source_type: string; source_id: string }): boolean {
+  if (ref.source_type === 'connector') return true
+  if (ref.source_type === 'connected_envelope') return ref.source_id.startsWith('calendar_event:')
+  if (ref.source_type === 'external_signal') return ref.source_id.endsWith(':calendar')
+  return false
+}
+
+function meetingHasOccurrenceSupport(db: Database.Database, survivorId: string): boolean {
+  const groupIds = mergeGroupIds(db, survivorId)
+  const marks = groupIds.map(() => '?').join(', ')
+  const refs = db.prepare(
+    `SELECT source_type, source_id FROM entity_evidence_refs WHERE entity_id IN (${marks})`,
+  ).all(...groupIds) as Array<{ source_type: string; source_id: string }>
+  return refs.some((ref) => !isScheduleShapedRef(ref))
+}
+
 function meetingRecords(
   db: Database.Database,
   fromMs: number,
@@ -249,7 +273,12 @@ function meetingRecords(
       id: newRecordId(),
       kind: 'meeting',
       memoryType: 'connected',
-      statement: `Meeting: ${survivor.canonical_name}`,
+      // Scheduled context stays LABELED as scheduled everywhere the statement
+      // surfaces (search results, context packets, agent answers) until some
+      // non-calendar evidence supports that the meeting actually happened.
+      statement: meetingHasOccurrenceSupport(db, survivorId)
+        ? `Meeting: ${survivor.canonical_name}`
+        : `Scheduled: ${survivor.canonical_name} (calendar event — not confirmed attended)`,
       // Entity-named: found via canonical name + aliases at query time.
       exactText: '',
       startMs: row.span_start_ms,
