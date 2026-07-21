@@ -32,19 +32,31 @@ const _crashTimes: number[] = []
 function resolveWorkerPaths():
   | { serverPath: string; execArgv: string[] }
   | null {
-  const root = app.getAppPath()
-
   if (app.isPackaged) {
-    const bundlePath = path.join(root, 'dist', 'range-worker', 'index.cjs')
+    const bundlePath = path.join(app.getAppPath(), 'dist', 'range-worker', 'index.cjs')
     if (fs.existsSync(bundlePath)) return { serverPath: bundlePath, execArgv: [] }
     return null
   }
 
-  // Development: TypeScript source through the shared subprocess loader.
-  const loaderPath = path.join(root, 'packages', 'mcp-server', 'loader.mjs')
-  const serverPath = path.join(root, 'packages', 'range-worker', 'src', 'index.ts')
-  if (!fs.existsSync(loaderPath) || !fs.existsSync(serverPath)) return null
-  return { serverPath, execArgv: ['--loader', `file://${loaderPath}`] }
+  // Unpackaged, getAppPath() depends on how the app was started: the project
+  // root under electron-forge, but the main bundle's own directory when
+  // launched as `electron dist/main/main.js`. Try both roots (__dirname is
+  // <root>/dist/main or <root>/.vite/build — two levels down either way),
+  // preferring TypeScript source through the shared subprocess loader, with
+  // the compiled bundle as fallback.
+  const roots = [...new Set([app.getAppPath(), path.resolve(__dirname, '..', '..')])]
+  for (const root of roots) {
+    const loaderPath = path.join(root, 'packages', 'mcp-server', 'loader.mjs')
+    const serverPath = path.join(root, 'packages', 'range-worker', 'src', 'index.ts')
+    if (fs.existsSync(loaderPath) && fs.existsSync(serverPath)) {
+      return { serverPath, execArgv: ['--loader', `file://${loaderPath}`] }
+    }
+  }
+  for (const root of roots) {
+    const bundlePath = path.join(root, 'dist', 'range-worker', 'index.cjs')
+    if (fs.existsSync(bundlePath)) return { serverPath: bundlePath, execArgv: [] }
+  }
+  return null
 }
 
 function workerDisabled(): boolean {
