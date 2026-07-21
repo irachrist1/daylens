@@ -154,6 +154,7 @@ import { reconcileOnboardingState } from './services/onboarding'
 import { shouldStartTrackingForSettings } from './lib/onboardingState'
 import { assertIsolatedRealDayUserData, isRealDayHarness } from './lib/realDayHarness'
 import { resolvePreloadPath } from './lib/preloadPath'
+import { isAllowedExternalUrl } from './lib/externalUrlPolicy'
 import { IPC } from '@shared/types'
 import { grantedCaptureConsent, declinedCaptureConsent } from '@shared/captureConsent'
 import {
@@ -1062,13 +1063,8 @@ function createWindow(): BrowserWindow {
 
 // Shell — open external URLs safely (renderer cannot call shell.openExternal directly)
 ipcMain.on('shell:open-external', (_e, url: string) => {
-  try {
-    const parsed = new URL(url)
-    if (!REAL_DAY_HARNESS && parsed.protocol === 'https:') {
-      void shell.openExternal(url)
-    }
-  } catch {
-    // Ignore malformed URLs
+  if (!REAL_DAY_HARNESS && isAllowedExternalUrl(url)) {
+    void shell.openExternal(url)
   }
 })
 
