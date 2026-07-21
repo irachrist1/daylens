@@ -59,6 +59,7 @@ Contributors should also read [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](
 | [Screen context](docs/specs/screen-context.md)                           | Opt-in sampled-frame experiment, extraction, deletion, and evaluation           |
 | [Memory and entities](docs/specs/memory-and-entities.md)                 | Search, memory types, entity identity, relationships, and conversational memory |
 | [Timeline](docs/specs/timeline.md)                                       | Calendar-like day reconstruction, meetings, evidence, and corrections           |
+| [Label voice](docs/specs/label-voice.md)                                 | The recorded, evaluatable rubric block labels are scored against                |
 | [Apps](docs/specs/apps.md)                                               | Day, week, and month application explanations and canonical totals              |
 | [AI agent](docs/specs/ai-agent.md)                                       | Voice, retrieval tools, sources, model choice, and Daylens actions              |
 | [Wrapped](docs/specs/wrapped.md)                                         | Day, week, month, and year recaps on shared facts, voice, and evidence          |

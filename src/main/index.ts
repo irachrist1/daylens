@@ -135,6 +135,10 @@ import { registerDistractionAlerterHandlers, resetDistractionStateOnResume, setD
 import { startExternalSignalCollection, stopExternalSignalCollection } from './services/externalSignals'
 import { startConnectorSyncSchedule, stopConnectorSyncSchedule } from './connectors/service'
 import { registerGoogleCalendarConnector } from './connectors/googleCalendar/adapter'
+import { registerOutlookCalendarConnector } from './connectors/outlookCalendar/adapter'
+import { registerGithubConnector } from './connectors/github/adapter'
+import { registerLinearConnector } from './connectors/linear/adapter'
+import { registerGranolaConnector } from './connectors/granola/adapter'
 import { registerConnectorHandlers } from './ipc/connectors.handlers'
 import { registerExportHandlers } from './ipc/export.handlers'
 import { registerScreenContextHandlers } from './ipc/screenContext.handlers'
@@ -1325,6 +1329,14 @@ app.whenReady()
     // DEV-188: the first real provider — registering flips google_calendar
     // from manifest-only to connectable in Settings → Connections.
     registerGoogleCalendarConnector()
+    // DEV-190: Outlook Calendar — Microsoft Graph on the same foundation.
+    registerOutlookCalendarConnector()
+    // DEV-191: GitHub — the code provider on the same foundation.
+    registerGithubConnector()
+    // DEV-192: Linear — the issues provider, personal-API-key authorized.
+    registerLinearConnector()
+    // DEV-193: Granola — the meetings provider, a local cache read.
+    registerGranolaConnector()
     registerConnectorHandlers()
     registerExportHandlers()
     registerScreenContextHandlers()

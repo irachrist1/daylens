@@ -51,7 +51,10 @@ function enrichmentFingerprint(enrichment: DayEnrichment | null | undefined): un
     },
     meetings: enrichment.meetings && {
       count: enrichment.meetings.count,
-      items: enrichment.meetings.items.map((i) => [i.title?.toLowerCase() ?? '', i.scheduled]),
+      // DEV-189: bucket counts + per-item attendance are facts of the day —
+      // a match appearing or dissolving (a correction) reflows the wrap.
+      buckets: [enrichment.meetings.matched, enrichment.meetings.calendarOnly, enrichment.meetings.capturedOnly],
+      items: enrichment.meetings.items.map((i) => [i.title?.toLowerCase() ?? '', i.scheduled ?? '', i.observed ?? '', i.attendance]),
     },
     focus: enrichment.focusSessions && [enrichment.focusSessions.tool, enrichment.focusSessions.sessions, enrichment.focusSessions.focused],
     // notes connector: fingerprint the meeting notes so a changed note reflows the wrap.
@@ -74,7 +77,14 @@ export function enrichmentAllowedCounts(enrichment: DayEnrichment | null | undef
   let prTotal = 0
   for (const p of enrichment.shipped?.pullRequests ?? []) { counts.add(`prs:${p.count}`); prTotal += p.count }
   if (prTotal > 0) counts.add(`prs:${prTotal}`)
-  if (enrichment.meetings) counts.add(`meetings:${enrichment.meetings.count}`)
+  if (enrichment.meetings) {
+    counts.add(`meetings:${enrichment.meetings.count}`)
+    // The bucket counts are legitimate meeting counts too ("two of the three
+    // on your calendar actually happened").
+    for (const bucket of [enrichment.meetings.matched, enrichment.meetings.calendarOnly, enrichment.meetings.capturedOnly]) {
+      if (bucket > 0) counts.add(`meetings:${bucket}`)
+    }
+  }
   if (enrichment.focusSessions) counts.add(`sessions:${enrichment.focusSessions.sessions}`)
   return counts
 }
@@ -236,7 +246,7 @@ function enrichmentDirectives(enrichment: DayEnrichment | null | undefined): str
     out.push('When "shipped" is present it is one of the day\'s headlines, not a footnote: name what actually got finished plainly in at least one prominent place (the headline read, the story beat it happened in, or the reflection). Confirmed output is the most satisfying true thing a recap can say; say it where it lands.')
   }
   if (enrichment.meetings) {
-    out.push('"meetings" tells you what the day\'s CALENDAR held, not what was attended. You may say how many events the calendar had (meetings.count) and name one by the title in meetings.items when it reads like a meeting, always anchored to the calendar ("your calendar had the design review"), never as attendance ("you attended", "you sat through", "you went to"). Never state an attendee count. The meetings slide\'s big number is time observed in meeting apps, the only evidence the person was actually IN a call; a meeting\'s "scheduled" length is a different fact. You may cite ONE meeting\'s scheduled length as color, copied exactly, but never add scheduled lengths together, never present their sum as the slide\'s number, and never claim a meeting total that disagrees with that card.')
+    out.push('"meetings" is the day\'s honest meeting report. Every item carries an "attendance" flag and you MUST respect it. "matched": the calendar event has real meeting-app evidence behind it — you may say the meeting happened and use its title naturally ("the design review ran 52m of call time"). "captured_only": real time in a meeting app with NO calendar event — a meeting that happened; name it by the app in its title ("a Zoom call") and its observed length, never invent a subject for it. "calendar_only": a calendar entry with NO evidence it happened — scheduled context ONLY, anchored to the calendar ("your calendar had the design review"), NEVER as attendance ("you attended", "you sat through", "you went to") and never as work done. meetings.count is the total across all three; meetings.matched / meetings.calendarOnly / meetings.capturedOnly are the per-bucket counts and you may cite them ("two of the three on your calendar actually happened"). Never state an attendee count. An item\'s "scheduled" length is the calendar\'s plan and its "observed" length is measured meeting-app time — different facts; copy either exactly, never add lengths together, and never claim a meeting total that disagrees with the meetings slide\'s own card.')
     // event-type inference: each item carries a `type` + `confidence` (Daylens's
     // own read of what the event was). High confidence unlocks richer phrasing;
     // low confidence or 'generic' stays literal. Never invent a type, never

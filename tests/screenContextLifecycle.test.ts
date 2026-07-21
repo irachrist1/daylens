@@ -155,7 +155,7 @@ function makeHarness(extractor: ScreenFrameExtractor, startMs = Date.now()): Har
 
 // ─── Schema ───────────────────────────────────────────────────────────────────
 
-test('v62 creates the frame ledger and evidence store', () => {
+test('v60 creates the frame ledger and evidence store', () => {
   const db = createProductionTestDatabase()
   const tables = db.prepare(
     `SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'screen_context_%' ORDER BY name`,

@@ -842,7 +842,7 @@ const MEMORY_RECORD_CORRECTION_FILTERS = `
 
 interface MemoryMomentRow {
   id: number
-  record_kind: 'session' | 'meeting' | 'artifact' | 'supplied_fact'
+  record_kind: 'session' | 'meeting' | 'artifact' | 'supplied_fact' | 'connected_activity'
   memory_type: SearchSourceType
   app_bundle_id: string | null
   app_name: string | null
@@ -855,12 +855,22 @@ interface MemoryMomentRow {
   excerpt: string | null
 }
 
+// Connected repository-activity statements name their provider up front
+// ("GitHub: merged pull request …"); the prefix becomes the honest result
+// label so connected context is never mistaken for captured activity.
+function connectedActivityLabel(statement: string): string {
+  const separator = statement.indexOf(':')
+  return separator > 0 ? statement.slice(0, separator) : 'Connected source'
+}
+
 function mapMemoryMomentRow(row: MemoryMomentRow): SessionSearchResult {
   // Entity-named records (meetings, adopted artifacts) show the entity's
   // CURRENT canonical name — a rename reaches search results without reindex.
   const displayTitle = row.record_kind === 'session'
     ? row.title
-    : (row.primary_name ?? row.title ?? row.statement)
+    : row.record_kind === 'connected_activity'
+      ? (row.title ?? row.statement)
+      : (row.primary_name ?? row.title ?? row.statement)
   const appName = row.record_kind === 'session'
     ? resolveDisplayName(row.app_bundle_id ?? '', row.app_name ?? 'Unknown app')
     // A calendar event is scheduled context, not an attended meeting, until
@@ -868,7 +878,9 @@ function mapMemoryMomentRow(row: MemoryMomentRow): SessionSearchResult {
     // index states the distinction in the record statement; search results
     // and context packets keep it visible.
     : row.record_kind === 'meeting' ? (row.statement.startsWith('Scheduled:') ? 'Scheduled meeting' : 'Meeting')
-      : row.record_kind === 'supplied_fact' ? 'You told Daylens' : 'File'
+      : row.record_kind === 'supplied_fact' ? 'You told Daylens'
+        : row.record_kind === 'connected_activity' ? connectedActivityLabel(row.statement)
+          : 'File'
   return {
     type: 'session',
     id: row.id,

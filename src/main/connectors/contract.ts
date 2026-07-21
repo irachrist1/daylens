@@ -113,12 +113,42 @@ export interface ConnectorDaySignalEvent {
   attendeeCount: number | null
 }
 
+/** Optional per-day git projection so repository activity also lands in the
+ *  external_signals 'git' day layer that briefs/wraps/enrichment already read.
+ *  A record carries at most ONE contribution: a commit line or a PR entry. */
+export interface ConnectorGitDaySignal {
+  date: string
+  /** Repository short name — never a path or a URL. */
+  repo: string
+  /** Commit subject line + local clock, merged into the repo's day entry. */
+  commit?: { message: string; clock: string }
+  /** Pull-request entry, merged by (title, repo). */
+  pr?: { title: string; state: string }
+}
+
+/** Optional per-day meeting-notes projection so a notes source also lands in
+ *  the external_signals 'notes' day layer (MeetingNotesSignal) that the wrap
+ *  enrichment already reads. Minimized by construction: participant FIRST
+ *  NAMES only, short capped note lines, never a transcript. */
+export interface ConnectorNotesDaySignal {
+  date: string
+  title: string
+  /** Participant first names only — never emails, never surnames. */
+  participants: string[]
+  /** The person's recorded note lines / action items, capped and short. */
+  actionItems: string[]
+  /** 24-hour local start clock ("14:30") when the note has one. */
+  scheduledClock: string | null
+}
+
 /** One normalized record: provenance + the connected-source entity envelope
  *  the entity repository already accepts (the shape batch 7's fixtures use). */
 export interface ConnectorRecordEnvelope {
   provenance: ConnectorProvenance
   entity: ConnectedEnvelope
   daySignal?: ConnectorDaySignalEvent
+  gitSignal?: ConnectorGitDaySignal
+  notesSignal?: ConnectorNotesDaySignal
 }
 
 export interface ConnectorSyncPage {
@@ -145,6 +175,11 @@ export interface ConnectorConnectInput {
    *  (e.g. { filePath } for the .ics connector). OAuth flows exchange and
    *  store their token via ./credentials.ts and keep config clean. */
   config: Record<string, unknown>
+  /** Plain-language, credential-free authorization guidance for the person
+   *  ("Enter code ABCD-1234 at github.com/login/device"). Device-style flows
+   *  MUST surface their user code through this — it is the only channel that
+   *  reaches Settings while connect() is still running. */
+  onNotice?: (notice: string) => void
 }
 
 export interface ConnectorConnectResult {
@@ -210,6 +245,7 @@ export function validateConnectorManifest(manifest: ConnectorManifest): string[]
 // titles, names, labels — is scanned.
 const IDENTITY_KEYS = new Set([
   'sourceEventId', 'sourceRecordId', 'sourceDocumentId', 'sourceMessageId', 'connectorId',
+  'sourceIssueId', 'sourceProjectId',
 ])
 
 function collectStrings(value: unknown, out: string[], depth = 0): void {
@@ -246,6 +282,8 @@ export function validateRecordEnvelope(record: ConnectorRecordEnvelope): string[
   const strings: string[] = []
   collectStrings(record?.entity, strings)
   if (record?.daySignal) collectStrings(record.daySignal, strings)
+  if (record?.gitSignal) collectStrings(record.gitSignal, strings)
+  if (record?.notesSignal) collectStrings(record.notesSignal, strings)
   for (const text of strings) {
     if (containsCredential(text)) {
       problems.push(`credential-shaped content (${findCredentialPattern(text)}) — record quarantined`)
@@ -261,6 +299,7 @@ const CONNECTED_ENVELOPE_TO_EVIDENCE_KIND: Record<ConnectedEnvelope['kind'], Con
   calendar_event: 'calendar_event',
   meeting_record: 'meeting_record',
   repository_activity: 'repository_activity',
+  issue_activity: 'issue_activity',
   document_reference: 'document_reference',
   message_reference: 'message_reference',
 }

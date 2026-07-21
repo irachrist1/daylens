@@ -48,6 +48,14 @@ import {
   restoreEntityCorrectionSnapshot,
 } from './entities/entityCorrections'
 import { refreshMemoryIndexForDay } from './memoryIndex'
+import {
+  deleteMeetingAttendanceMark,
+  isMeetingAttendanceStatus,
+  meetingEntityIdForScheduledEvent,
+  scheduledEventKey,
+  upsertMeetingAttendanceMark,
+} from './meetingResolution'
+import { addEntityEvidenceRef } from './entities/entityRepository'
 
 const MIN_SPLIT_EDGE_MS = 60_000
 
@@ -76,11 +84,26 @@ interface LedgerSnapshot {
     decision_source: string | null
     confidence: number | null
   }>
+  /** DEV-189 attendance marks for the date. Optional — snapshots written
+   *  before mark-meeting existed restore without them. */
+  meetingMarks?: Array<Record<string, unknown>>
+  /** The user_confirmation occurrence refs the date's marks created. */
+  meetingConfirmationRefs?: Array<Record<string, unknown>>
 }
 
 function blockIdsOf(command: CorrectionCommand): string[] {
   if (command.kind === 'merge') return command.blockIds
+  // A scheduled meeting is addressed by its calendar identity, not a block —
+  // a calendar-only event has no block to point at.
+  if (command.kind === 'mark-meeting') return []
   return [command.blockId]
+}
+
+/** The day-local ledger identity of the command's scheduled meeting. */
+function meetingEventKeyOf(command: Extract<CorrectionCommand, { kind: 'mark-meeting' }>): string {
+  const [dayStartMs] = localDayBounds(command.date)
+  const minutes = Math.round((command.meeting.startMs - dayStartMs) / 60_000)
+  return scheduledEventKey(minutes, command.meeting.title)
 }
 
 function resolveCommand(
@@ -107,6 +130,17 @@ function resolveCommand(
     const ref = command.evidence
     const identity = ref.kind === 'site' ? ref.domain?.trim() : (ref.bundleId ?? ref.appName)?.trim()
     if (!identity) throw new Error('Nothing to exclude.')
+  }
+  if (command.kind === 'mark-meeting') {
+    if (!command.meeting.title.trim()) throw new Error('The meeting has no title to address.')
+    if (command.status !== null && !isMeetingAttendanceStatus(command.status)) {
+      throw new Error('A meeting can be marked attended, skipped, moved, or unrelated.')
+    }
+    const exists = (payload.scheduledMeetings ?? []).some((meeting) =>
+      meeting.title === command.meeting.title && meeting.startMs === command.meeting.startMs)
+    if (!exists) {
+      throw new Error('That scheduled meeting is not on this day anymore — the calendar may have just re-synced. Reopen the day and try again.')
+    }
   }
   return { payload, blocks }
 }
@@ -164,6 +198,15 @@ function describeCommand(
       return project
         ? `Assign "${label(blocks[0])}" to ${name} · ${project}`
         : `Assign "${label(blocks[0])}" to ${name}`
+    }
+    case 'mark-meeting': {
+      if (command.status === null) return `Clear the attendance mark on "${command.meeting.title}"`
+      const verb = command.status === 'attended'
+        ? 'attended'
+        : command.status === 'skipped'
+          ? 'skipped'
+          : command.status === 'moved' ? 'moved' : 'unrelated to your day'
+      return `Mark "${command.meeting.title}" as ${verb}`
     }
   }
 }
@@ -252,6 +295,33 @@ function applyCommandToLedger(
       }
       return
     }
+    case 'mark-meeting': {
+      const eventKey = meetingEventKeyOf(command)
+      if (command.status === null) {
+        deleteMeetingAttendanceMark(db, { date: command.date, eventKey })
+      } else {
+        upsertMeetingAttendanceMark(db, { date: command.date, eventKey, status: command.status })
+      }
+      // Search/agent propagation: an 'attended' mark is explicit confirmation
+      // (connectors.md §Google Calendar), recorded as a user_confirmation
+      // occurrence ref on the meeting entity — the memory index upgrades the
+      // record from "Scheduled: …" to "Meeting: …" on the refresh applyCorrection
+      // already runs. Any other status (or clearing) removes that support.
+      const refSourceId = `meeting-mark:${command.date}:${eventKey}`
+      db.prepare(`DELETE FROM entity_evidence_refs WHERE source_type = 'user_confirmation' AND source_id = ?`)
+        .run(refSourceId)
+      if (command.status === 'attended') {
+        const entityId = meetingEntityIdForScheduledEvent(db, command.date, eventKey)
+        if (entityId) {
+          addEntityEvidenceRef(db, entityId, {
+            sourceType: 'user_confirmation',
+            sourceId: refSourceId,
+            spanStartMs: command.meeting.startMs,
+          })
+        }
+      }
+      return
+    }
   }
 }
 
@@ -293,7 +363,20 @@ function captureSnapshot(
     `).all(...workSessions.map((session) => session.id)) as LedgerSnapshot['segmentAttributions']
   }
 
-  return { affectedBlockIds, reviews, boundary, labelOverrides, exclusions, workSessions, segmentAttributions }
+  // DEV-189 attendance marks + the occurrence refs they created. Snapshot by
+  // date so undo restores exactly the day's mark state (best-effort SELECTs:
+  // a pre-migration database simply has no table yet).
+  let meetingMarks: Array<Record<string, unknown>> = []
+  let meetingConfirmationRefs: Array<Record<string, unknown>> = []
+  try {
+    meetingMarks = db.prepare(`SELECT * FROM meeting_attendance_marks WHERE date = ?`)
+      .all(command.date) as Array<Record<string, unknown>>
+    meetingConfirmationRefs = db.prepare(
+      `SELECT * FROM entity_evidence_refs WHERE source_type = 'user_confirmation' AND source_id LIKE ?`,
+    ).all(`meeting-mark:${command.date}:%`) as Array<Record<string, unknown>>
+  } catch { /* pre-migration database */ }
+
+  return { affectedBlockIds, reviews, boundary, labelOverrides, exclusions, workSessions, segmentAttributions, meetingMarks, meetingConfirmationRefs }
 }
 
 function restoreRows(
@@ -323,6 +406,17 @@ function restoreSnapshot(db: Database.Database, dateStr: string, snapshot: Ledge
   restoreRows(db, 'timeline_boundary_corrections', snapshot.boundary)
   restoreRows(db, 'block_label_overrides', snapshot.labelOverrides)
   restoreRows(db, 'evidence_exclusions', snapshot.exclusions)
+  // Attendance marks: older snapshots (before mark-meeting) carry no fields
+  // and must not wipe the ledger they never captured.
+  if (snapshot.meetingMarks || snapshot.meetingConfirmationRefs) {
+    try {
+      db.prepare(`DELETE FROM meeting_attendance_marks WHERE date = ?`).run(dateStr)
+      db.prepare(`DELETE FROM entity_evidence_refs WHERE source_type = 'user_confirmation' AND source_id LIKE ?`)
+        .run(`meeting-mark:${dateStr}:%`)
+      restoreRows(db, 'meeting_attendance_marks', snapshot.meetingMarks ?? [])
+      restoreRows(db, 'entity_evidence_refs', snapshot.meetingConfirmationRefs ?? [])
+    } catch { /* pre-migration database */ }
+  }
   for (const session of snapshot.workSessions) {
     // Attribution ids churn on reprojection; a vanished session simply has
     // nothing to restore.
@@ -427,6 +521,16 @@ function surfaceNotes(
         notes.push(`Time in "${blocks[0].label.current}" counts toward ${name} · ${project} in client rollups and reports.`)
       } else {
         notes.push(`Time in "${blocks[0].label.current}" counts toward ${name} in client rollups and reports.`)
+      }
+      break
+    }
+    case 'mark-meeting': {
+      if (command.status === 'attended') {
+        notes.push(`"${command.meeting.title}" counts as attended on the Timeline, in the day's wrap, in search, and in AI answers. No minutes are invented — observed time still comes only from real activity.`)
+      } else if (command.status === null) {
+        notes.push(`"${command.meeting.title}" goes back to what the evidence alone supports, everywhere.`)
+      } else {
+        notes.push(`"${command.meeting.title}" stays scheduled context only — never attended work. Any meeting-app time near it stands on its own. Timeline, wrap, search, and AI answers follow.`)
       }
       break
     }

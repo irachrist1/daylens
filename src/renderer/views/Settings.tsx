@@ -1488,7 +1488,7 @@ function BillingPage({
           name="Free credit"
           active={mode === 'free_credit'}
           blurb={mode === 'free_credit'
-            ? `$${(access?.creditRemainingUsd ?? 0).toFixed(2)} of your $5 credit remains. No card and no provider key.`
+            ? `$${(access?.creditRemainingUsd ?? 0).toFixed(2)} of your $5 credit remains${access?.estimatedQuestionsRemaining != null ? ` — about ${access.estimatedQuestionsRemaining} questions` : ''}. No card and no provider key.`
             : '$5 of AI on us when you start — no card, no key. It is granted once per person.'}
         />
         <PlanCard
@@ -1846,8 +1846,20 @@ function UsagePage() {
   const onDemandSpend = access?.mode === 'own_key' ? totalSpend : paidSpend
   const totalTokens = report?.totalTokens ?? 0
   const showCardLoading = initialLoading && !report
+  // Allowance reads in money and estimated questions; raw tokens stay last.
+  const remainingAllowanceUsd = access?.mode === 'free_credit'
+    ? access.creditRemainingUsd
+    : access?.mode === 'subscription' || access?.mode === 'local_pass'
+      ? access.fairUseRemainingUsd
+      : null
   const summaryCards: Array<[string, string]> = [
     ['Total spend', formatSpend(totalSpend)],
+    ...(access?.managed && remainingAllowanceUsd != null
+      ? [[
+          'Remaining allowance',
+          `${formatSpend(remainingAllowanceUsd)}${access.estimatedQuestionsRemaining != null ? ` · ≈${access.estimatedQuestionsRemaining} questions` : ''}`,
+        ] as [string, string]]
+      : []),
     ['Included', formatSpend(includedSpend)],
     ['On-demand', formatSpend(onDemandSpend)],
     ['Total tokens', formatTokens(totalTokens)],

@@ -33,8 +33,12 @@ export function registerConnectorHandlers(): void {
       return await connectConnector(getDb(), connectorId, config ?? {}, {
         // Honest progress for the bounded initial import: the renderer shows
         // "waiting for your browser" vs "importing your history" truthfully.
-        onProgress: (phase) => {
-          try { event.sender.send(IPC.CONNECTORS.PROGRESS, { connectorId, phase }) } catch { /* window gone */ }
+        onProgress: (phase, notice) => {
+          // The notice is authorization guidance (a device flow's "enter this
+          // code" prompt) — belt and suspenders keeps anything
+          // credential-shaped from crossing to the renderer.
+          const safeNotice = notice && !containsCredential(notice) ? notice : undefined
+          try { event.sender.send(IPC.CONNECTORS.PROGRESS, { connectorId, phase, notice: safeNotice }) } catch { /* window gone */ }
         },
       })
     } catch (error) {

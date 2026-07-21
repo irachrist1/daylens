@@ -32,6 +32,13 @@ import {
 } from '../../src/renderer/lib/dayWrapScenes.ts'
 import { planDayWrapSlides, resolveSlideLine } from '../../src/renderer/lib/wrapDeck.ts'
 import { humanizeTitle } from '../../src/shared/humanize.ts'
+import {
+  evaluateLabelVoice,
+  labelVoiceContextForBlock,
+  rawLabelForm,
+  summarizeLabelVoice,
+  type LabelVoiceSummary,
+} from '../../src/shared/labelVoice.ts'
 import { inferWorkIntent } from '../../src/shared/workIntent.ts'
 import { effectiveBlockKind, type WorkKind } from '../../src/shared/workKind.ts'
 import { blockActiveSeconds } from '../../src/shared/blockDuration.ts'
@@ -89,6 +96,9 @@ interface FixtureResult {
   wrapGroundingIssues: string[]
   boundaryIssues: string[]
   designIssues: string[]
+  labelVoice: LabelVoiceSummary
+  labelVoiceInvariantIssues: string[]
+  labelVoiceTargetIssues: string[]
   factsIssues: string[]
   privacyIssues: string[]
   mutationIssues: string[]
@@ -891,22 +901,9 @@ function checkWrapGrounding(facts: DayWrapFacts, payload: DayTimelinePayload): s
 // unless it actually verifies the design held — gates have passed before while
 // the product regressed. These checks make a green run mean the design is met:
 // kind correctness, no dev apps inside a leisure episode, and humanized titles.
+// Label-shaped invariants (raw machine forms, leisure activity shape, jargon,
+// judgment) live in the shared label-voice rubric and are enforced below.
 const NATIVE_WORK_CATEGORIES = new Set<AppCategory>(['development', 'aiTools', 'writing', 'design'])
-// Data/office files (and underscore-mangled names) must be humanized before they
-// reach the UI. Clean code paths ("run.ts", "src/.../Insights.tsx") are
-// developer-readable and intentionally allowed.
-const RAW_FILENAME_PATTERN = /\.(ipynb|pdf|docx?|xlsx?|pptx?|csv|key|numbers|pages)\b/i
-const RAW_URL_PATTERN = /https?:\/\//i
-const FILENAME_UNDERSCORE_PATTERN = /[a-z0-9]_[a-z0-9]/i
-
-function titleLooksRaw(value: string | null | undefined): string | null {
-  const text = (value ?? '').trim()
-  if (!text) return null
-  if (RAW_FILENAME_PATTERN.test(text)) return 'file extension'
-  if (RAW_URL_PATTERN.test(text)) return 'raw URL'
-  if (FILENAME_UNDERSCORE_PATTERN.test(text)) return 'underscore filename'
-  return null
-}
 
 // The wrap must never contradict itself, scold, invent, or assign homework.
 // These guard known wrap defects directly so a green run means the cards
@@ -989,18 +986,11 @@ function designInvariantIssues(
           `leisure ${formatRange(actual.startTime, actual.endTime)} contains work apps: ${workApps.join(', ')}`,
         )
       }
-      // A leisure label must be activity-shaped, never a raw page/video title.
-      if (!/^(watching|on |listening|browsing)/i.test(actual.label)) {
-        issues.push(
-          `leisure ${formatRange(actual.startTime, actual.endTime)} label "${actual.label}" is not activity-shaped`,
-        )
-      }
     }
 
-    // 3. No raw filename / URL may reach a user-facing label or subject.
-    const labelRaw = titleLooksRaw(actual.label)
-    if (labelRaw) issues.push(`unhumanized label "${actual.label}" (${labelRaw})`)
-    const subjectRaw = titleLooksRaw(actual.subject)
+    // 3. No raw machine form may reach a user-facing intent subject. The
+    //    label-side counterpart is the label-voice rubric, enforced separately.
+    const subjectRaw = actual.subject ? rawLabelForm(actual.subject) : null
     if (subjectRaw) issues.push(`unhumanized subject "${actual.subject}" (${subjectRaw})`)
   }
 
@@ -1057,6 +1047,29 @@ async function evaluateFixture(fixture: TimelineFixture): Promise<FixtureResult>
       ...wrapDesignIssues(facts, texts, actualBlocks),
     ]
 
+    // Every produced label is scored against the recorded label-voice rubric.
+    // Invariant-tier failures are enforced like the other design invariants;
+    // target-tier misses are reported so the gap between deterministic fallback
+    // labels and the final voice stays visible per fixture.
+    const labelEvaluations = actualBlocks.map((actual) => ({
+      label: actual.label,
+      findings: evaluateLabelVoice(
+        actual.label,
+        labelVoiceContextForBlock(actual.block, actual.kind),
+      ),
+    }))
+    const labelVoice = summarizeLabelVoice(labelEvaluations)
+    const labelVoiceInvariantIssues: string[] = []
+    const labelVoiceTargetIssues: string[] = []
+    actualBlocks.forEach((actual, index) => {
+      for (const finding of labelEvaluations[index].findings) {
+        if (finding.passed) continue
+        const line = `${finding.rule}: ${formatRange(actual.startTime, actual.endTime)} "${actual.label}" — ${finding.detail}`
+        if (finding.tier === 'invariant') labelVoiceInvariantIssues.push(line)
+        else labelVoiceTargetIssues.push(line)
+      }
+    })
+
     const segmentationTotal = episodes.length
     const segmentationPassed = episodes.filter(
       (episode) =>
@@ -1092,6 +1105,9 @@ async function evaluateFixture(fixture: TimelineFixture): Promise<FixtureResult>
       wrapGroundingIssues: wrapGrounding,
       boundaryIssues,
       designIssues,
+      labelVoice,
+      labelVoiceInvariantIssues,
+      labelVoiceTargetIssues,
       factsIssues: factsResult.issues,
       privacyIssues,
       mutationIssues,
@@ -1174,6 +1190,10 @@ function formatFixture(result: FixtureResult): string {
       `unsupported claims ${result.unsupportedWrapClaims.length === 0 ? 'none' : result.unsupportedWrapClaims.length}`,
   )
   lines.push(
+    `Label voice: ${result.labelVoice.labelsMeetingInvariants}/${result.labelVoice.labelsEvaluated} blocks meet the invariants, ` +
+      `${result.labelVoice.labelsMeetingTarget}/${result.labelVoice.labelsEvaluated} the full voice (docs/specs/label-voice.md)`,
+  )
+  lines.push(
     `Wrap facts: activities [${facts.workActivities.map((a) => `${a.name} ${formatDuration(a.seconds)}`).join(' | ') || 'none'}]; ` +
       `standout ${facts.standout ? `${facts.standout.name} ${formatDuration(facts.standout.seconds)}` : 'none'}; ` +
       `slices [${
@@ -1225,6 +1245,12 @@ function formatFixture(result: FixtureResult): string {
   }
   for (const issue of result.designIssues) {
     issueLines.push(`design: ${issue}`)
+  }
+  for (const issue of result.labelVoiceInvariantIssues) {
+    issueLines.push(`label voice invariant: ${issue}`)
+  }
+  for (const issue of result.labelVoiceTargetIssues) {
+    issueLines.push(`label voice target: ${issue}`)
   }
   for (const issue of result.factsIssues) {
     issueLines.push(`facts: ${issue}`)
@@ -1286,6 +1312,7 @@ function formatReport(results: FixtureResult[]): string {
     '',
     `Fixtures: ${results.length}`,
     `Overall score: segmentation ${total.segmentationPassed}/${total.segmentationTotal} | labels ${total.labelsPassed}/${total.labelsTotal} | intent ${total.rolesPassed}/${total.rolesTotal} | wraps ${total.wrapsPassed}/${total.wrapsTotal} | facts ${total.factsPassed}/${total.factsTotal}`,
+    `Label voice (docs/specs/label-voice.md): invariants ${results.reduce((sum, result) => sum + result.labelVoice.labelsMeetingInvariants, 0)}/${results.reduce((sum, result) => sum + result.labelVoice.labelsEvaluated, 0)} blocks | full voice ${results.reduce((sum, result) => sum + result.labelVoice.labelsMeetingTarget, 0)}/${results.reduce((sum, result) => sum + result.labelVoice.labelsEvaluated, 0)} blocks`,
     '',
     'This report compares editable offline fixtures against the current Daylens timeline, intent, and deterministic wrap logic.',
     '',
@@ -1333,6 +1360,19 @@ const designDefects = results.flatMap((result) =>
 )
 if (designDefects.length > 0) {
   console.error(`\nTarget-Design invariant violated:\n- ${designDefects.join('\n- ')}`)
+  process.exitCode = 1
+}
+
+// Label-voice invariants (always enforced): the recorded rubric's invariant
+// tier holds for every produced label, deterministic fallbacks included.
+// Target-tier misses are reported per fixture but do not fail the hermetic run
+// — reaching the full voice on thin evidence is the AI labeling path's job,
+// reviewed against the same rubric in the real-day review.
+const labelVoiceDefects = results.flatMap((result) =>
+  result.labelVoiceInvariantIssues.map((issue) => `${result.fixture.id}: ${issue}`),
+)
+if (labelVoiceDefects.length > 0) {
+  console.error(`\nLabel-voice invariant violated:\n- ${labelVoiceDefects.join('\n- ')}`)
   process.exitCode = 1
 }
 

@@ -2977,9 +2977,73 @@ const migrations: Migration[] = [
     },
   },
   {
+    version: 60,
+    description:
+      'GitHub connector (connectors.md §GitHub, DEV-191): widen the memory_records record_kind CHECK to admit connected_activity rows — the per-day projection of connector repository activity (commits, pull requests, reviews, issues) into searchable memory with connected origin. SQLite cannot alter a CHECK in place; projection rows are wiped and the table rebuilt — days re-project lazily through the fingerprint check and the background backfill. Supplied facts are re-mirrored from their canonical supplied_memory_facts store, so nothing explicitly confirmed is lost. LOCAL-ONLY, no sync-allowlist keys.',
+    up: () => {
+      const db = getDb()
+      const memoryRecordsSql = getTableSql('memory_records') ?? ''
+      if (!memoryRecordsSql || memoryRecordsSql.includes('connected_activity')) return
+      db.exec(`
+        DELETE FROM memory_record_vectors;
+        DELETE FROM memory_record_entities;
+        DELETE FROM memory_records;
+        DELETE FROM memory_index_days;
+        DROP TABLE memory_records;
+        CREATE TABLE memory_records (
+          id                TEXT PRIMARY KEY,
+          record_kind       TEXT NOT NULL CHECK(record_kind IN ('session', 'meeting', 'artifact', 'supplied_fact', 'connected_activity')),
+          memory_type       TEXT NOT NULL CHECK(memory_type IN ('observed', 'connected', 'supplied', 'inferred')),
+          statement         TEXT NOT NULL,
+          exact_text        TEXT NOT NULL DEFAULT '',
+          semantic_text     TEXT,
+          date              TEXT NOT NULL,
+          start_ms          INTEGER NOT NULL,
+          end_ms            INTEGER NOT NULL,
+          app_bundle_id     TEXT,
+          app_name          TEXT,
+          title             TEXT,
+          primary_entity_id TEXT,
+          source_refs_json  TEXT NOT NULL DEFAULT '[]',
+          confidence        TEXT NOT NULL DEFAULT 'observed',
+          provenance        TEXT NOT NULL DEFAULT 'capture',
+          sensitivity       TEXT NOT NULL DEFAULT 'standard' CHECK(sensitivity IN ('standard', 'personal', 'high')),
+          embedding_model   TEXT,
+          embedding_version INTEGER,
+          created_at        INTEGER NOT NULL,
+          deleted_at        INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_memory_records_date ON memory_records (date);
+        CREATE INDEX IF NOT EXISTS idx_memory_records_kind_start ON memory_records (record_kind, start_ms DESC);
+      `)
+      ensureMemorySearchSchema(db)
+      reconcileSuppliedMemoryRecords(db)
+    },
+  },
+  {
+    version: 61,
+    description:
+      'Meeting attendance marks (DEV-189, timeline.md §Meetings: "A person can mark a scheduled meeting as attended, skipped, moved, or unrelated"). The day-level meeting resolution (calendar-only / captured-only / matched buckets, issue #3) re-reads these on every projection, so a mark is durable correction data that survives restart, reprojection, and source refresh, and propagates to the Timeline day payload, the wrap enrichment, search (via the user_confirmation occurrence ref), and the agent meeting report. event_key is the scheduled event\'s day-local identity (minutes-into-day + normalized title) — stable across re-syncs. LOCAL-ONLY, no sync-allowlist keys.',
+    up: () => {
+      getDb().exec(`
+        CREATE TABLE IF NOT EXISTS meeting_attendance_marks (
+          id TEXT PRIMARY KEY,
+          date TEXT NOT NULL,
+          event_key TEXT NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('attended', 'skipped', 'moved', 'unrelated')),
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          UNIQUE (date, event_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_meeting_attendance_marks_date
+          ON meeting_attendance_marks (date);
+      `)
+    },
+  },
+  {
     version: 62,
     description:
-      'Screen-context experiment lifecycle (DEV-197): the durable frame ledger and derived-evidence store behind the opt-in screen-sampling experiment. screen_context_frames tracks every sampled frame through its one lifecycle (captured → extracting → indexed → safe_to_delete → deleted, with failed → quarantined on extraction failure) so the raw-deletion invariant — no raw file is deleted before its derived evidence is atomically committed, and no raw file outlives the 24-hour safety window unquarantined — survives restarts and crashes. screen_context_evidence holds the high-sensitivity derived records (title, short OCR spans, subject references, provenance bounding, model/schema versions, a one-way frame digest) and is LOCAL-ONLY: never synced, never exported, never fed to MCP or a model outside the experiment boundary. Raw frame bytes live encrypted on disk, never in the database. (Numbered v62: drafted as v60, renumbered at integration because the connector stack\'s GitHub memory_records widening shipped as v60 and meeting-attendance as v61 — merge the connector stack first; the runner tolerates the 59 -> 62 gap and never revisits versions below MAX(applied).)',
+      'Screen-context experiment lifecycle (DEV-197): the durable frame ledger and derived-evidence store behind the opt-in screen-sampling experiment. screen_context_frames tracks every sampled frame through its one lifecycle (captured → extracting → indexed → safe_to_delete → deleted, with failed → quarantined on extraction failure) so the raw-deletion invariant — no raw file is deleted before its derived evidence is atomically committed, and no raw file outlives the 24-hour safety window unquarantined — survives restarts and crashes. screen_context_evidence holds the high-sensitivity derived records (title, short OCR spans, subject references, provenance bounding, model/schema versions, a one-way frame digest) and is LOCAL-ONLY: never synced, never exported, never fed to MCP or a model outside the experiment boundary. Raw frame bytes live encrypted on disk, never in the database. (Numbered v62: drafted as v60 on the screen-context branch, renumbered at integration because the GitHub connector\'s memory_records widening shipped as v60 and meeting-attendance as v61 — merge the connector stack first; the runner never revisits versions below MAX(applied).)',
     up: () => {
       getDb().exec(`
         CREATE TABLE IF NOT EXISTS screen_context_frames (
@@ -3034,17 +3098,19 @@ const migrations: Migration[] = [
       `)
     },
   },
-  // Numbering note: v60 is the GitHub-connector memory_records widening and
-  // v61 the meeting-attendance marks (connector stack); the screen-context
-  // migration above — originally drafted as v60 — landed as v62, the slot
-  // once reserved for Linear + Granola, which shipped without a migration.
-  // Same rule as the v59 renumbering: the runner applies every array entry
-  // with version > MAX(applied), in array order, so ordered gaps are safe as
-  // long as versions stay strictly increasing in this array.
+  // Numbering note (integration of the connector stack and the screen/wrapped
+  // stack): v60 is the GitHub-connector memory_records widening and v61 the
+  // meeting-attendance marks (connector stack); the screen-context experiment
+  // migration — originally drafted as v60 on its own branch — landed as v62,
+  // the slot that had been reserved for Linear + Granola and went unused
+  // (Linear + Granola shipped without a migration). Same rule as the v59
+  // renumbering: the runner applies every array entry with version >
+  // MAX(applied), in array order, so any ordered gap is safe as long as
+  // versions stay strictly increasing in this array.
   {
     version: 63,
     description:
-      'Versioned day analysis (DEV-206): every AI analysis of a day — the day wrap narrative, the period wraps that contain it, and the timeline regroup/relabel run — is recorded as an append-only version row instead of silently replacing what came before. Each row carries what the analysis said (payload_json), the facts hash it was computed from, the model and prompt version that produced it, the trigger source, and WHY it exists (initial / facts-changed / correction / manual-regenerate). A correction retires the current version (retired_at + retired_reason) rather than erasing it, so the next generation is visibly a new version with a reason — old versions stay inspectable forever. LOCAL table: it exports with the timeline section of the history export and never rides a sync payload (the strict sync allowlist has no key for it). (Numbered v63, above the connector stack\'s v60/v61 and the screen-context migration\'s v62 — the runner never revisits versions below MAX(applied).)',
+      'Versioned day analysis (DEV-206): every AI analysis of a day — the day wrap narrative, the period wraps that contain it, and the timeline regroup/relabel run — is recorded as an append-only version row instead of silently replacing what came before. Each row carries what the analysis said (payload_json), the facts hash it was computed from, the model and prompt version that produced it, the trigger source, and WHY it exists (initial / facts-changed / correction / manual-regenerate). A correction retires the current version (retired_at + retired_reason) rather than erasing it, so the next generation is visibly a new version with a reason — old versions stay inspectable forever. LOCAL table: it exports with the timeline section of the history export and never rides a sync payload (the strict sync allowlist has no key for it). (Numbered v63, skipping v61/v62 claimed by the in-flight connector-stack branches — the runner never revisits versions below MAX(applied).)',
     up: () => {
       getDb().exec(`
         CREATE TABLE IF NOT EXISTS day_analysis_versions (

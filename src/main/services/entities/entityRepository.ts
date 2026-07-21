@@ -342,6 +342,31 @@ export function resolveRepositoryEntity(
   return entity
 }
 
+/** Projects from a connected issue tracker resolve by provider + opaque
+ *  source-native project identity — never by name, so a renamed Linear
+ *  project stays one entity and a same-named supplied project stays separate
+ *  (a merge suggestion a person decides, per the entity-resolution spec). */
+export function resolveProjectEntity(
+  db: Database.Database,
+  input: {
+    provider: string
+    sourceProjectId: string
+    name: string
+    origin?: EntityOrigin
+    observedAt?: number
+  },
+): EntityRow {
+  const entity = upsertEntity(db, {
+    type: 'project',
+    identityKey: `provider:${input.provider.toLowerCase()}/${input.sourceProjectId}`,
+    name: input.name,
+    origin: input.origin ?? 'connected',
+    observedAt: input.observedAt,
+  })
+  addEntityAlias(db, entity.id, input.name, { rawLabel: input.name, source: input.origin ?? 'connected' })
+  return entity
+}
+
 export function resolveApplicationEntity(
   db: Database.Database,
   input: { canonicalAppId?: string | null; appInstanceId: string; displayName: string; observedAt?: number; id?: string },

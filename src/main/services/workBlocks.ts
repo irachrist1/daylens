@@ -40,6 +40,8 @@ import type {
   TimelineBlockReview,
   TimelineBlockReviewState,
   TimelineBlockReviewUpdate,
+  TimelineScheduledMeeting,
+  CalendarSignal,
   WorkflowPattern,
   WorkflowRef,
   WorkContextAppSummary,
@@ -84,6 +86,14 @@ import { getBackgroundProcessEvidence } from './backgroundProcessEvidence'
 import { filterExcludedWebsiteSummaries, getCorrectedWebsiteSummariesForRange } from './activityFacts'
 import { queryCorrectedActivityFactsForRange } from '../core/query/activityFactsQuery'
 import { getSecondaryDisplayVisibleSpansForRange } from '../core/projections/displayVisibility'
+import { getExternalSignal } from './externalSignals'
+import {
+  capturedMeetingSpansFromBlocks,
+  getMeetingAttendanceMarks,
+  matchDayMeetings,
+  scheduledMeetingsFromSignal,
+  scheduledParticipantsForDay,
+} from './meetingResolution'
 
 /**
  * Sanitize a label that might be a raw file path or bundle path.
@@ -5704,6 +5714,12 @@ export function getTimelineDayPayload(
   // its own honest label — deliberately NOT added to totalSeconds/blocks,
   // which stay input-focused foreground truth.
   const secondaryDisplay = getSecondaryDisplayVisibleSpansForRange(db, fromMs, toMs, sessions)
+  // DEV-189: scheduled calendar events resolved against the day's own meeting
+  // blocks. Matched events annotate their block as an attended meeting;
+  // calendar-only events are scheduled context — an outline the renderer
+  // draws, never a block, never a second of totalSeconds (the #3/#21 rule:
+  // no calendar event becomes claimed work without supporting evidence).
+  const scheduledMeetings = resolveScheduledMeetingsForDay(db, dateStr, blocks)
   // The durable entities this day's evidence supports naming, intersected
   // with the surviving blocks above so deleted evidence lends no entity time.
   // The wrap's "what the day was about" scene reads these; a database without
@@ -5741,7 +5757,44 @@ export function getTimelineDayPayload(
     appCount: new Set(sessions.map((session) => session.bundleId)).size,
     siteCount: websites.length,
     secondaryDisplay,
+    scheduledMeetings,
     dayEntities,
+  }
+}
+
+/** The day's scheduled calendar events resolved against its meeting blocks
+ *  (DEV-189). Pure read of the stored calendar day signal — never collects;
+ *  undefined when the day has no stored calendar signal, so payloads without
+ *  a calendar source stay byte-identical to before. Captured-only meetings
+ *  are not listed here: they already ARE blocks. */
+function resolveScheduledMeetingsForDay(
+  db: Database.Database,
+  dateStr: string,
+  blocks: WorkContextBlock[],
+): TimelineScheduledMeeting[] | undefined {
+  try {
+    const calendar = getExternalSignal<CalendarSignal>(db, dateStr, 'calendar')?.payload ?? null
+    const scheduled = scheduledMeetingsFromSignal(dateStr, calendar)
+    if (scheduled.length === 0) return undefined
+    const report = matchDayMeetings(scheduled, capturedMeetingSpansFromBlocks(blocks), {
+      marks: getMeetingAttendanceMarks(db, dateStr),
+      participants: scheduledParticipantsForDay(db, dateStr),
+    })
+    return report.meetings
+      .filter((meeting) => meeting.attendance !== 'captured_only')
+      .map((meeting) => ({
+        title: meeting.title ?? 'Untitled event',
+        startMs: meeting.scheduledStartMs!,
+        endMs: meeting.scheduledEndMs!,
+        attendeeCount: meeting.attendeeCount,
+        participants: meeting.participants,
+        attendance: meeting.attendance === 'matched' ? 'matched' as const : 'calendar_only' as const,
+        marked: meeting.marked,
+        matchedBlockId: meeting.matchedBlockId,
+      }))
+  } catch {
+    // A malformed stored calendar row must never break the day read.
+    return undefined
   }
 }
 

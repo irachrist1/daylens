@@ -2,10 +2,13 @@ import Database from 'better-sqlite3'
 import { app } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
+import { labelVoiceContextForBlock } from '../../src/shared/labelVoice'
 import {
   DEFAULT_PRIVATE_ROOT,
   REAL_DAY_SCHEMA_VERSION,
   acceptReviewedCandidate,
+  buildLabelVoiceReview,
+  labelVoiceMarkdownLines,
   assertLocalOnly,
   compareObservations,
   comparisonFailureLines,
@@ -365,6 +368,18 @@ async function evaluate(args: Args): Promise<RealDayObservation> {
     console.log(`Local parity report (not analytics): ${parityPath}`)
     const projectionEpisodes = projection.blocks.map(episode)
     const directEpisodes = direct.blocks.map(episode)
+    // Score every produced label against the recorded label-voice rubric so
+    // the review names label-quality failures explicitly.
+    const labelVoice = buildLabelVoiceReview(
+      projection.blocks.map((block: any) => ({
+        label: labelForBlock(block),
+        range: `${clock(Number(block.startTime))}–${clock(Number(block.endTime))}`,
+        context: labelVoiceContextForBlock(
+          block,
+          typeof block.kind === 'string' ? block.kind : null,
+        ),
+      })),
+    )
     const appItems = apps.map((item) => ({
       id: item.canonicalAppId ?? item.bundleId,
       name: item.appName,
@@ -465,6 +480,7 @@ async function evaluate(args: Args): Promise<RealDayObservation> {
       evaluatedAt: new Date().toISOString(),
       date: manifest.date,
       sourceSha256: manifest.input.database.sha256,
+      labelVoice,
       capture: {
         appSessions: Number(
           (
@@ -598,6 +614,8 @@ function renderWrapped(observation: RealDayObservation): string {
       `- ${clock(block.startMs)}–${clock(block.endMs)} — ${block.label} (${formatDuration(block.activeSeconds)}, ${block.category})`,
     )
   }
+  lines.push('', '## Label voice', '')
+  lines.push(...labelVoiceMarkdownLines(observation.labelVoice))
   lines.push('', '## Meetings and calendar', '')
   if (observation.meetings.length === 0) lines.push('No meeting signal was found.')
   for (const meeting of observation.meetings) {
@@ -649,6 +667,10 @@ async function main(): Promise<void> {
     console.log(`Wrapped review: ${path.join(fixtureDir, 'wrapped.md')}`)
     console.log(
       `Timeline ${formatDuration(observation.timeline.productionProjection.totalSeconds)}; Apps ${formatDuration(observation.apps.totalSeconds)}; delta ${observation.agreement.timelineAppsDeltaSeconds}s`,
+    )
+    const voice = observation.labelVoice.summary
+    console.log(
+      `Label voice (${observation.labelVoice.rubric}): ${voice.labelsMeetingInvariants}/${voice.labelsEvaluated} blocks meet the invariants, ${voice.labelsMeetingTarget}/${voice.labelsEvaluated} the full voice; ${observation.labelVoice.failures.length === 0 ? 'no failures' : `${observation.labelVoice.failures.length} failures named in wrapped.md`}`,
     )
     if (
       observation.agreement.acceptedBaseline &&

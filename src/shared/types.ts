@@ -78,6 +78,11 @@ export type CorrectionCommand =
   | { kind: 'exclude-block'; date: string; blockId: string }
   | { kind: 'exclude-evidence'; date: string; blockId: string; evidence: ExcludedEvidenceRef }
   | { kind: 'assign-client'; date: string; blockId: string; clientId: string | null; projectId?: string | null }
+  // DEV-189 (timeline.md §Meetings): mark a scheduled meeting as attended,
+  // skipped, moved, or unrelated. status null clears the mark. The meeting is
+  // addressed by its scheduled identity, not a block id — a calendar-only
+  // event has no block.
+  | { kind: 'mark-meeting'; date: string; meeting: { title: string; startMs: number }; status: 'attended' | 'skipped' | 'moved' | 'unrelated' | null }
 
 export interface CorrectionBlockDelta {
   blockId: string
@@ -393,9 +398,35 @@ export interface DayTimelinePayload {
   // Additive: what secondary displays showed while focus was elsewhere.
   // Absent on payloads that predate multi-display capture.
   secondaryDisplay?: SecondaryDisplayVisibleSpan[]
+  // Additive (DEV-189): the day's scheduled calendar events resolved against
+  // the day's own meeting blocks. Matched events annotate their block as an
+  // attended meeting (with the scheduled range as context); calendar-only
+  // events render as scheduled context — an outline, never a block, never
+  // counted in totalSeconds. Captured-only meetings need no entry here: they
+  // ARE blocks. Absent when no calendar signal is stored for the day.
+  scheduledMeetings?: TimelineScheduledMeeting[]
   // Additive: the durable entities the day's evidence supports naming.
   // Absent on payloads built before the entity ledger existed.
   dayEntities?: DayWrapEntity[]
+}
+
+/** One scheduled calendar event as the Timeline day view shows it (DEV-189).
+ *  `attendance` is honest: 'matched' means captured meeting-app evidence OR
+ *  the person's explicit confirmation supports it (a block id is present only
+ *  for the evidence case); 'calendar_only' means it is scheduled context with
+ *  NO support that the meeting happened. `marked` carries the person's own
+ *  attended/skipped/moved/unrelated correction when one exists. */
+export interface TimelineScheduledMeeting {
+  title: string
+  startMs: number
+  endMs: number
+  attendeeCount: number | null
+  /** Attendee display names when the calendar source carries them. Evidence
+   *  surface only — never wrap copy. */
+  participants: string[]
+  attendance: 'matched' | 'calendar_only'
+  marked: 'attended' | 'skipped' | 'moved' | 'unrelated' | null
+  matchedBlockId: string | null
 }
 
 export type HistoryDayPayload = DayTimelinePayload
@@ -1908,15 +1939,32 @@ export interface DayEnrichment {
     /** PRs grouped by project + state (open | merged | closed | draft). */
     pullRequests: Array<{ project: string; state: string; count: number }>
   } | null
-  /** What MEETINGS shaped the day, from the calendar connector. */
+  /** What MEETINGS shaped the day — the DEV-189 day-level resolution (issue
+   *  #3): calendar signal and captured meeting-app evidence combined, with
+   *  calendar-only / captured-only / matched reported as separate buckets so
+   *  no calendar event becomes claimed work without supporting evidence and
+   *  no observed meeting is denied for lacking a calendar entry. */
   meetings: {
+    /** Total recognized meetings across all three buckets. */
     count: number
-    /** Titles + pre-formatted scheduled length, longest first. title null when
-     *  the source gave none. Never an attendee name or count.
+    /** Longest first (by scheduled length, observed length for captured-only).
+     *  title null when the source gave none. Never an attendee name or count.
+     *  `scheduled` / `observed` are pre-formatted lengths — scheduled is null
+     *  for captured-only meetings, observed is null for calendar-only ones.
      *  // event-type inference: `type` + `confidence` from eventTypeInference.ts,
      *  so the writer may say "your ML class" instead of "the meeting" at high
      *  confidence, and must stay literal when it is not. */
-    items: Array<{ title: string | null; scheduled: string; type: EventType; confidence: number }>
+    items: Array<{
+      title: string | null
+      scheduled: string | null
+      observed: string | null
+      attendance: 'matched' | 'calendar_only' | 'captured_only'
+      type: EventType
+      confidence: number
+    }>
+    matched: number
+    calendarOnly: number
+    capturedOnly: number
   } | null
   /** Focus-timer runs, when the user enabled a focus app. Barest by design. */
   focusSessions: {
@@ -2371,6 +2419,30 @@ export interface PaymentRecord {
   updatedAt: number
 }
 
+// ─── Entitlement snapshot (billing-and-entitlements spec) ───────────────────
+// The signed contract the billing service returns from GET /v1/entitlement.
+// This is the consolidation target that replaces BillingAccessSnapshot for
+// access decisions; the desktop validates the Ed25519 signature against a
+// build-pinned public key and never infers paid access from a UI flag alone.
+
+export type EntitlementState = 'trial' | 'active' | 'grace' | 'exhausted' | 'expired' | 'refunded'
+
+export interface EntitlementSnapshot {
+  accountId: string
+  state: EntitlementState
+  periodStart: number | null
+  periodEnd: number | null
+  managedCreditGrantedUsd: number
+  managedCreditReservedUsd: number
+  managedCreditConsumedUsd: number
+  canUseManagedAI: boolean
+  canUseCloud: boolean
+  issuedAt: number
+  expiresAt: number
+  kid: string
+  signature: string
+}
+
 export interface BillingAccessSnapshot {
   mode: BillingAccessMode
   canUseAI: boolean
@@ -2388,6 +2460,12 @@ export interface BillingAccessSnapshot {
   localCheckoutAvailable: boolean
   portalAvailable: boolean
   message: string
+  // Whole questions the remaining allowance can still answer, computed on the
+  // desktop from the remaining credit and per-model pricing. Allowance is
+  // displayed in money and estimated questions — never raw tokens first. Null
+  // when there is no remaining managed allowance to estimate (own key,
+  // unavailable, or paused access).
+  estimatedQuestionsRemaining?: number | null
 }
 
 export type BillingUsageCostSource = 'provider' | 'estimated' | 'unknown'

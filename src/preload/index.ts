@@ -552,9 +552,9 @@ const api = {
     disconnect: (connectorId: ConnectorId, options: { deleteData: boolean }): Promise<void> =>
       ipcRenderer.invoke(IPC.CONNECTORS.DISCONNECT, connectorId, options),
     onConnectProgress: (
-      callback: (event: { connectorId: ConnectorId; phase: 'authorizing' | 'syncing' }) => void,
+      callback: (event: { connectorId: ConnectorId; phase: 'authorizing' | 'syncing'; notice?: string }) => void,
     ): (() => void) => {
-      const handler = (_e: Electron.IpcRendererEvent, event: { connectorId: ConnectorId; phase: 'authorizing' | 'syncing' }) =>
+      const handler = (_e: Electron.IpcRendererEvent, event: { connectorId: ConnectorId; phase: 'authorizing' | 'syncing'; notice?: string }) =>
         callback(event)
       ipcRenderer.on(IPC.CONNECTORS.PROGRESS, handler)
       return () => { ipcRenderer.removeListener(IPC.CONNECTORS.PROGRESS, handler) }
