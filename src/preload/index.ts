@@ -54,6 +54,7 @@ import type {
   BreakRecommendation,
   CalendarRangeDay,
   DayTimelinePayload,
+  RebuildTimelineDayResult,
   DistractionCostPayload,
   FocusReflectionSavePayload,
   FocusSession,
@@ -220,7 +221,7 @@ const api = {
   },
   db: {
     getTimelineDay: (date: string): Promise<DayTimelinePayload> => ipcRenderer.invoke(IPC.DB.GET_TIMELINE_DAY, date),
-    rebuildTimelineDay: (date: string, hint?: string): Promise<DayTimelinePayload> => ipcRenderer.invoke(IPC.DB.REBUILD_TIMELINE_DAY, date, hint),
+    rebuildTimelineDay: (date: string, hint?: string): Promise<RebuildTimelineDayResult> => ipcRenderer.invoke(IPC.DB.REBUILD_TIMELINE_DAY, date, hint),
     getRecapRange: (dates: string[]): Promise<DayTimelinePayload[]> => ipcRenderer.invoke(IPC.DB.GET_RECAP_RANGE, dates),
     getTimelineRangeBlocks: (fromDate: string, toDate: string): Promise<CalendarRangeDay[]> =>
       ipcRenderer.invoke(IPC.DB.GET_TIMELINE_RANGE_BLOCKS, fromDate, toDate),

@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSPr
 import { useSearchParams } from 'react-router-dom'
 import { EyeOff, Trash2, X } from 'lucide-react'
 import { ANALYTICS_EVENT, blockCountBucket, trackedTimeBucket } from '@shared/analytics'
-import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, AttributionProject, CalendarRangeBlock, CalendarRangeDay, ClientRecord, CorrectionCommand, DayTimelinePayload, TimelineGapSegment, TimelineScheduledMeeting, WorkContextBlock } from '@shared/types'
+import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, AttributionProject, CalendarRangeBlock, CalendarRangeDay, ClientRecord, CorrectionCommand, DayTimelinePayload, RebuildTimelineDayResult, TimelineGapSegment, TimelineScheduledMeeting, WorkContextBlock } from '@shared/types'
 import { activityColorForCategory, leisureBlocksDimmed } from '@shared/activityColors'
 import { assignLanes, calendarCardHeights } from '../lib/timelineBlockLayout'
 import { blockActiveSeconds } from '@shared/blockDuration'
@@ -1539,6 +1539,24 @@ function SplitBlockDialog({
 
 const daySummaryRecapCache = new Map<string, AIDaySummaryResult>()
 
+// Report what Analyze / Re-analyze actually did (DEV-231) rather than a fixed
+// success line — the real re-labeled and merged counts, or "already up to date"
+// when the run touched nothing.
+function analyzeOutcomeMessage(result: RebuildTimelineDayResult, provisional: boolean): string {
+  const plural = (n: number) => (n === 1 ? '' : 's')
+  if (provisional) {
+    const count = result.payload.blocks.filter((block) => !block.isLive).length
+    return count > 0 ? `Shaped the day into ${count} block${plural(count)}` : 'Day shaped into blocks'
+  }
+  if (!result.changed) return 'All labels already up to date'
+  const parts: string[] = []
+  if (result.relabeled > 0) parts.push(`Re-labeled ${result.relabeled} block${plural(result.relabeled)}`)
+  if (result.mergedCount > 0) parts.push(`merged ${result.mergedCount} block${plural(result.mergedCount)}`)
+  let message = parts.length > 0 ? parts.join(' · ') : 'Refreshed the day'
+  if (result.failed > 0) message += ` (${result.failed} couldn’t be re-labeled)`
+  return message
+}
+
 function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePayload; onSelectBlock?: (blockId: string) => void; onRefresh?: () => Promise<void> }) {
   const [recap, setRecap] = useState<AIDaySummaryResult | null>(null)
   const [recapLoading, setRecapLoading] = useState(false)
@@ -1584,12 +1602,12 @@ function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePaylo
     setAnalyzing(true)
     setAnalyzeStatus(null)
     try {
-      await ipc.db.rebuildTimelineDay(payload.date, hint)
+      const result = await ipc.db.rebuildTimelineDay(payload.date, hint)
       daySummaryRecapCache.delete(payload.date)
       await onRefresh?.()
       setWrapOpen(false)
       setWrapNote('')
-      setAnalyzeStatus(provisional ? 'Day shaped into blocks' : 'Labels refreshed')
+      setAnalyzeStatus(analyzeOutcomeMessage(result, provisional))
     } catch (error) {
       const { message } = sanitizeIpcError(error, 'Analysis failed. Try again in a moment.')
       setAnalyzeStatus(message)
@@ -1712,9 +1730,11 @@ function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePaylo
                   <button
                     type="button"
                     onClick={() => { void handleAnalyze() }}
-                    style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', borderRadius: 10, padding: '7px 12px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}
+                    disabled={analyzing}
+                    style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', borderRadius: 10, padding: '7px 12px', fontSize: 12.5, fontWeight: 600, cursor: analyzing ? 'default' : 'pointer', opacity: analyzing ? 0.6 : 1, display: 'inline-flex', alignItems: 'center', gap: 7 }}
                   >
-                    Re-analyze with AI
+                    {analyzing && <span aria-hidden style={{ width: 12, height: 12, borderRadius: '50%', border: '2px solid var(--color-border-ghost)', borderTopColor: 'var(--color-text-secondary)', display: 'inline-block', animation: 'spin 0.7s linear infinite' }} />}
+                    {analyzing ? 'Analyzing…' : 'Re-analyze with AI'}
                   </button>
                   <button
                     type="button"

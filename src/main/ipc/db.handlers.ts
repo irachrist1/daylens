@@ -437,7 +437,15 @@ export function registerDbHandlers(): void {
       resolveLiveSession: getLiveSessionForDate,
       triggerSource: 'user',
     })
-    return result.payload
+    return {
+      payload: result.payload,
+      changed: result.changed,
+      merged: result.merged,
+      mergedCount: result.mergedCount,
+      relabeled: result.relabeled,
+      attempted: result.attempted,
+      failed: result.failures.length,
+    }
   })
 
   ipcMain.handle(IPC.DB.GET_RECAP_RANGE, (_e, dates: string[]) => {

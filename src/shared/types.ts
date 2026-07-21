@@ -410,6 +410,18 @@ export interface DayTimelinePayload {
   dayEntities?: DayWrapEntity[]
 }
 
+/** What a manual Analyze / Re-analyze run actually did, so the UI reports the
+ *  real outcome instead of a fixed success message (DEV-231). */
+export interface RebuildTimelineDayResult {
+  payload: DayTimelinePayload
+  changed: boolean
+  merged: boolean
+  mergedCount: number
+  relabeled: number
+  attempted: number
+  failed: number
+}
+
 /** One scheduled calendar event as the Timeline day view shows it (DEV-189).
  *  `attendance` is honest: 'matched' means captured meeting-app evidence OR
  *  the person's explicit confirmation supports it (a block id is present only

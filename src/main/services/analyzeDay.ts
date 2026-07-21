@@ -65,6 +65,11 @@ export interface AnalyzeTimelineDayResult {
   merged: boolean
   attempted: number
   failures: string[]
+  // How many blocks the run actually re-labeled, and how many were absorbed by
+  // a merge — so the UI can report what happened ("Re-labeled 3 blocks" /
+  // "Already up to date") instead of a fixed success message (DEV-231).
+  relabeled: number
+  mergedCount: number
 }
 
 // Persist an AI label+narrative to a block, preserving user overrides.
@@ -124,6 +129,8 @@ export async function analyzeTimelineDay(
   let changed = false
   let merged = false
   let attempted = 0
+  let relabeled = 0
+  let mergedCount = 0
   const failures: string[] = []
 
   // REPAIR: a day stored before the absence guard existed can contain a
@@ -203,6 +210,7 @@ export async function analyzeTimelineDay(
     (block) => !block.isLive && !block.provisional && block.sessions.some((session) => session.id >= 0),
   )
   if (mergeable.length >= 2) {
+    const blocksBeforeMerge = payload.blocks.length
     try {
       const groups = await regroupPlan(mergeable, { userHint })
       let mergedAny = false
@@ -236,6 +244,7 @@ export async function analyzeTimelineDay(
         payload = materialize()
         changed = true
         merged = true
+        mergedCount = Math.max(0, blocksBeforeMerge - payload.blocks.length)
       }
     } catch (error) {
       console.warn('[timeline] AI day regroup failed:', error)
@@ -250,7 +259,9 @@ export async function analyzeTimelineDay(
         { ...block, label: { ...block.label, override: null } },
         { jobType: 'block_cleanup_relabel', triggerSource, throwOnError: true, userHint },
       )
-      changed = applyAIInsightToTimelineBlock(db, block, insight) || changed
+      const wrote = applyAIInsightToTimelineBlock(db, block, insight)
+      if (wrote) relabeled++
+      changed = wrote || changed
     } catch (error) {
       console.warn(`[timeline] AI re-analysis failed for block ${block.id}:`, error)
       failures.push(error instanceof Error ? error.message : String(error))
@@ -318,5 +329,5 @@ export async function analyzeTimelineDay(
     }
   }
 
-  return { payload: refreshed, changed, merged, attempted, failures }
+  return { payload: refreshed, changed, merged, attempted, failures, relabeled, mergedCount }
 }
