@@ -303,12 +303,20 @@ function CalendarBlockCard({
         // can slide within the block. (overflow:hidden would make the card its
         // own scrollport and freeze the sticky text at the block top.) The
         // week's compact cards keep the clip — they're too small to stick.
-        overflow: compact ? 'hidden' : 'visible',
+        // A filtered-out block clips its content: with no text to overflow, it
+        // can never stack its label onto a matching block's or an event's
+        // (DEV-234). Matching blocks keep overflow visible for their sticky text.
+        overflow: (compact || dimmed) ? 'hidden' : 'visible',
         minWidth: 0,
-        opacity: dimmed ? 0.22 : muted ? 0.75 : 1,
+        opacity: dimmed ? 0.32 : muted ? 0.75 : 1,
         zIndex: isSelected ? 3 : 1,
       }}
     >
+      {/* Filtered-out blocks render as a bare category-coloured bar — no text at
+          all — so a filter highlights the matches without ever colliding labels
+          (DEV-234). The button still carries its aria-label for screen readers. */}
+      {dimmed ? null : (
+      <>
       {/* The text pins into view while a tall block spans past the top of the
           scrollport — the block stays fixed in its time slot; only the timeline
           scrolls. Sticky keeps the title, time, and summary fully readable at
@@ -364,6 +372,8 @@ function CalendarBlockCard({
         </p>
       )}
       </div>
+      </>
+      )}
     </button>
   )
 }
