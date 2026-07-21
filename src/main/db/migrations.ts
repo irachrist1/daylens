@@ -2977,6 +2977,70 @@ const migrations: Migration[] = [
     },
   },
   {
+    version: 60,
+    description:
+      'GitHub connector (connectors.md §GitHub, DEV-191): widen the memory_records record_kind CHECK to admit connected_activity rows — the per-day projection of connector repository activity (commits, pull requests, reviews, issues) into searchable memory with connected origin. SQLite cannot alter a CHECK in place; projection rows are wiped and the table rebuilt — days re-project lazily through the fingerprint check and the background backfill. Supplied facts are re-mirrored from their canonical supplied_memory_facts store, so nothing explicitly confirmed is lost. LOCAL-ONLY, no sync-allowlist keys.',
+    up: () => {
+      const db = getDb()
+      const memoryRecordsSql = getTableSql('memory_records') ?? ''
+      if (!memoryRecordsSql || memoryRecordsSql.includes('connected_activity')) return
+      db.exec(`
+        DELETE FROM memory_record_vectors;
+        DELETE FROM memory_record_entities;
+        DELETE FROM memory_records;
+        DELETE FROM memory_index_days;
+        DROP TABLE memory_records;
+        CREATE TABLE memory_records (
+          id                TEXT PRIMARY KEY,
+          record_kind       TEXT NOT NULL CHECK(record_kind IN ('session', 'meeting', 'artifact', 'supplied_fact', 'connected_activity')),
+          memory_type       TEXT NOT NULL CHECK(memory_type IN ('observed', 'connected', 'supplied', 'inferred')),
+          statement         TEXT NOT NULL,
+          exact_text        TEXT NOT NULL DEFAULT '',
+          semantic_text     TEXT,
+          date              TEXT NOT NULL,
+          start_ms          INTEGER NOT NULL,
+          end_ms            INTEGER NOT NULL,
+          app_bundle_id     TEXT,
+          app_name          TEXT,
+          title             TEXT,
+          primary_entity_id TEXT,
+          source_refs_json  TEXT NOT NULL DEFAULT '[]',
+          confidence        TEXT NOT NULL DEFAULT 'observed',
+          provenance        TEXT NOT NULL DEFAULT 'capture',
+          sensitivity       TEXT NOT NULL DEFAULT 'standard' CHECK(sensitivity IN ('standard', 'personal', 'high')),
+          embedding_model   TEXT,
+          embedding_version INTEGER,
+          created_at        INTEGER NOT NULL,
+          deleted_at        INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_memory_records_date ON memory_records (date);
+        CREATE INDEX IF NOT EXISTS idx_memory_records_kind_start ON memory_records (record_kind, start_ms DESC);
+      `)
+      ensureMemorySearchSchema(db)
+      reconcileSuppliedMemoryRecords(db)
+    },
+  },
+  {
+    version: 61,
+    description:
+      'Meeting attendance marks (DEV-189, timeline.md §Meetings: "A person can mark a scheduled meeting as attended, skipped, moved, or unrelated"). The day-level meeting resolution (calendar-only / captured-only / matched buckets, issue #3) re-reads these on every projection, so a mark is durable correction data that survives restart, reprojection, and source refresh, and propagates to the Timeline day payload, the wrap enrichment, search (via the user_confirmation occurrence ref), and the agent meeting report. event_key is the scheduled event\'s day-local identity (minutes-into-day + normalized title) — stable across re-syncs. LOCAL-ONLY, no sync-allowlist keys.',
+    up: () => {
+      getDb().exec(`
+        CREATE TABLE IF NOT EXISTS meeting_attendance_marks (
+          id TEXT PRIMARY KEY,
+          date TEXT NOT NULL,
+          event_key TEXT NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('attended', 'skipped', 'moved', 'unrelated')),
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          UNIQUE (date, event_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_meeting_attendance_marks_date
+          ON meeting_attendance_marks (date);
+      `)
+    },
+  },
+  {
     version: 62,
     description:
       'Screen-context experiment lifecycle (DEV-197): the durable frame ledger and derived-evidence store behind the opt-in screen-sampling experiment. screen_context_frames tracks every sampled frame through its one lifecycle (captured → extracting → indexed → safe_to_delete → deleted, with failed → quarantined on extraction failure) so the raw-deletion invariant — no raw file is deleted before its derived evidence is atomically committed, and no raw file outlives the 24-hour safety window unquarantined — survives restarts and crashes. screen_context_evidence holds the high-sensitivity derived records (title, short OCR spans, subject references, provenance bounding, model/schema versions, a one-way frame digest) and is LOCAL-ONLY: never synced, never exported, never fed to MCP or a model outside the experiment boundary. Raw frame bytes live encrypted on disk, never in the database. (Numbered v62: drafted as v60, renumbered at integration because the connector stack\'s GitHub memory_records widening shipped as v60 and meeting-attendance as v61 — merge the connector stack first; the runner tolerates the 59 -> 62 gap and never revisits versions below MAX(applied).)',

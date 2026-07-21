@@ -26,6 +26,7 @@
 // LOCAL-ONLY: context_packets has no sync-allowlist keys and can never
 // serialize into a remote payload (tests/syncAllowlist.test.ts).
 import { createHash, randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import type Database from 'better-sqlite3'
 import type { DayTimelinePayload } from '@shared/types'
@@ -52,6 +53,7 @@ import {
   getCorrectedPageFactsForRange,
   hasMaterialPageCoverageShortfall,
 } from './activityFacts'
+import { extractTranscriptText as extractGranolaTranscript } from '../connectors/granola/cache'
 
 /** Bump when the assembly rules change; part of every packet and fingerprint,
  *  so two packets are only comparable under the same policy. */
@@ -277,6 +279,47 @@ function dayFactItems(
     if (items.length >= MAX_DAY_FACTS_PER_DAY) break
   }
   return { items, conflicts }
+}
+
+const MAX_CONNECTED_FACTS_PER_DAY = 12
+
+/** The day's connected-source activity records (repository work synced from a
+ *  connector), so "what did I ship" answers can cite the connected evidence
+ *  itself. The statement names the provider ("GitHub: merged pull request…")
+ *  and the sourceType says 'connected' — never mistaken for captured
+ *  activity. Identity shares the memory-record space exact search uses, so a
+ *  citation resolves to the same record either path finds. */
+function connectedActivityDayItems(db: Database.Database, date: string): ContextPacketItem[] {
+  try {
+    const rows = db.prepare(`
+      SELECT rowid AS id, statement, start_ms, end_ms, sensitivity
+      FROM memory_records
+      WHERE date = ? AND record_kind = 'connected_activity' AND deleted_at IS NULL
+      ORDER BY start_ms ASC
+      LIMIT ?
+    `).all(date, MAX_CONNECTED_FACTS_PER_DAY) as Array<{
+      id: number
+      statement: string
+      start_ms: number
+      end_ms: number
+      sensitivity: 'standard' | 'personal' | 'high'
+    }>
+    return rows.map((row) => ({
+      identity: `session:${row.id}`,
+      kind: 'day_fact' as const,
+      sourceType: 'connected' as const,
+      statement: row.statement,
+      version: null,
+      reason: `Connected-source record on ${date}`,
+      sensitivity: row.sensitivity,
+      date,
+      startMs: row.start_ms,
+      endMs: row.end_ms,
+    }))
+  } catch (error) {
+    console.warn('[contextPacket] connected day facts failed', date, error)
+    return []
+  }
 }
 
 // A browser whose page-level detail explains materially less time than its
@@ -584,6 +627,97 @@ function fileExcerptItems(
   return { items, omittedHighSensitivity }
 }
 
+// ─── Granola transcript excerpts (DEV-193) ───────────────────────────────────
+// Transcripts are HIGH-sensitivity content and are never ingested: no ledger
+// row, no day layer, no memory record, no index entry. They can be DISCLOSED
+// in exactly one situation — the question EXPLICITLY asks for what was said —
+// and the disclosure rides the packet ledger like every other item: recorded
+// locally, with identity, sensitivity, and the reason, BEFORE the request
+// leaves the device. `kind: 'file_excerpt'` is deliberate: the transcript is
+// a local file-backed excerpt and follows the same high-sensitivity item rule
+// the file path already enforces.
+
+const TRANSCRIPT_REQUEST_RE =
+  /\btranscripts?\b|\bverbatim\b|\bword for word\b|\bexact(?:ly)?\s+(?:what\s+)?(?:was|were)\s+said\b|\bwhat\s+did\s+[^?]{0,60}\bsay\b/i
+const TRANSCRIPT_EXCERPT_CHARS = 700
+const MAX_TRANSCRIPT_EXCERPTS = 2
+
+function granolaTranscriptItems(
+  db: Database.Database,
+  question: string,
+  dates: readonly string[],
+): ContextPacketItem[] {
+  // The explicit-need gate: no transcript-shaped question, no retrieval —
+  // not even a file read happens.
+  if (!TRANSCRIPT_REQUEST_RE.test(question)) return []
+  const items: ContextPacketItem[] = []
+  try {
+    const connection = db.prepare(
+      `SELECT status, config_json FROM connector_connections WHERE connector_id = 'granola'`,
+    ).get() as { status: string; config_json: string } | undefined
+    if (!connection || connection.status === 'disconnected') return []
+    let cachePath: string | null = null
+    try {
+      const config = JSON.parse(connection.config_json) as { cachePath?: unknown }
+      cachePath = typeof config.cachePath === 'string' && config.cachePath.trim() ? config.cachePath : null
+    } catch { /* no readable config */ }
+    if (!cachePath) return []
+
+    const tokens = questionTokens(question)
+    const marks = dates.map(() => '?').join(', ')
+    const rows = db.prepare(`
+      SELECT source_record_id, effective_at, envelope_json FROM connector_records
+      WHERE connector_id = 'granola' AND kind = 'meeting_record'
+        AND date IN (${marks}) AND tombstoned_at IS NULL
+      ORDER BY effective_at ASC
+    `).all(...dates) as Array<{ source_record_id: string; effective_at: number | null; envelope_json: string }>
+
+    let raw: string | null = null
+    for (const row of rows) {
+      if (items.length >= MAX_TRANSCRIPT_EXCERPTS) break
+      let title = ''
+      try {
+        const envelope = JSON.parse(row.envelope_json) as { entity?: { title?: unknown } }
+        title = typeof envelope.entity?.title === 'string' ? envelope.entity.title : ''
+      } catch {
+        continue
+      }
+      // The excerpt is scoped to the meeting the question names; a bare
+      // "show me the transcript" with several meetings on the day still
+      // discloses only meetings whose title the question mentions — unless
+      // the day has exactly one, which needs no name.
+      const titleMatches = tokens.some((token) => title.toLowerCase().includes(token))
+      if (!titleMatches && rows.length > 1) continue
+      const docId = row.source_record_id.replace(/^note:/, '')
+      if (raw == null) {
+        try {
+          raw = readFileSync(cachePath, 'utf8')
+        } catch {
+          return []
+        }
+      }
+      const transcript = extractGranolaTranscript(raw, docId)
+      if (!transcript) continue
+      const excerpt = transcript.slice(0, TRANSCRIPT_EXCERPT_CHARS)
+      items.push({
+        identity: `transcript:granola:${docId}`,
+        kind: 'file_excerpt',
+        sourceType: 'connected',
+        statement: `Granola transcript of "${title}": ${excerpt}`,
+        version: derivedTextFingerprint(transcript, row.effective_at),
+        reason: 'Transcript excerpt — this question explicitly asked for what was said; disclosed under high-sensitivity rules and recorded here',
+        sensitivity: 'high',
+        date: null,
+        startMs: row.effective_at,
+        endMs: row.effective_at,
+      })
+    }
+  } catch (error) {
+    console.warn('[contextPacket] transcript excerpts failed', error)
+  }
+  return items
+}
+
 const KIND_ORDER: Record<ContextItemKind, number> = {
   day_fact: 0,
   corrected_fact: 1,
@@ -650,7 +784,10 @@ export async function buildContextPacket(
     : {}
 
   const dayResults = dates.map((date) => dayFactItems(db, date, input.dayPayloads?.[date]))
-  const dayFacts = dayResults.flatMap((result) => result.items)
+  const dayFacts = [
+    ...dayResults.flatMap((result) => result.items),
+    ...dates.flatMap((date) => connectedActivityDayItems(db, date)),
+  ]
   const conflicts = [
     ...dayResults.flatMap((result) => result.conflicts),
     ...dates.flatMap((date) => pageCoverageConflicts(db, date)),
@@ -663,7 +800,12 @@ export async function buildContextPacket(
   const exactIdentities = new Set(exact.items.map((item) => item.identity))
   const semantic = await semanticSearchItems(db, question, searchScope, exactIdentities)
   const files = fileExcerptItems(db, question)
+  const transcripts = granolaTranscriptItems(db, question, dates)
 
+  // One identity appears once: a connected day fact and an exact-search hit
+  // can both name the same memory record, and a citation must resolve to a
+  // single disclosed item.
+  const seenIdentities = new Set<string>()
   const assembled = sortItems([
     ...dayFacts,
     ...corrected,
@@ -671,7 +813,12 @@ export async function buildContextPacket(
     ...exact.items,
     ...semantic,
     ...files.items,
-  ])
+    ...transcripts,
+  ]).filter((item) => {
+    if (seenIdentities.has(item.identity)) return false
+    seenIdentities.add(item.identity)
+    return true
+  })
 
   // Defensive final gate: nothing high-sensitivity rides along unless a file
   // grant explicitly allowed it above (memory readers already exclude 'high'

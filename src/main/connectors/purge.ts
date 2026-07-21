@@ -12,10 +12,10 @@
 // must never resurrect deleted connector data).
 
 import type Database from 'better-sqlite3'
-import type { CalendarSignal, ConnectorId } from '@shared/types'
+import type { CalendarSignal, ConnectorId, GitActivitySignal, MeetingNotesSignal } from '@shared/types'
 import { getExternalSignal } from '../services/externalSignals'
 import { mergeGroupIds, resolveMergeChain, type EntityRow } from '../services/entities/entityRepository'
-import type { ConnectorRecordEnvelope } from './contract'
+import type { ConnectorGitDaySignal, ConnectorNotesDaySignal, ConnectorRecordEnvelope } from './contract'
 import {
   deleteConnectorRecords,
   listConnectorRecords,
@@ -83,6 +83,78 @@ export function removeConnectorDaySignalEvent(
   `).run(JSON.stringify({ events: kept } satisfies CalendarSignal), nowMs, daySignal.date)
 }
 
+/** Remove a record's git contribution from the external_signals 'git' day
+ *  row: the commit line (decrementing the repo's count) or the PR entry,
+ *  dropping emptied repo entries and deleting the row when nothing remains.
+ *  Same-shaped data another source also found returns on that source's next
+ *  refresh. Also used by ingest when a re-synced record MOVED days. */
+export function removeConnectorGitDaySignalEvent(
+  db: Database.Database,
+  gitSignal: ConnectorGitDaySignal,
+  nowMs: number,
+): void {
+  const stored = getExternalSignal<GitActivitySignal>(db, gitSignal.date, 'git')
+  if (!stored) return
+  const payload = stored.payload
+  let changed = false
+
+  if (gitSignal.commit) {
+    const entry = payload.repos.find((repo) => repo.repo === gitSignal.repo)
+    if (entry && entry.messages.includes(gitSignal.commit.message)) {
+      entry.messages = entry.messages.filter((message) => message !== gitSignal.commit!.message)
+      entry.commitCount = Math.max(0, entry.commitCount - 1)
+      changed = true
+    }
+  }
+  if (gitSignal.pr) {
+    const before = payload.prs.length
+    payload.prs = payload.prs.filter(
+      (pr) => !(pr.repo === gitSignal.repo && pr.title === gitSignal.pr!.title),
+    )
+    changed = changed || payload.prs.length !== before
+  }
+  if (!changed) return
+
+  payload.repos = payload.repos.filter((repo) => repo.commitCount > 0 || repo.messages.length > 0)
+  payload.totalCommits = payload.repos.reduce((sum, repo) => sum + repo.commitCount, 0)
+  if (payload.repos.length === 0 && payload.prs.length === 0) {
+    db.prepare(`DELETE FROM external_signals WHERE date = ? AND source = 'git'`).run(gitSignal.date)
+    return
+  }
+  db.prepare(`
+    UPDATE external_signals SET payload_json = ?, captured_at = ? WHERE date = ? AND source = 'git'
+  `).run(JSON.stringify(payload), nowMs, gitSignal.date)
+}
+
+/** Remove a record's meeting-note entry from the external_signals 'notes' day
+ *  row, deleting the row when it empties. Matched by (title, scheduledClock) —
+ *  the same identity the merge uses. Also used by ingest when a re-synced
+ *  note MOVED (new date/title/clock) so the old entry doesn't linger. */
+export function removeConnectorNotesDaySignalEvent(
+  db: Database.Database,
+  notesSignal: Pick<ConnectorNotesDaySignal, 'date' | 'title' | 'scheduledClock'>,
+  nowMs: number,
+): void {
+  const stored = getExternalSignal<MeetingNotesSignal>(db, notesSignal.date, 'notes')
+  if (!stored) return
+  const kept = (stored.payload.notes ?? []).filter(
+    (note) => !(note.title === notesSignal.title
+      && (note.scheduledClock ?? null) === (notesSignal.scheduledClock ?? null)),
+  )
+  if (kept.length === (stored.payload.notes ?? []).length) return
+  if (kept.length === 0) {
+    db.prepare(`DELETE FROM external_signals WHERE date = ? AND source = 'notes'`).run(notesSignal.date)
+    return
+  }
+  db.prepare(`
+    UPDATE external_signals SET payload_json = ?, captured_at = ? WHERE date = ? AND source = 'notes'
+  `).run(
+    JSON.stringify({ app: stored.payload.app, notes: kept } satisfies MeetingNotesSignal),
+    nowMs,
+    notesSignal.date,
+  )
+}
+
 /**
  * Remove everything ONE record derived: its evidence refs (both the
  * per-connector support refs and the envelope-adoption refs), its day-signal
@@ -116,6 +188,8 @@ export function removeConnectorRecordDerivedData(
       .run(adoptionSourceId)
   }
   if (envelope?.daySignal) removeConnectorDaySignalEvent(db, envelope.daySignal, nowMs)
+  if (envelope?.gitSignal) removeConnectorGitDaySignalEvent(db, envelope.gitSignal, nowMs)
+  if (envelope?.notesSignal) removeConnectorNotesDaySignalEvent(db, envelope.notesSignal, nowMs)
 
   const candidates = new Set<string>(supportedEntityIds)
   if (row.entity_id) candidates.add(row.entity_id)
@@ -148,6 +222,17 @@ export function purgeConnectorDerivedData(
     removeConnectorRecordDerivedData(db, row, nowMs)
   }
   const recordsRemoved = deleteConnectorRecords(db, connectorId)
+  // Model traces that disclosed this connector's high-sensitivity content
+  // (a Granola transcript excerpt in a recorded context packet) are the
+  // spec's "model traces" deletion class: the packet rows carrying a
+  // transcript:<connector>: item are removed with the source.
+  const hasPackets = db.prepare(
+    `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'context_packets'`,
+  ).get() != null
+  if (hasPackets) {
+    db.prepare(`DELETE FROM context_packets WHERE packet_json LIKE ?`)
+      .run(`%"transcript:${connectorId}:%`)
+  }
   markConnectorDisconnected(db, connectorId, nowMs)
   return { recordsRemoved }
 }

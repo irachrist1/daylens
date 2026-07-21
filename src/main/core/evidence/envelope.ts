@@ -50,6 +50,7 @@ export const CONNECTED_SOURCE_EVIDENCE_KINDS = [
   'calendar_event',
   'meeting_record',
   'repository_activity',
+  'issue_activity',
   'message_reference',
   'document_reference',
 ] as const

@@ -64,14 +64,26 @@ function ConnectorCard({ listing, onChanged }: { listing: ConnectorListing; onCh
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false)
   const [clientId, setClientId] = useState('')
   const [clientSecret, setClientSecret] = useState('')
+  const [repositories, setRepositories] = useState('')
+  const [apiKey, setApiKey] = useState('')
+  const [localPath, setLocalPath] = useState('')
+
+  // GitHub and Outlook authorize with the device flow: only a client ID (no
+  // secret) and a one-time code shown here. GitHub additionally lets the
+  // person pick exactly which repositories are read.
+  const usesDeviceFlow = listing.id === 'github' || listing.id === 'outlook_calendar'
+  const choosesRepositories = listing.id === 'github'
 
   // Honest progress for the bounded initial import: "waiting for your
-  // browser" and "importing your last N days" are different states.
+  // browser" and "importing your last N days" are different states. A notice
+  // (a device flow's "enter this code" prompt) takes precedence — it is the
+  // only way the person learns their code.
   useEffect(() => ipc.connectors.onConnectProgress((event) => {
     if (event.connectorId !== listing.id) return
-    setActionNote(event.phase === 'authorizing'
-      ? 'Waiting for authorization in your browser…'
-      : `Authorized. Importing your last ${listing.lookbackDays} days of events…`)
+    setActionNote(event.notice
+      ?? (event.phase === 'authorizing'
+        ? 'Waiting for authorization in your browser…'
+        : `Authorized. Importing the last ${listing.lookbackDays} days…`))
   }), [listing.id, listing.lookbackDays])
 
   const run = useCallback(async (
@@ -94,8 +106,12 @@ function ConnectorCard({ listing, onChanged }: { listing: ConnectorListing; onCh
     const config: Record<string, unknown> = {}
     if (clientId.trim()) config.clientId = clientId.trim()
     if (clientSecret.trim()) config.clientSecret = clientSecret.trim()
+    if (choosesRepositories && repositories.trim()) config.repositories = repositories.trim()
+    if (listing.authKind === 'token' && apiKey.trim()) config.apiKey = apiKey.trim()
+    if (listing.authKind === 'local_file' && localPath.trim()) config.cachePath = localPath.trim()
     const summary = await ipc.connectors.connect(listing.id, config)
     setClientSecret('')
+    setApiKey('')
     return summarizeAction(summary)
   })
 
@@ -158,17 +174,59 @@ function ConnectorCard({ listing, onChanged }: { listing: ConnectorListing; onCh
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
               <input
                 style={inputStyle}
-                placeholder="OAuth client ID (Desktop app)"
+                placeholder={usesDeviceFlow
+                  ? listing.id === 'outlook_calendar'
+                    ? 'Microsoft application (client) ID (device code flow)'
+                    : 'GitHub App client ID (device flow)'
+                  : 'OAuth client ID (Desktop app)'}
                 value={clientId}
                 onChange={(event) => setClientId(event.target.value)}
                 spellCheck={false}
               />
+              {!usesDeviceFlow && (
+                <input
+                  style={inputStyle}
+                  type="password"
+                  placeholder="Client secret (optional)"
+                  value={clientSecret}
+                  onChange={(event) => setClientSecret(event.target.value)}
+                  spellCheck={false}
+                />
+              )}
+              {choosesRepositories && (
+                <input
+                  style={inputStyle}
+                  placeholder="Repositories to sync (owner/repo, comma-separated)"
+                  value={repositories}
+                  onChange={(event) => setRepositories(event.target.value)}
+                  spellCheck={false}
+                />
+              )}
+            </div>
+          )}
+          {listing.authKind === 'token' && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
               <input
                 style={inputStyle}
                 type="password"
-                placeholder="Client secret (optional)"
-                value={clientSecret}
-                onChange={(event) => setClientSecret(event.target.value)}
+                placeholder={listing.id === 'linear'
+                  ? 'Personal API key from linear.app/settings/api'
+                  : 'Personal API key'}
+                value={apiKey}
+                onChange={(event) => setApiKey(event.target.value)}
+                spellCheck={false}
+              />
+            </div>
+          )}
+          {listing.authKind === 'local_file' && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              <input
+                style={inputStyle}
+                placeholder={listing.id === 'granola'
+                  ? 'Cache path (optional — found automatically when Granola is installed)'
+                  : 'File path'}
+                value={localPath}
+                onChange={(event) => setLocalPath(event.target.value)}
                 spellCheck={false}
               />
             </div>
@@ -179,7 +237,22 @@ function ConnectorCard({ listing, onChanged }: { listing: ConnectorListing; onCh
             </button>
             {listing.authKind === 'oauth' && (
               <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>
-                Opens your browser to grant exactly the read-only scopes listed above — nothing more.
+                {usesDeviceFlow
+                  ? listing.id === 'outlook_calendar'
+                    ? 'Shows a one-time code to enter at microsoft.com/devicelogin — exactly the read-only scopes listed above.'
+                    : 'Shows a one-time code to enter on github.com — only the repositories you list are read.'
+                  : 'Opens your browser to grant exactly the read-only scopes listed above — nothing more.'}
+              </span>
+            )}
+            {listing.authKind === 'token' && (
+              <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>
+                The key goes straight into your operating system&apos;s secure store — never the database, logs, or sync.
+                Revoke it any time where you created it.
+              </span>
+            )}
+            {listing.authKind === 'local_file' && (
+              <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>
+                Reads a local file on this machine. No account, no network — nothing leaves your Mac.
               </span>
             )}
           </div>

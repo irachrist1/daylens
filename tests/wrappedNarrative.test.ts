@@ -385,7 +385,13 @@ function sampleEnrichment(): DayEnrichment {
     },
     meetings: {
       count: 2,
-      items: [{ title: 'Design review', scheduled: '1h 15m' }, { title: 'Standup', scheduled: '15m' }],
+      items: [
+        { title: 'Design review', scheduled: '1h 15m', observed: '1h 4m', attendance: 'matched' as const, type: 'presentation' as const, confidence: 0.8 },
+        { title: 'Standup', scheduled: '15m', observed: null, attendance: 'calendar_only' as const, type: 'team_meeting' as const, confidence: 0.9 },
+      ],
+      matched: 1,
+      calendarOnly: 1,
+      capturedOnly: 0,
     },
     focusSessions: null,
   }
@@ -455,7 +461,16 @@ test('enrichment: a real meeting count does NOT authorize an invented commit cou
   // meetings.count = 2 but there is NO shipped/commit enrichment.
   const enrichment: DayEnrichment = {
     shipped: null,
-    meetings: { count: 2, items: [{ title: 'Standup', scheduled: '15m' }, { title: 'Review', scheduled: '45m' }] },
+    meetings: {
+      count: 2,
+      items: [
+        { title: 'Standup', scheduled: '15m', observed: null, attendance: 'calendar_only' as const, type: 'team_meeting' as const, confidence: 0.9 },
+        { title: 'Review', scheduled: '45m', observed: null, attendance: 'calendar_only' as const, type: 'generic' as const, confidence: 0 },
+      ],
+      matched: 0,
+      calendarOnly: 2,
+      capturedOnly: 0,
+    },
     focusSessions: null,
   }
   const facts = workingDayFacts()

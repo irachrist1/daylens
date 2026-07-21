@@ -40,10 +40,11 @@ const UPCOMING_MANIFESTS: ConnectorManifest[] = [
     authKind: 'oauth',
     readOnly: true,
     scopes: [
-      { scope: 'Calendars.Read', grants: 'Reads your Outlook calendars and events through Microsoft Graph. Read-only.' },
+      { scope: 'Calendars.Read', grants: 'Reads your Outlook calendars and events through Microsoft Graph. Never creates, edits, or deletes anything.' },
+      { scope: 'User.Read', grants: 'Reads your name and email address, only to label the connected account in Settings.' },
     ],
     whatItBrings:
-      'Meetings from your Outlook or Microsoft 365 calendar — titles, times, attendees — synced automatically alongside everything Daylens observes locally.',
+      'Meetings from your Outlook or Microsoft 365 calendar — titles, times, attendees, and responses — kept in sync automatically. A scheduled event only becomes "you met" when your day\'s activity supports it.',
     sensitivity: 'standard',
     syncCadenceMs: HOUR,
     lookbackDays: 90,
@@ -58,7 +59,10 @@ const UPCOMING_MANIFESTS: ConnectorManifest[] = [
     authKind: 'oauth',
     readOnly: true,
     scopes: [
-      { scope: 'repo:read', grants: 'Reads repositories, commits, pull requests, reviews, and issues you can see. Never pushes or changes anything.' },
+      { scope: 'metadata:read', grants: 'Reads the names and identity of the repositories you choose. GitHub requires this for any repository access.' },
+      { scope: 'contents:read', grants: 'Lists your commits — times and subject lines only. Daylens never ingests file contents, diffs, or bodies, and never pushes.' },
+      { scope: 'pull_requests:read', grants: 'Reads pull requests and reviews you are involved in — titles, states, and who was involved. Never writes, comments, or merges.' },
+      { scope: 'issues:read', grants: 'Reads issues you created or are assigned — titles and states. Never comments or edits.' },
     ],
     whatItBrings:
       'What you actually shipped — commits, pull requests, and reviews with their real repository identity, so "worked on the billing service" becomes a claim your history can back.',
@@ -73,10 +77,10 @@ const UPCOMING_MANIFESTS: ConnectorManifest[] = [
     displayName: 'Linear',
     providerKind: 'issues',
     integration: 'direct',
-    authKind: 'oauth',
+    authKind: 'token',
     readOnly: true,
     scopes: [
-      { scope: 'read', grants: 'Reads workspaces, teams, projects, cycles, and issues. Read-only.' },
+      { scope: 'read', grants: 'Reads workspaces, teams, projects, cycles, and the issues you created or are assigned — titles, states, and times. Read-only: Daylens never creates, edits, or comments.' },
     ],
     whatItBrings:
       'The issues and projects your work maps to — status changes, cycles, and relationships — so time spent connects to the tickets it moved.',
@@ -90,11 +94,11 @@ const UPCOMING_MANIFESTS: ConnectorManifest[] = [
     id: 'granola',
     displayName: 'Granola',
     providerKind: 'meetings',
-    integration: 'direct',
-    authKind: 'token',
+    integration: 'local',
+    authKind: 'local_file',
     readOnly: true,
     scopes: [
-      { scope: 'notes:read', grants: 'Reads meeting identity, participants, and your notes and summaries where your account permits. Daylens never records meeting audio.' },
+      { scope: 'file:read', grants: 'Reads Granola\'s local notes cache on this Mac — meeting identity, participants, and your own note lines, minimized. Never transcripts, never audio, and nothing leaves this machine.' },
     ],
     whatItBrings:
       'What happened IN your meetings — participants, notes, and action items from Granola — attached to the meetings your calendar and day already know about.',

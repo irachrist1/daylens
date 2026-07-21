@@ -33,6 +33,7 @@ import { buildDaySnapshot, isCurrentSnapshot } from '../lib/daySnapshot'
 import { getDaySnapshotRowsForRange, getSessionsForRange } from '../db/queries'
 import { getCorrectedDomainIntervals, getCorrectedSessionsForRange } from './activityFacts'
 import { collectExternalSignals, getExternalSignal } from './externalSignals'
+import { resolveDayMeetingReport, type DayMeetingReport } from './meetingResolution'
 import type { DaySnapshot } from '@shared/types'
 
 // ─── Small shared helpers ─────────────────────────────────────────────────────
@@ -151,19 +152,25 @@ export async function getGitActivity(
   return stored?.payload ?? null
 }
 
-/** The day's meetings from the calendar connector (names, durations, attendee
- *  counts — never attendee names). Null when no calendar source is available. */
+/** The day's meetings: the raw calendar events (names, durations, attendee
+ *  counts — never attendee names) PLUS the DEV-189 day-level resolution
+ *  (issue #3) — calendar-only / captured-only / matched buckets, so the agent
+ *  never reports "no meeting signal" when captured meeting-app evidence
+ *  supports one, and never presents a calendar entry as attended work.
+ *  Null only when NEITHER source has anything. */
 export async function getCalendarEvents(
   params: { date: string },
   db: Database.Database,
   options: { allowCollect?: boolean } = {},
-): Promise<CalendarSignal | null> {
+): Promise<(CalendarSignal & { meetingReport: DayMeetingReport | null }) | null> {
   let stored = getExternalSignal<CalendarSignal>(db, params.date, 'calendar')
   if (!stored && (options.allowCollect ?? true)) {
     await collectExternalSignals(params.date)
     stored = getExternalSignal<CalendarSignal>(db, params.date, 'calendar')
   }
-  return stored?.payload ?? null
+  const meetingReport = resolveDayMeetingReport(db, params.date)
+  if (!stored?.payload && !meetingReport) return null
+  return { events: stored?.payload.events ?? [], meetingReport }
 }
 
 // ─── getDayComparison ─────────────────────────────────────────────────────────

@@ -89,8 +89,10 @@ export async function connectConnector(
     adapter?: ConnectorAdapter
     gate?: ConnectorIngestGate
     nowMs?: number
-    /** Called as the connect advances phases (never with any credential). */
-    onProgress?: (phase: ConnectorConnectPhase) => void
+    /** Called as the connect advances phases (never with any credential).
+     *  `notice` carries plain-language authorization guidance from the
+     *  adapter — a device flow's "enter this code" prompt — when it has one. */
+    onProgress?: (phase: ConnectorConnectPhase, notice?: string) => void
   } = {},
 ): Promise<ConnectorSyncSummary> {
   const gate = options.gate ?? defaultConnectorGate()
@@ -108,7 +110,10 @@ export async function connectConnector(
       : `Unknown connector: ${connectorId}`)
   }
   options.onProgress?.('authorizing')
-  const result = await adapter.connect({ config })
+  const result = await adapter.connect({
+    config,
+    onNotice: (notice) => options.onProgress?.('authorizing', notice),
+  })
   saveConnectorConnection(db, {
     connectorId,
     accountLabel: result.accountLabel,

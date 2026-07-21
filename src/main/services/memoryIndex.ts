@@ -36,9 +36,9 @@ import { mergeGroupIds, resolveMergeChain, type EntityRow } from './entities/ent
 
 /** Bump to force a full reindex on upgrade (the version is part of every
  *  day fingerprint, so stale-format days re-project lazily). */
-export const MEMORY_INDEX_VERSION = 1
+export const MEMORY_INDEX_VERSION = 2
 
-export type MemoryRecordKind = 'session' | 'meeting' | 'artifact'
+export type MemoryRecordKind = 'session' | 'meeting' | 'artifact' | 'connected_activity'
 
 function tableExists(db: Database.Database, name: string): boolean {
   return db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(name) != null
@@ -82,6 +82,9 @@ export function memoryIndexDayFingerprint(db: Database.Database, date: string): 
       JOIN entities e ON e.id = r.entity_id AND e.entity_type = 'meeting'
       WHERE r.span_start_ms >= ? AND r.span_start_ms < ?`, fromMs, toMs)}`,
     `art:${countAndMax(db, `SELECT COUNT(*) AS c, MAX(start_time) AS m FROM artifact_mentions WHERE start_time >= ? AND start_time < ?`, fromMs, toMs)}`,
+    `cnr:${tableExists(db, 'connector_records')
+      ? countAndMax(db, `SELECT COUNT(*) AS c, MAX(updated_at) AS m FROM connector_records WHERE date = ? AND kind IN ('repository_activity', 'issue_activity', 'meeting_record')`, date)
+      : '0:0'}`,
   ]
   return parts.join('|')
 }
@@ -104,6 +107,9 @@ interface PendingRecord {
   primaryEntityId: string | null
   sourceRefs: string[]
   entityIds: Set<string>
+  /** Defaults to 'standard'; connected personal content (meeting notes)
+   *  carries its source sensitivity into the record row. */
+  sensitivity?: 'standard' | 'personal' | 'high'
 }
 
 function startsInsideSpans(startMs: number, spans: readonly CorrectionSpan[]): boolean {
@@ -209,9 +215,11 @@ function applyAttributionTags(
 // interpretation." A calendar-shaped evidence ref — the local calendar day
 // signal, a connector's calendar ledger ref, or a calendar_event envelope —
 // is a SCHEDULE claim; anything else (meeting notes, meeting_record
-// envelopes, any future observed source) supports occurrence.
+// envelopes, any future observed source) supports occurrence. Granola is one
+// of the spec's named occurrence sources: a notes record from it — the
+// per-record connector ref included — says the meeting HAPPENED.
 function isScheduleShapedRef(ref: { source_type: string; source_id: string }): boolean {
-  if (ref.source_type === 'connector') return true
+  if (ref.source_type === 'connector') return !ref.source_id.startsWith('granola:')
   if (ref.source_type === 'connected_envelope') return ref.source_id.startsWith('calendar_event:')
   if (ref.source_type === 'external_signal') return ref.source_id.endsWith(':calendar')
   return false
@@ -345,6 +353,207 @@ function artifactRecords(
   return [...byArtifact.values()]
 }
 
+// ─── Connected activity ──────────────────────────────────────────────────────
+// One record per non-tombstoned connector ledger row about this day's
+// connected work: coding activity (commits, pull requests, reviews, issues),
+// issue-tracker movement, and meeting notes. The statement names the
+// provider, so search results, packets, and agent answers always show WHERE
+// the claim comes from — connected context, not observed activity.
+
+const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
+  github: 'GitHub',
+  linear: 'Linear',
+}
+
+interface ConnectedActivityEnvelope {
+  entity?: {
+    kind?: string
+    provider?: string
+    owner?: string
+    repo?: string
+    activity?: { kind?: string; title?: string; state?: string | null; actorLogin?: string | null }
+    people?: Array<{ connectorId?: string; displayName?: string }>
+    // issue_activity fields
+    identifier?: string
+    title?: string
+    state?: string | null
+    stateType?: string | null
+    team?: { key?: string; name?: string } | null
+    project?: { sourceProjectId?: string; name?: string } | null
+    cycle?: { number?: number; name?: string | null } | null
+    // meeting_record fields
+    participants?: Array<{ connectorId?: string; displayName?: string }>
+  }
+  notesSignal?: { title?: string; actionItems?: string[] }
+}
+
+function connectedActivityStatement(
+  provider: string,
+  repoFullName: string,
+  activity: { kind?: string; title?: string; state?: string | null; actorLogin?: string | null },
+): string {
+  const title = activity.title ?? 'untitled'
+  switch (activity.kind) {
+    case 'commit':
+      return `${provider}: committed "${title}" in ${repoFullName}`
+    case 'pull_request': {
+      const verb = activity.state === 'merged' ? 'merged'
+        : activity.state === 'closed' ? 'closed'
+          : activity.state === 'draft' ? 'drafted'
+            : 'opened'
+      return `${provider}: ${verb} pull request "${title}" in ${repoFullName}`
+    }
+    case 'review': {
+      const outcome = activity.state ? ` (${activity.state})` : ''
+      return activity.actorLogin
+        ? `${provider}: review by ${activity.actorLogin} on "${title}"${outcome} in ${repoFullName}`
+        : `${provider}: reviewed "${title}"${outcome} in ${repoFullName}`
+    }
+    case 'issue': {
+      const state = activity.state ? ` (${activity.state})` : ''
+      return `${provider}: issue "${title}"${state} in ${repoFullName}`
+    }
+    default:
+      return `${provider}: activity in ${repoFullName}`
+  }
+}
+
+/** "Linear: moved DAY-12 "Fix login" to In Progress in project Onboarding". */
+function connectedIssueStatement(provider: string, entity: NonNullable<ConnectedActivityEnvelope['entity']>): string {
+  const identifier = entity.identifier ?? 'an issue'
+  const title = entity.title ?? 'untitled'
+  const where = entity.project?.name
+    ? ` in project ${entity.project.name}`
+    : entity.team?.name ? ` in ${entity.team.name}` : ''
+  const cycle = typeof entity.cycle?.number === 'number' ? ` (cycle ${entity.cycle.number})` : ''
+  switch (entity.stateType) {
+    case 'completed':
+      return `${provider}: completed ${identifier} "${title}"${where}${cycle}`
+    case 'canceled':
+      return `${provider}: canceled ${identifier} "${title}"${where}${cycle}`
+    case 'started':
+      return `${provider}: moved ${identifier} "${title}" to ${entity.state ?? 'In Progress'}${where}${cycle}`
+    default:
+      return entity.state
+        ? `${provider}: issue ${identifier} "${title}" (${entity.state})${where}${cycle}`
+        : `${provider}: issue ${identifier} "${title}"${where}${cycle}`
+  }
+}
+
+const MAX_NOTE_STATEMENT_ITEMS = 3
+const MAX_NOTE_STATEMENT_ITEM_CHARS = 80
+
+/** "Granola: notes from "Weekly sync" — Ship v2; Dana owns rollout". The
+ *  statement carries only a few clipped note lines — minimized, personal
+ *  sensitivity rides the record row. */
+function connectedNotesStatement(title: string, actionItems: string[]): string {
+  const clipped = actionItems
+    .slice(0, MAX_NOTE_STATEMENT_ITEMS)
+    .map((item) => (item.length > MAX_NOTE_STATEMENT_ITEM_CHARS
+      ? `${item.slice(0, MAX_NOTE_STATEMENT_ITEM_CHARS - 1)}…`
+      : item))
+  return clipped.length > 0
+    ? `Granola: notes from "${title}" — ${clipped.join('; ')}`
+    : `Granola: notes from "${title}"`
+}
+
+function connectedActivityRecords(
+  db: Database.Database,
+  date: string,
+  ignoredSpans: readonly CorrectionSpan[],
+): PendingRecord[] {
+  if (!tableExists(db, 'connector_records')) return []
+  const rows = db.prepare(`
+    SELECT id, connector_id, source_record_id, kind, entity_id, effective_at, retrieved_at, sensitivity, envelope_json
+    FROM connector_records
+    WHERE date = ? AND kind IN ('repository_activity', 'issue_activity', 'meeting_record') AND tombstoned_at IS NULL
+  `).all(date) as Array<{
+    id: string
+    connector_id: string
+    source_record_id: string
+    kind: string
+    entity_id: string | null
+    effective_at: number | null
+    retrieved_at: number
+    sensitivity: 'standard' | 'personal' | 'high'
+    envelope_json: string
+  }>
+  const records: PendingRecord[] = []
+  for (const row of rows) {
+    let envelope: ConnectedActivityEnvelope
+    try {
+      envelope = JSON.parse(row.envelope_json) as ConnectedActivityEnvelope
+    } catch {
+      continue
+    }
+    const entity = envelope.entity
+    if (!entity) continue
+    const startMs = row.effective_at ?? row.retrieved_at
+    if (startsInsideSpans(startMs, ignoredSpans)) continue
+
+    let statement: string
+    let exactText: string
+    let title: string
+    if (row.kind === 'repository_activity') {
+      if (!entity.activity?.title || !entity.provider || !entity.repo) continue
+      const provider = PROVIDER_DISPLAY_NAMES[entity.provider] ?? entity.provider
+      const repoFullName = entity.owner ? `${entity.owner}/${entity.repo}` : entity.repo
+      statement = connectedActivityStatement(provider, repoFullName, entity.activity)
+      exactText = `${entity.activity.title} ${repoFullName}`
+      title = entity.activity.title
+    } else if (row.kind === 'issue_activity') {
+      if (!entity.title || !entity.provider) continue
+      const provider = PROVIDER_DISPLAY_NAMES[entity.provider] ?? entity.provider
+      statement = connectedIssueStatement(provider, entity)
+      exactText = [entity.title, entity.identifier, entity.project?.name, entity.team?.key]
+        .filter(Boolean).join(' ')
+      title = entity.title
+    } else {
+      // meeting_record: a meeting-notes source (only Granola today). The
+      // record is CONTENT memory — what the notes say — next to the meeting
+      // entity the note attached to.
+      if (row.connector_id !== 'granola' || !entity.title) continue
+      const actionItems = envelope.notesSignal?.actionItems ?? []
+      statement = connectedNotesStatement(entity.title, actionItems)
+      exactText = [entity.title, ...actionItems].join(' ')
+      title = entity.title
+    }
+
+    const entityIds = new Set<string>()
+    if (row.entity_id) {
+      const primaryId = activeEntityId(db, row.entity_id)
+      if (primaryId) entityIds.add(primaryId)
+    }
+    for (const person of entity.people ?? entity.participants ?? []) {
+      if (!person.connectorId) continue
+      const personRow = db.prepare(
+        `SELECT * FROM entities WHERE entity_type = 'person' AND identity_key = ?`,
+      ).get(`connector:${person.connectorId}`) as EntityRow | undefined
+      if (!personRow) continue
+      const personId = activeEntityId(db, personRow.id)
+      if (personId) entityIds.add(personId)
+    }
+
+    records.push({
+      id: newRecordId(),
+      kind: 'connected_activity',
+      memoryType: 'connected',
+      statement,
+      exactText,
+      startMs,
+      endMs: startMs,
+      appBundleId: null,
+      appName: null,
+      title,
+      primaryEntityId: null,
+      sourceRefs: [`connector:${row.connector_id}:${row.source_record_id}`],
+      entityIds,
+      sensitivity: row.sensitivity,
+    })
+  }
+  return records
+}
+
 // ─── Index maintenance ───────────────────────────────────────────────────────
 
 export interface IndexDayResult {
@@ -362,6 +571,7 @@ export function indexMemoryForDay(db: Database.Database, date: string): IndexDay
   applyAttributionTags(db, records, fromMs, toMs)
   records.push(...meetingRecords(db, fromMs, toMs, ignoredSpans))
   records.push(...artifactRecords(db, fromMs, toMs, ignoredSpans))
+  records.push(...connectedActivityRecords(db, date, ignoredSpans))
 
   const insertRecord = db.prepare(`
     INSERT INTO memory_records (
@@ -369,7 +579,7 @@ export function indexMemoryForDay(db: Database.Database, date: string): IndexDay
       date, start_ms, end_ms, app_bundle_id, app_name, title,
       primary_entity_id, source_refs_json, confidence, provenance,
       sensitivity, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'standard', ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `)
   const insertTag = db.prepare(`
     INSERT OR IGNORE INTO memory_record_entities (record_id, entity_id) VALUES (?, ?)
@@ -403,6 +613,7 @@ export function indexMemoryForDay(db: Database.Database, date: string): IndexDay
         JSON.stringify(record.sourceRefs),
         record.memoryType === 'connected' ? 'corroborated' : 'observed',
         record.kind === 'session' ? 'corrected_session' : record.kind,
+        record.sensitivity ?? 'standard',
         now,
       )
       for (const entityId of record.entityIds) insertTag.run(record.id, entityId)
