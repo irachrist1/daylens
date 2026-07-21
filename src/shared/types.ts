@@ -2186,6 +2186,30 @@ export interface PaymentRecord {
   updatedAt: number
 }
 
+// ─── Entitlement snapshot (billing-and-entitlements spec) ───────────────────
+// The signed contract the billing service returns from GET /v1/entitlement.
+// This is the consolidation target that replaces BillingAccessSnapshot for
+// access decisions; the desktop validates the Ed25519 signature against a
+// build-pinned public key and never infers paid access from a UI flag alone.
+
+export type EntitlementState = 'trial' | 'active' | 'grace' | 'exhausted' | 'expired' | 'refunded'
+
+export interface EntitlementSnapshot {
+  accountId: string
+  state: EntitlementState
+  periodStart: number | null
+  periodEnd: number | null
+  managedCreditGrantedUsd: number
+  managedCreditReservedUsd: number
+  managedCreditConsumedUsd: number
+  canUseManagedAI: boolean
+  canUseCloud: boolean
+  issuedAt: number
+  expiresAt: number
+  kid: string
+  signature: string
+}
+
 export interface BillingAccessSnapshot {
   mode: BillingAccessMode
   canUseAI: boolean
@@ -2203,6 +2227,12 @@ export interface BillingAccessSnapshot {
   localCheckoutAvailable: boolean
   portalAvailable: boolean
   message: string
+  // Whole questions the remaining allowance can still answer, computed on the
+  // desktop from the remaining credit and per-model pricing. Allowance is
+  // displayed in money and estimated questions — never raw tokens first. Null
+  // when there is no remaining managed allowance to estimate (own key,
+  // unavailable, or paused access).
+  estimatedQuestionsRemaining?: number | null
 }
 
 export type BillingUsageCostSource = 'provider' | 'estimated' | 'unknown'

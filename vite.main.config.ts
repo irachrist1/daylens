@@ -15,6 +15,11 @@ const posthogKey = JSON.stringify(env('POSTHOG_PROJECT_TOKEN') || env('POSTHOG_K
 const posthogHost = JSON.stringify(env('POSTHOG_HOST'))
 const sentryDsn = JSON.stringify(env('SENTRY_DSN'))
 const billingApiUrl = JSON.stringify(env('DAYLENS_BILLING_API_URL'))
+// JSON map of kid → base64 raw Ed25519 public key for entitlement-snapshot
+// verification. Empty until a signing key is minted for the billing service;
+// while empty the entitlement gate stays unarmed and legacy /v1/billing
+// access governs.
+const entitlementPublicKeys = JSON.stringify(env('DAYLENS_ENTITLEMENT_PUBLIC_KEYS') || '{}')
 
 export default defineConfig({
   resolve: {
@@ -38,6 +43,7 @@ export default defineConfig({
         __POSTHOG_HOST__: posthogHost,
         __SENTRY_DSN__: sentryDsn,
         __DAYLENS_BILLING_API_URL__: billingApiUrl,
+        __DAYLENS_ENTITLEMENT_PUBLIC_KEYS__: entitlementPublicKeys,
       }
     : {
         __DAYLENS_CONVEX_SITE_URL__: convexSiteUrl,
@@ -45,6 +51,7 @@ export default defineConfig({
         __POSTHOG_HOST__: posthogHost,
         __SENTRY_DSN__: sentryDsn,
         __DAYLENS_BILLING_API_URL__: billingApiUrl,
+        __DAYLENS_ENTITLEMENT_PUBLIC_KEYS__: entitlementPublicKeys,
       },
   build: {
     // Build as Node (not browser) so node: builtins are not externalized
