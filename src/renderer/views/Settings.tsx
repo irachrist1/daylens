@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
+import { ChevronDown, Search } from 'lucide-react'
 import { ANALYTICS_EVENT } from '@shared/analytics'
 import type {
   AppCategory,
@@ -38,15 +39,18 @@ import { CHANGELOG, LATEST_CHANGELOG, formatChangelogDate, changelogIssueLabel, 
 import { ALL_ACTIVITY_CATEGORY_OPTIONS } from '@shared/activityCategories'
 import { claudeDesktopConfigDisplayPath } from '@shared/platformPaths'
 import { currentCaptureConsentDecidedAt } from '@shared/captureConsent'
+import { useCompactLayout } from '../hooks/useCompactLayout'
 
 const CATEGORY_OPTIONS: Array<{ value: AppCategory; label: string }> = ALL_ACTIVITY_CATEGORY_OPTIONS
 
 function Toggle({
   checked,
   onChange,
+  label,
 }: {
   checked: boolean
   onChange: (value: boolean) => void
+  label?: string
 }) {
   return (
     <button
@@ -54,26 +58,31 @@ function Toggle({
       onClick={() => onChange(!checked)}
       role="switch"
       aria-checked={checked}
+      aria-label={label}
       style={{
-        width: 42,
-        height: 24,
+        width: 44,
+        height: 26,
         borderRadius: 999,
-        border: 'none',
-        background: checked ? 'var(--gradient-primary)' : 'var(--color-surface-high)',
+        border: `1px solid ${checked ? 'var(--color-primary-glow)' : 'var(--color-border-ghost)'}`,
+        background: checked ? 'var(--color-primary-glow)' : 'var(--color-surface-high)',
         position: 'relative',
         cursor: 'pointer',
         padding: 0,
+        flexShrink: 0,
+        transition: 'background 160ms, border-color 160ms',
       }}
     >
       <span style={{
         position: 'absolute',
         top: 3,
-        left: checked ? 22 : 3,
+        left: 3,
         width: 18,
         height: 18,
         borderRadius: '50%',
         background: '#fff',
-        transition: 'left 120ms',
+        boxShadow: '0 1px 3px rgba(0, 0, 0, 0.28)',
+        transform: checked ? 'translateX(18px)' : 'translateX(0)',
+        transition: 'transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1)',
       }} />
     </button>
   )
@@ -1288,6 +1297,7 @@ function SettingsRail({
   search: string
   onSearch: (value: string) => void
 }) {
+  const [searchFocused, setSearchFocused] = useState(false)
   const query = search.trim().toLowerCase()
   const matches = (item: SectionDef) =>
     query === ''
@@ -1303,7 +1313,7 @@ function SettingsRail({
         width: 232,
         flexShrink: 0,
         height: '100%',
-        overflowY: 'auto',
+        overflow: 'hidden',
         boxSizing: 'border-box',
         borderRight: '1px solid var(--color-border-ghost)',
         background: 'var(--color-sidebar-bg)',
@@ -1313,26 +1323,45 @@ function SettingsRail({
         gap: 16,
       }}
     >
-      <input
-        type="text"
-        value={search}
-        onChange={(event) => onSearch(event.target.value)}
-        placeholder="Search settings…"
-        aria-label="Search settings"
+      <div
         style={{
           width: '100%',
-          height: 32,
-          padding: '0 10px',
-          borderRadius: 8,
-          border: '1px solid var(--color-border-ghost)',
-          background: 'var(--color-surface-high)',
-          color: 'var(--color-text-primary)',
-          fontSize: 12.5,
-          outline: 'none',
+          height: 42,
+          padding: '0 13px',
+          borderRadius: 10,
+          border: `1px solid ${searchFocused ? 'var(--color-primary-glow)' : 'var(--color-border-ghost)'}`,
+          background: 'var(--color-surface)',
           boxSizing: 'border-box',
+          display: 'flex',
+          alignItems: 'center',
+          flexShrink: 0,
+          gap: 10,
+          boxShadow: searchFocused ? '0 0 0 3px var(--color-accent-dim)' : 'none',
+          transition: 'border-color 140ms, box-shadow 140ms',
         }}
-      />
-      <nav style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      >
+        <Search size={17} strokeWidth={1.9} color={searchFocused ? 'var(--color-primary-glow)' : 'var(--color-text-tertiary)'} aria-hidden="true" />
+        <input
+          type="text"
+          value={search}
+          onChange={(event) => onSearch(event.target.value)}
+          onFocus={() => setSearchFocused(true)}
+          onBlur={() => setSearchFocused(false)}
+          placeholder="Search settings…"
+          aria-label="Search settings"
+          style={{
+            flex: 1,
+            minWidth: 0,
+            border: 'none',
+            padding: 0,
+            background: 'transparent',
+            color: 'var(--color-text-primary)',
+            fontSize: 13.5,
+            outline: 'none',
+          }}
+        />
+      </div>
+      <nav className="settings-rail-nav" style={{ display: 'flex', flexDirection: 'column', gap: 20, flex: 1, minHeight: 0, overflowY: 'auto' }}>
         {groups.length === 0 ? (
           <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', padding: '4px 2px', lineHeight: 1.5 }}>
             No settings match “{search.trim()}”.
@@ -1604,6 +1633,9 @@ function UsagePage() {
   const [report, setReport] = useState<BillingUsageReport | null>(null)
   const [access, setAccess] = useState<BillingAccessSnapshot | null>(null)
   const [guardrails, setGuardrails] = useState<SpendGuardrailsReport | null>(null)
+  const [backgroundAiExpanded, setBackgroundAiExpanded] = useState(false)
+  const [featureSpendExpanded, setFeatureSpendExpanded] = useState(false)
+  const [aiCostTableExpanded, setAiCostTableExpanded] = useState(false)
   const [hoveredChartIndex, setHoveredChartIndex] = useState<number | null>(null)
   const [initialLoading, setInitialLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -1911,11 +1943,11 @@ function UsagePage() {
           {spendSourceNote}{spendSourceNote && refreshing ? ' ' : ''}{refreshing ? 'Updating…' : ''}
         </div>
       )}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 12 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
         {summaryCards.map(([label, value]) => (
-          <div key={label} style={{ padding: '18px 16px', border: '1px solid var(--color-border-ghost)', borderRadius: 10, background: 'var(--color-surface-low)' }}>
+          <div key={label} style={{ minWidth: 0, padding: '18px 16px', border: '1px solid var(--color-border-ghost)', borderRadius: 10, background: 'var(--color-surface-low)' }}>
             <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}>{label}</div>
-            <div style={{ fontSize: 22, fontWeight: 700, marginTop: 8, color: 'var(--color-text-primary)' }}>{showCardLoading ? '…' : value}</div>
+            <div style={{ fontSize: 22, fontWeight: 700, marginTop: 8, color: 'var(--color-text-primary)', overflowWrap: 'anywhere' }}>{showCardLoading ? '…' : value}</div>
           </div>
         ))}
       </div>
@@ -1926,12 +1958,12 @@ function UsagePage() {
             <div style={{ fontSize: 16, fontWeight: 560, color: 'var(--color-text-primary)' }}>Your Usage</div>
             <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginTop: 3 }}>Your usage {chart?.granularity === 'hour' ? 'per hour today' : 'per day across this range'}</div>
           </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <select value={groupBy} onChange={(event) => setGroupBy(event.target.value as GroupKey)} style={inputStyle(170)}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, maxWidth: '100%' }}>
+            <select value={groupBy} onChange={(event) => setGroupBy(event.target.value as GroupKey)} style={{ ...inputStyle(170), maxWidth: '100%' }}>
               <option value="model">Group: Model</option>
               <option value="type">Group: Feature</option>
             </select>
-            <select value={metric} onChange={(event) => setMetric(event.target.value as MetricKey)} style={inputStyle(125)}>
+            <select value={metric} onChange={(event) => setMetric(event.target.value as MetricKey)} style={{ ...inputStyle(125), maxWidth: '100%' }}>
               <option value="spend">Spend</option>
               <option value="tokens">Tokens</option>
             </select>
@@ -2075,68 +2107,109 @@ function UsagePage() {
       </div>
 
       {guardrails && (
-        <div style={{ border: '1px solid var(--color-border-ghost)', borderRadius: 10, padding: 18, background: 'var(--color-surface-low)', display: 'grid', gap: 14 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
-            <div>
-              <div style={{ fontSize: 16, fontWeight: 560, color: 'var(--color-text-primary)' }}>Background AI</div>
-              <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginTop: 3 }}>
-                AI that runs on its own (labeling, memory writes). Each feature stops for the day when it hits its budget, and you get a notification. Turning this off stops all of it immediately — things you ask for still work.
+        <div style={{ border: '1px solid var(--color-border-ghost)', borderRadius: 10, background: 'var(--color-surface-low)', overflow: 'hidden' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px' }}>
+            <button
+              type="button"
+              aria-expanded={backgroundAiExpanded}
+              onClick={() => setBackgroundAiExpanded((expanded) => !expanded)}
+              style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0, padding: 0, border: 'none', background: 'transparent', color: 'inherit', textAlign: 'left', cursor: 'pointer' }}
+            >
+              <ChevronDown
+                size={16}
+                strokeWidth={1.8}
+                aria-hidden="true"
+                style={{ flexShrink: 0, color: 'var(--color-text-tertiary)', transform: backgroundAiExpanded ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 160ms' }}
+              />
+              <span style={{ minWidth: 0 }}>
+                <span style={{ display: 'block', fontSize: 14, fontWeight: 620, color: 'var(--color-text-primary)' }}>Background AI</span>
+                <span style={{ display: 'block', marginTop: 2, fontSize: 11.5, color: 'var(--color-text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {guardrails.backgroundAiEnabled ? `${guardrails.features.length} feature budgets` : 'Paused'}
+                </span>
+              </span>
+            </button>
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+              <span style={{ fontSize: 11.5, fontWeight: 600, color: guardrails.backgroundAiEnabled ? 'var(--color-text-secondary)' : 'var(--color-text-tertiary)' }}>
+                {guardrails.backgroundAiEnabled ? 'On' : 'Off'}
+              </span>
+              <Toggle
+                checked={guardrails.backgroundAiEnabled}
+                label="Background AI"
+                onChange={(value) => void persistGuardrailSetting({ backgroundAiEnabled: value })}
+              />
+            </div>
+          </div>
+          {backgroundAiExpanded && (
+            <div style={{ borderTop: '1px solid var(--color-border-ghost)', padding: '14px 16px 16px' }}>
+              <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', lineHeight: 1.55, marginBottom: 10 }}>
+                Each feature pauses for the day when it reaches its budget. Turning Background AI off stops these automatic tasks, while things you ask for still work.
+              </div>
+              <div style={{ display: 'grid' }}>
+                {guardrails.features.map((item, index) => (
+                  <div key={item.feature} style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '8px 0', borderTop: index === 0 ? 'none' : '1px solid var(--color-border-ghost)', fontSize: 12 }}>
+                    <span style={{ color: 'var(--color-text-primary)', fontWeight: 540, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {item.feature}
+                      {item.exhausted && (
+                        <span style={{ marginLeft: 8, color: 'var(--color-danger, #d4494c)', fontSize: 11.5, fontWeight: 600 }}>
+                          Background paused
+                        </span>
+                      )}
+                    </span>
+                    <span style={{ display: 'inline-flex', gap: 7, alignItems: 'center', flexShrink: 0 }}>
+                      <span style={{ color: item.exhausted ? 'var(--color-danger, #d4494c)' : 'var(--color-text-tertiary)' }}>
+                        ${item.spentTodayUsd.toFixed(2)} today
+                      </span>
+                      <span style={{ color: 'var(--color-text-tertiary)' }}>of</span>
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.25}
+                        defaultValue={item.budgetUsd}
+                        onBlur={(event) => {
+                          // An emptied field is an abandoned edit, not a $0 budget.
+                          if (event.target.value.trim() === '') {
+                            event.target.value = String(item.budgetUsd)
+                            return
+                          }
+                          const next = Math.max(0, Number(event.target.value))
+                          if (Number.isFinite(next) && next !== item.budgetUsd) void setFeatureBudget(item.feature, next)
+                        }}
+                        style={{ width: 64, height: 28, boxSizing: 'border-box', padding: '0 8px', borderRadius: 7, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-primary)', fontSize: 12 }}
+                        aria-label={`${item.feature} daily budget in dollars`}
+                      />
+                      <span style={{ color: 'var(--color-text-tertiary)' }}>/day</span>
+                    </span>
+                  </div>
+                ))}
               </div>
             </div>
-            <Toggle
-              checked={guardrails.backgroundAiEnabled}
-              onChange={(value) => void persistGuardrailSetting({ backgroundAiEnabled: value })}
-            />
-          </div>
-          <div style={{ display: 'grid', gap: 8 }}>
-            {guardrails.features.map((item) => (
-              <div key={item.feature} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, fontSize: 12.5 }}>
-                <span style={{ color: 'var(--color-text-primary)', fontWeight: 540, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {item.feature}
-                  {item.exhausted && (
-                    <span style={{ marginLeft: 8, color: 'var(--color-danger, #d4494c)', fontSize: 11.5, fontWeight: 600 }}>
-                      Background paused — budget spent
-                    </span>
-                  )}
-                </span>
-                <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
-                  <span style={{ color: item.exhausted ? 'var(--color-danger, #d4494c)' : 'var(--color-text-tertiary)' }}>
-                    ${item.spentTodayUsd.toFixed(2)} today of
-                  </span>
-                  <input
-                    type="number"
-                    min={0}
-                    step={0.25}
-                    defaultValue={item.budgetUsd}
-                    onBlur={(event) => {
-                      // An emptied field is an abandoned edit, not a $0 budget.
-                      if (event.target.value.trim() === '') {
-                        event.target.value = String(item.budgetUsd)
-                        return
-                      }
-                      const next = Math.max(0, Number(event.target.value))
-                      if (Number.isFinite(next) && next !== item.budgetUsd) void setFeatureBudget(item.feature, next)
-                    }}
-                    style={{ width: 72, padding: '4px 6px', borderRadius: 6, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-base)', color: 'var(--color-text-primary)', fontSize: 12.5 }}
-                    aria-label={`${item.feature} daily budget in dollars`}
-                  />
-                  <span style={{ color: 'var(--color-text-tertiary)' }}>/day</span>
-                </span>
-              </div>
-            ))}
-          </div>
+          )}
         </div>
       )}
 
       {featureBreakdown && (
-        <div style={{ border: '1px solid var(--color-border-ghost)', borderRadius: 10, padding: 18, background: 'var(--color-surface-low)', display: 'grid', gap: 14 }}>
-          <div>
-            <div style={{ fontSize: 16, fontWeight: 560, color: 'var(--color-text-primary)' }}>Spend by feature</div>
-            <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginTop: 3 }}>
-              Where your AI usage went across this range — cost and tokens per feature.
-            </div>
-          </div>
-          <div style={{ display: 'grid', gap: 10 }}>
+        <div style={{ border: '1px solid var(--color-border-ghost)', borderRadius: 10, background: 'var(--color-surface-low)', overflow: 'hidden' }}>
+          <button
+            type="button"
+            aria-expanded={featureSpendExpanded}
+            onClick={() => setFeatureSpendExpanded((expanded) => !expanded)}
+            style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '14px 16px', border: 'none', background: 'transparent', color: 'inherit', textAlign: 'left', cursor: 'pointer' }}
+          >
+            <ChevronDown
+              size={16}
+              strokeWidth={1.8}
+              aria-hidden="true"
+              style={{ flexShrink: 0, color: 'var(--color-text-tertiary)', transform: featureSpendExpanded ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 160ms' }}
+            />
+            <span style={{ minWidth: 0 }}>
+              <span style={{ display: 'block', fontSize: 14, fontWeight: 620, color: 'var(--color-text-primary)' }}>Spend by feature</span>
+              <span style={{ display: 'block', marginTop: 2, fontSize: 11.5, color: 'var(--color-text-tertiary)' }}>
+                {featureBreakdown.items.length} features across this range
+              </span>
+            </span>
+          </button>
+          {featureSpendExpanded && (
+          <div style={{ display: 'grid', gap: 10, borderTop: '1px solid var(--color-border-ghost)', padding: '14px 16px 16px' }}>
             {featureBreakdown.items.map((item, index) => {
               const share = featureBreakdown.useSpend
                 ? (featureBreakdown.totalCost > 0 ? item.costUsd / featureBreakdown.totalCost : 0)
@@ -2167,11 +2240,33 @@ function UsagePage() {
               )
             })}
           </div>
+          )}
         </div>
       )}
 
-      <div style={{ border: '1px solid var(--color-border-ghost)', borderRadius: 10, overflow: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820, fontSize: 12 }}>
+      <div style={{ border: '1px solid var(--color-border-ghost)', borderRadius: 10, background: 'var(--color-surface-low)', overflow: 'hidden' }}>
+        <button
+          type="button"
+          aria-expanded={aiCostTableExpanded}
+          onClick={() => setAiCostTableExpanded((expanded) => !expanded)}
+          style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '14px 16px', border: 'none', background: 'transparent', color: 'inherit', textAlign: 'left', cursor: 'pointer' }}
+        >
+          <ChevronDown
+            size={16}
+            strokeWidth={1.8}
+            aria-hidden="true"
+            style={{ flexShrink: 0, color: 'var(--color-text-tertiary)', transform: aiCostTableExpanded ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 160ms' }}
+          />
+          <span style={{ minWidth: 0 }}>
+            <span style={{ display: 'block', fontSize: 14, fontWeight: 620, color: 'var(--color-text-primary)' }}>AI cost details</span>
+            <span style={{ display: 'block', marginTop: 2, fontSize: 11.5, color: 'var(--color-text-tertiary)' }}>
+              {(report?.rows.length ?? 0).toLocaleString()} calls in this range
+            </span>
+          </span>
+        </button>
+        {aiCostTableExpanded && (
+        <div style={{ borderTop: '1px solid var(--color-border-ghost)', overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820, fontSize: 12 }}>
           <thead>
             <tr style={{ background: 'var(--color-surface-low)', color: 'var(--color-text-tertiary)', textAlign: 'left' }}>
               {['Date', 'Feature', 'Type', 'Model', 'Tokens', 'Cost'].map((heading) => <th key={heading} style={{ padding: '11px 14px', fontWeight: 620 }}>{heading}</th>)}
@@ -2189,19 +2284,22 @@ function UsagePage() {
               </tr>
             ))}
           </tbody>
-        </table>
-        {(report?.rows.length ?? 0) > 200 && (
-          <div style={{ padding: '10px 14px', borderTop: '1px solid var(--color-border-ghost)', color: 'var(--color-text-tertiary)', fontSize: 11.5 }}>
-            Showing the latest 200 calls. Export CSV includes the full selected range.
-          </div>
+          </table>
+          {(report?.rows.length ?? 0) > 200 && (
+            <div style={{ padding: '10px 14px', borderTop: '1px solid var(--color-border-ghost)', color: 'var(--color-text-tertiary)', fontSize: 11.5 }}>
+              Showing the latest 200 calls. Export CSV includes the full selected range.
+            </div>
+          )}
+          {!showCardLoading && !report?.rows.length && <div style={{ padding: 24, textAlign: 'center', color: 'var(--color-text-tertiary)', fontSize: 12.5 }}>No usage in this range.</div>}
+        </div>
         )}
-        {!showCardLoading && !report?.rows.length && <div style={{ padding: 24, textAlign: 'center', color: 'var(--color-text-tertiary)', fontSize: 12.5 }}>No usage in this range.</div>}
       </div>
     </SectionPage>
   )
 }
 
 export default function Settings({ initialSettings = null }: { initialSettings?: AppSettings | null } = {}) {
+  const isCompact = useCompactLayout()
   const [settings, setSettings] = useState<AppSettings | null>(initialSettings)
   // Which section the content pane shows. Honors a ?section= deep link on first
   // mount (so other surfaces can jump straight to e.g. Billing), then is local.
@@ -4037,7 +4135,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
         onSearch={setSectionSearch}
       />
       <div style={{ flex: 1, minWidth: 0, overflowY: 'auto' }}>
-        <div key={activeSection} style={{ padding: '34px 44px 72px' }}>
+        <div key={activeSection} style={{ padding: isCompact ? '28px 24px 56px' : '34px 44px 72px' }}>
           {settingsWriteError && (
             <div role="alert" style={{ ...infoPanelStyle, color: '#f87171', marginTop: 0, marginBottom: 16 }}>
               {settingsWriteError}
