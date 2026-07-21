@@ -16,6 +16,8 @@ export interface WebsiteActivityTarget {
   title?: string | null
 }
 
+const PAGE_WINDOW = 40
+
 function DeleteIconButton({ label, busy, onClick }: { label: string; busy: boolean; onClick: () => void }) {
   return (
     <button
@@ -54,6 +56,10 @@ export default function BrowserActivityBreakdown({
   onDelete: (target: WebsiteActivityTarget) => void
 }) {
   const [expandedDomains, setExpandedDomains] = useState<Set<string>>(() => new Set())
+  // DEV-227: a domain can accumulate hundreds of pages over 30 days; drawing
+  // them all at once stutters the panel. Render a page window per domain and
+  // grow it on demand.
+  const [pageLimits, setPageLimits] = useState<Record<string, number>>({})
   const domainSplit = useMemo(
     () => partitionDomainsWorkFirst(activity.domains, (entry) => entry.domain),
     [activity.domains],
@@ -153,7 +159,19 @@ export default function BrowserActivityBreakdown({
         </div>
         {expanded && entry.pages.length > 0 && (
           <div style={{ display: 'grid', gap: 12, margin: '10px 0 4px', paddingLeft: 20, borderLeft: '2px solid var(--color-border-ghost)', marginLeft: 4 }}>
-            {entry.pages.map(renderPageRow)}
+            {entry.pages.slice(0, pageLimits[entry.domain] ?? PAGE_WINDOW).map(renderPageRow)}
+            {entry.pages.length > (pageLimits[entry.domain] ?? PAGE_WINDOW) && (
+              <button
+                type="button"
+                onClick={() => setPageLimits((limits) => ({
+                  ...limits,
+                  [entry.domain]: (limits[entry.domain] ?? PAGE_WINDOW) + PAGE_WINDOW,
+                }))}
+                style={{ justifySelf: 'start', padding: '4px 10px', borderRadius: 8, border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: 12, cursor: 'pointer' }}
+              >
+                Show {Math.min(PAGE_WINDOW, entry.pages.length - (pageLimits[entry.domain] ?? PAGE_WINDOW))} more of {entry.pages.length} pages
+              </button>
+            )}
           </div>
         )}
       </div>

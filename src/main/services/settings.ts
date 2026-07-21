@@ -49,6 +49,9 @@ const DEFAULTS: AppSettings = {
   aiActiveBlockPreview: false,
   aiPromptCachingEnabled: true,
   aiSpendSoftLimitUsd: 10,
+  backgroundAiEnabled: true,
+  aiFeatureDailyBudgetUsd: 0.5,
+  aiFeatureBudgetOverridesUsd: {},
   aiRedactFilePaths: false,
   aiRedactEmails: false,
   allowThirdPartyWebsiteIconFallback: false,
@@ -91,7 +94,21 @@ function liveModelId(stored: string): string {
   return DEPRECATED_MODEL_REMAP[stored] ?? stored
 }
 
+// Worker-only seam (DEV-227): the range-facts worker subprocess has no
+// electron-store, but the shared activity query reads settings (focusApps)
+// deep inside. The worker primes this snapshot from each request so its
+// facts match what the main process would compute. Never set in the main
+// process.
+let _workerSettingsOverride: Partial<AppSettings> | null = null
+
+export function primeWorkerSettingsOverride(partial: Partial<AppSettings>): void {
+  _workerSettingsOverride = partial
+}
+
 export function getSettings(): AppSettings {
+  if (_workerSettingsOverride) {
+    return { ...DEFAULTS, ..._workerSettingsOverride }
+  }
   if (!_store) {
     // Synchronous fallback before async init — return defaults
     return { ...DEFAULTS }
@@ -128,6 +145,9 @@ export function getSettings(): AppSettings {
     aiActiveBlockPreview: (_store.get('aiActiveBlockPreview', false) as boolean),
     aiPromptCachingEnabled: (_store.get('aiPromptCachingEnabled', true) as boolean),
     aiSpendSoftLimitUsd: (_store.get('aiSpendSoftLimitUsd', 10) as number),
+    backgroundAiEnabled: (_store.get('backgroundAiEnabled', true) as boolean),
+    aiFeatureDailyBudgetUsd: (_store.get('aiFeatureDailyBudgetUsd', 0.5) as number),
+    aiFeatureBudgetOverridesUsd: (_store.get('aiFeatureBudgetOverridesUsd', {}) as Record<string, number>),
     aiRedactFilePaths: (_store.get('aiRedactFilePaths', false) as boolean),
     aiRedactEmails: (_store.get('aiRedactEmails', false) as boolean),
     allowThirdPartyWebsiteIconFallback: (_store.get('allowThirdPartyWebsiteIconFallback', false) as boolean),

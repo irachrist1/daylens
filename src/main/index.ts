@@ -132,6 +132,9 @@ import { fireTestDailyNotification } from './services/notificationHarness'
 import { consumePendingNavigationRoute } from './services/dailySummaryNavigation'
 import { registerCommandPaletteShortcut, unregisterCommandPaletteShortcut } from './services/commandPalette'
 import { registerDistractionAlerterHandlers, resetDistractionStateOnResume, setDistractionAlertWindow, startDistractionAlerter } from './services/distractionAlerter'
+import { setSpendAlertWindow } from './services/aiSpendGuardrails'
+import { stopRangeWorker } from './services/rangeWorker'
+import { setPermissionWatcherWindow, startPermissionWatcher, stopPermissionWatcher } from './services/permissionWatcher'
 import { startExternalSignalCollection, stopExternalSignalCollection } from './services/externalSignals'
 import { startConnectorSyncSchedule, stopConnectorSyncSchedule } from './connectors/service'
 import { registerGoogleCalendarConnector } from './connectors/googleCalendar/adapter'
@@ -553,6 +556,9 @@ function startCaptureServices(): void {
   if (!SMOKE_TEST && !shouldStartTrackingForSettings(getSettings())) return
   startTracking()
   if (process.platform === 'darwin') startFocusCapture()
+  // DEV-229: verify from launch that the Accessibility grant actually works
+  // (real reads, not just the flag) and keep verifying while the app runs.
+  if (!SMOKE_TEST) startPermissionWatcher()
   if (process.platform === 'win32') startWindowsFocusCapture()
   if (!SMOKE_TEST && (process.platform === 'win32' || process.platform === 'linux')) ensureProcessMonitor()
   if (!SMOKE_TEST) startExternalSignalCollection()
@@ -598,6 +604,8 @@ function startBackgroundServices(): void {
       startSync()
       startDailySummaryNotifier(mainWindow)
       setDistractionAlertWindow(mainWindow)
+      setSpendAlertWindow(mainWindow)
+      setPermissionWatcherWindow(mainWindow)
       startDistractionAlerter()
     }
     backgroundServicesStarted = true
@@ -829,6 +837,8 @@ async function shutdownApp(options?: { awaitFinalSync?: boolean; backupBeforeExi
     deferredIntegrationStartup = null
   }
   stopMcpServer()
+  stopRangeWorker()
+  stopPermissionWatcher()
   stopCaptureServices()
   stopSync()
   stopMemoryIndexBackfill()
@@ -1055,6 +1065,8 @@ function createWindow(): BrowserWindow {
       mainWindow = null
       setDailySummaryNotificationWindow(null)
       setDistractionAlertWindow(null)
+      setSpendAlertWindow(null)
+      setPermissionWatcherWindow(null)
     }
   })
 
@@ -1348,6 +1360,8 @@ app.whenReady()
     mainWindow = createWindow()
     setDailySummaryNotificationWindow(mainWindow)
     setDistractionAlertWindow(mainWindow)
+    setSpendAlertWindow(mainWindow)
+    setPermissionWatcherWindow(mainWindow)
     if (!REAL_DAY_HARNESS) ensureTray()
     initUpdater(mainWindow, { diagnosticsOnly: SMOKE_TEST })
 
@@ -1449,6 +1463,8 @@ app.on('activate', () => {
     mainWindow = createWindow()
     setDailySummaryNotificationWindow(mainWindow)
     setDistractionAlertWindow(mainWindow)
+    setSpendAlertWindow(mainWindow)
+    setPermissionWatcherWindow(mainWindow)
     ensureTray()
     startBackgroundServices()
   } else {

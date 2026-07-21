@@ -5,6 +5,7 @@ import { applyAppearanceSettings } from '@shared/activityColors'
 import TitleBar from './components/TitleBar'
 import Sidebar from './components/Sidebar'
 import UpdateBanner from './components/UpdateBanner'
+import CaptureBlindBanner from './components/CaptureBlindBanner'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import DayWrapped from './components/DayWrapped'
 import PeriodWrapped from './components/PeriodWrapped'
@@ -226,6 +227,7 @@ function AppContent({ settings }: { settings: AppSettings | null }) {
   return (
     <>
       <UpdateBanner />
+      <CaptureBlindBanner />
       {paletteOpen && (
         <CommandPalette
           isOpen={paletteOpen}

@@ -2283,6 +2283,16 @@ export interface AppSettings {
   aiActiveBlockPreview?: boolean
   aiPromptCachingEnabled?: boolean
   aiSpendSoftLimitUsd?: number
+  /** DEV-228 kill switch: false stops every machine-initiated AI call
+   *  (background and system triggers of background job types) immediately.
+   *  User-initiated calls always run. Default true. */
+  backgroundAiEnabled?: boolean
+  /** DEV-228: each feature's daily spend budget in USD. Applies to every
+   *  feature unless overridden per feature below. Default $0.50. */
+  aiFeatureDailyBudgetUsd?: number
+  /** Per-feature budget overrides, keyed by the user-facing feature name
+   *  from shared/aiFeatures.ts (the same names the Usage screen shows). */
+  aiFeatureBudgetOverridesUsd?: Record<string, number>
   aiRedactFilePaths?: boolean
   aiRedactEmails?: boolean
   allowThirdPartyWebsiteIconFallback?: boolean // false = keep website icons local/browser-cache only
@@ -2521,6 +2531,19 @@ export interface BillingUsageJobSummary {
   costUsd: number | null
 }
 
+/** DEV-228: what the Usage screen's Background AI card shows — the kill
+ *  switch state plus each feature's daily budget and spend so far today. */
+export interface SpendGuardrailsReport {
+  backgroundAiEnabled: boolean
+  defaultDailyBudgetUsd: number
+  features: Array<{
+    feature: string
+    budgetUsd: number
+    spentTodayUsd: number
+    exhausted: boolean
+  }>
+}
+
 export interface BillingUsageHourlyPoint {
   hour: number
   label: string
@@ -2637,13 +2660,28 @@ interface LinuxDesktopDiagnostics {
   secretServiceReachable: boolean | null
 }
 
+/** DEV-229: the permission watcher's live verdict on whether capture can
+ *  actually read window titles — the OS grant flag AND a real-read proxy
+ *  (titled share of recently persisted samples). 'blind' = flag revoked or
+ *  grant silently dead; 'degraded' = under half of samples titled;
+ *  'waiting' = too few samples to judge. */
+export interface CaptureVerificationState {
+  status: 'healthy' | 'degraded' | 'blind' | 'waiting'
+  axTrusted: boolean
+  recentSamples: number
+  recentSamplesWithTitle: number
+  checkedAt: number
+}
+
 export interface TrackingDiagnosticsPayload {
   platform: NodeJS.Platform
   trackingStatus: TrackingStatusDiagnostics
   captureHealth: {
     permissions: TrackingPermissionDetails
     windowTitles: {
-      status: 'healthy' | 'waiting' | 'missing'
+      // 'degraded' = titles are arriving but on under half of samples —
+      // capture works, badly (DEV-229's "most samples carry titles" bar).
+      status: 'healthy' | 'degraded' | 'waiting' | 'missing'
       recentSamples: number
       recentSamplesWithTitle: number
       lastCapturedAt: number | null
@@ -2960,6 +2998,7 @@ export const IPC = {
     EXPORT_USAGE_CSV: 'billing:export-usage-csv',
     REFRESH: 'billing:refresh',
     GET_PAYMENTS: 'billing:get-payments',
+    GET_SPEND_GUARDRAILS: 'billing:get-spend-guardrails',
   },
   PROJECTIONS: {
     INVALIDATED: 'projections:invalidated',
@@ -2979,6 +3018,10 @@ export const IPC = {
     GET_PERMISSION_STATE: 'tracking:get-permission-state',
     GET_PERMISSION_DETAILS: 'tracking:get-permission-details',
     REQUEST_SCREEN_PERMISSION: 'tracking:request-screen-permission',
+    // DEV-229: main-process permission watcher — a pull for the current
+    // verdict plus a push channel fired on every status change.
+    GET_CAPTURE_VERIFICATION: 'tracking:get-capture-verification',
+    CAPTURE_VERIFICATION_CHANGED: 'tracking:capture-verification-changed',
     // Delete already-captured history for an excluded app/site.
     DELETE_APP_HISTORY: 'tracking:delete-app-history',
     DELETE_SITE_HISTORY: 'tracking:delete-site-history',
