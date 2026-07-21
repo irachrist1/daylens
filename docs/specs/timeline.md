@@ -76,6 +76,8 @@ A block may include one short observation when it is supported and useful. It mu
 
 When evidence conflicts, the block states the specific uncertainty naturally and keeps the competing evidence inspectable.
 
+The label voice is recorded as an evaluatable rubric in [label-voice.md](label-voice.md). The real-day review and the hermetic timeline evaluation score produced labels against it.
+
 ## Meetings
 
 Meetings are unified Timeline blocks rather than a separate calendar layer.
