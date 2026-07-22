@@ -2,10 +2,10 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSPr
 import { useSearchParams } from 'react-router-dom'
 import { EyeOff, Trash2, X } from 'lucide-react'
 import { ANALYTICS_EVENT, blockCountBucket, trackedTimeBucket } from '@shared/analytics'
-import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, AttributionProject, CalendarRangeBlock, CalendarRangeDay, ClientRecord, CorrectionCommand, DayTimelinePayload, RebuildTimelineDayResult, TimelineGapSegment, TimelineScheduledMeeting, WorkContextBlock } from '@shared/types'
+import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, AttributionProject, CalendarRangeBlock, CalendarRangeDay, ClientRecord, CorrectionCommand, DayTimelinePayload, RebuildTimelineDayResult, TimelineAnalyzeProgress, TimelineClarification, TimelineClarificationAnswer, TimelineGapSegment, TimelineScheduledMeeting, WorkContextBlock } from '@shared/types'
 import { activityColorForCategory, leisureBlocksDimmed } from '@shared/activityColors'
 import { assignLanes, calendarCardHeights } from '../lib/timelineBlockLayout'
-import { blockActiveSeconds } from '@shared/blockDuration'
+import { blockActiveSeconds, blockDisplayedSpanSeconds } from '@shared/blockDuration'
 import { userVisibleBlockLabel } from '@shared/blockLabel'
 import { blockTypeTag, effectiveBlockKind } from '@shared/workKind'
 import AppIcon from '../components/AppIcon'
@@ -32,7 +32,7 @@ import { formatDisplayAppName } from '../lib/apps'
 import { formatDuration, formatFullDate, shiftDateString, todayString, weekStartString } from '../lib/format'
 import { openArtifact } from '../lib/openTarget'
 import { activityCategoryLabel, EDITABLE_BLOCK_CATEGORY_OPTIONS } from '@shared/activityCategories'
-import { blockShortSummary, safeTimelineText, shortDomainLabel } from '../lib/timelineText'
+import { blockShortSummary, cleanTitleForDisplay, safeTimelineText, shortDomainLabel } from '../lib/timelineText'
 
 // The types a user can assign a block in Edit → Type. Category drives the
 // block's color everywhere, so this doubles as the recolor control. The
@@ -283,7 +283,7 @@ function CalendarBlockCard({
     <button
       type="button"
       data-timeline-block-id={block.id}
-      aria-label={`Open ${label}, ${formatDuration(blockActiveSeconds(block))}`}
+      aria-label={`Open ${label}, ${formatDuration(blockDisplayedSpanSeconds(block))}`}
       aria-pressed={isSelected}
       onClick={onClick}
       onContextMenu={onContextMenu}
@@ -383,7 +383,7 @@ function CalendarBlockCard({
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: compact ? 10 : 11, color: 'var(--color-text-tertiary)', marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           <ClockGlyph size={compact ? 9 : 10} />
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {timeRange} · {formatDuration(blockActiveSeconds(block))}
+            {timeRange} · {formatDuration(blockDisplayedSpanSeconds(block))}
           </span>
         </div>
       )}
@@ -1606,6 +1606,18 @@ const daySummaryRecapCache = new Map<string, AIDaySummaryResult>()
 // Report what Analyze / Re-analyze actually did (DEV-231) rather than a fixed
 // success line — the real re-labeled and merged counts, or "already up to date"
 // when the run touched nothing.
+// A truthful line for each phase the analyze pipeline is actually in (DEV-270),
+// so the button says what the system is doing instead of a blank "Analyzing…".
+function analyzeProgressMessage(progress: TimelineAnalyzeProgress): string {
+  switch (progress.stage) {
+    case 'preparing': return 'Reading the day…'
+    case 'merging': return 'Joining continued work…'
+    case 'naming': return progress.total > 0 ? `Naming your work… ${progress.done}/${progress.total}` : 'Naming your work…'
+    case 'finishing': return 'Finishing up…'
+    default: return 'Analyzing…'
+  }
+}
+
 function analyzeOutcomeMessage(result: RebuildTimelineDayResult, provisional: boolean): string {
   const plural = (n: number) => (n === 1 ? '' : 's')
   if (provisional) {
@@ -1621,12 +1633,116 @@ function analyzeOutcomeMessage(result: RebuildTimelineDayResult, provisional: bo
   return message
 }
 
-function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePayload; onSelectBlock?: (blockId: string) => void; onRefresh?: () => Promise<void> }) {
+// The analyze run-state, lifted OUT of DaySummaryInspector so it survives the
+// panel swapping to a block's detail mid-run (DEV-270: the outcome/progress no
+// longer vanishes when you click a block while Analyze is working). Owned by the
+// Timeline component; the inspector and the block-detail status pill both read it.
+export interface DayAnalysisController {
+  analyzing: boolean
+  status: string | null
+  progress: TimelineAnalyzeProgress | null
+  run: (hint?: string) => Promise<RebuildTimelineDayResult | null>
+}
+
+function useDayAnalysis(dateStr: string, provisional: boolean, onRefresh?: () => Promise<void>): DayAnalysisController {
+  const [analyzing, setAnalyzing] = useState(false)
+  const [status, setStatus] = useState<string | null>(null)
+  const [progress, setProgress] = useState<TimelineAnalyzeProgress | null>(null)
+  // The outcome line belongs to the day it described; clear it when the day changes.
+  useEffect(() => { setStatus(null); setProgress(null) }, [dateStr])
+  const run = useCallback(async (hint?: string): Promise<RebuildTimelineDayResult | null> => {
+    if (analyzing) return null
+    track(ANALYTICS_EVENT.ANALYZE_DAY_CLICKED, { date: dateStr })
+    setAnalyzing(true)
+    setStatus(null)
+    setProgress(null)
+    const unsubscribe = ipc.db.onAnalyzeProgress((update) => setProgress(update))
+    try {
+      const result = await ipc.db.rebuildTimelineDay(dateStr, hint)
+      daySummaryRecapCache.delete(dateStr)
+      await onRefresh?.()
+      setStatus(analyzeOutcomeMessage(result, provisional))
+      return result
+    } catch (error) {
+      const { message } = sanitizeIpcError(error, 'Analysis failed. Try again in a moment.')
+      setStatus(message)
+      return null
+    } finally {
+      unsubscribe()
+      setAnalyzing(false)
+      setProgress(null)
+    }
+  }, [analyzing, dateStr, provisional, onRefresh])
+  return { analyzing, status, progress, run }
+}
+
+// One answer-or-skip question the day-analysis agent has for the person — the
+// same pattern Cursor / Claude Code / Codex use. Answering writes a durable
+// correction; Skip dismisses it for good. Never blocks the recap.
+function ClarificationCard({ clarification, onResolve }: {
+  clarification: TimelineClarification
+  onResolve: (answer: TimelineClarificationAnswer) => void
+}) {
+  const [customText, setCustomText] = useState('')
+  const isMeeting = clarification.kind === 'unconfirmed-meeting'
+
+  const chooseOption = (option: { id: string; label: string }) => {
+    if (isMeeting) {
+      onResolve({ id: clarification.id, kind: 'unconfirmed-meeting', action: 'answer', eventKey: clarification.eventKey, attendance: option.id as TimelineClarificationAnswer['attendance'] })
+    } else {
+      onResolve({ id: clarification.id, kind: 'unnamed-block', action: 'answer', blockId: clarification.blockId, label: option.label })
+    }
+  }
+  const submitCustom = () => {
+    const label = customText.trim()
+    if (!label) return
+    onResolve({ id: clarification.id, kind: 'unnamed-block', action: 'answer', blockId: clarification.blockId, label })
+  }
+
+  return (
+    <div style={{ display: 'grid', gap: 8, padding: 12, borderRadius: 12, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)' }}>
+      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-text-primary)', lineHeight: 1.5 }}>{clarification.question}</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {clarification.options.map((option) => (
+          <button
+            key={option.id}
+            type="button"
+            onClick={() => chooseOption(option)}
+            style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', borderRadius: 8, padding: '5px 10px', fontSize: 12.5, cursor: 'pointer' }}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+      {!isMeeting && (
+        <div style={{ display: 'flex', gap: 6 }}>
+          <input
+            value={customText}
+            onChange={(event) => setCustomText(event.target.value)}
+            onKeyDown={(event) => { if (event.key === 'Enter') submitCustom() }}
+            placeholder="Or describe it in your own words…"
+            style={{ flex: 1, minWidth: 0, border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-primary)', borderRadius: 8, padding: '5px 8px', fontSize: 12.5 }}
+          />
+          <button type="button" onClick={submitCustom} disabled={!customText.trim()} style={{ border: 'none', background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)', borderRadius: 8, padding: '5px 10px', fontSize: 12.5, fontWeight: 600, cursor: customText.trim() ? 'pointer' : 'default', opacity: customText.trim() ? 1 : 0.5 }}>Save</button>
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={() => onResolve({ id: clarification.id, kind: clarification.kind, action: 'skip' })}
+        style={{ justifySelf: 'start', border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', fontSize: 11.5, cursor: 'pointer', padding: 0 }}
+      >
+        Skip
+      </button>
+    </div>
+  )
+}
+
+function DaySummaryInspector({ payload, analysis }: { payload: DayTimelinePayload; analysis: DayAnalysisController; onSelectBlock?: (blockId: string) => void }) {
   const [recap, setRecap] = useState<AIDaySummaryResult | null>(null)
   const [recapLoading, setRecapLoading] = useState(false)
   const [recapError, setRecapError] = useState<string | null>(null)
-  const [analyzing, setAnalyzing] = useState(false)
-  const [analyzeStatus, setAnalyzeStatus] = useState<string | null>(null)
+  const [clarifications, setClarifications] = useState<TimelineClarification[]>([])
+  const { analyzing, status: analyzeStatus, progress: analyzeProgress, run: runAnalyze } = analysis
   // The optional-note step of Analyze day: a one-line hint grounds the AI.
   const [wrapOpen, setWrapOpen] = useState(false)
   const [wrapNote, setWrapNote] = useState('')
@@ -1635,48 +1751,46 @@ function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePaylo
   // Daylens makes no claim about the day until it has enough to work with.
   const enoughToAnalyze = trackedSecondsFor(payload) >= ANALYZE_MIN_SECONDS
 
+  const loadClarifications = useCallback(() => {
+    void ipc.db.getDayClarifications(payload.date).then(setClarifications).catch(() => setClarifications([]))
+  }, [payload.date])
+
   useEffect(() => {
-    setAnalyzeStatus(null)
     setRecapError(null)
     setWrapOpen(false)
     setWrapNote('')
     const cached = daySummaryRecapCache.get(payload.date)
     setRecap(cached ?? null)
     setRecapLoading(false)
-  }, [payload.date])
+    loadClarifications()
+  }, [payload.date, loadClarifications])
 
   useEffect(() => ipc.projections.onInvalidated((event) => {
     if (event.scope !== 'timeline' && event.scope !== 'all') return
     if (event.date && event.date !== payload.date) return
     daySummaryRecapCache.delete(payload.date)
     setRecap(null)
-  }), [payload.date])
+    loadClarifications()
+  }), [payload.date, loadClarifications])
+
+  // Answer or skip one question. An answer writes a durable correction in the
+  // main process (which invalidates the day, refreshing the timeline and recap);
+  // either way the card leaves the list immediately.
+  const resolveClarification = (answer: TimelineClarificationAnswer) => {
+    setClarifications((current) => current.filter((item) => item.id !== answer.id))
+    void ipc.db.resolveDayClarification(payload.date, answer).catch(() => loadClarifications())
+  }
 
   // Analyze Day (today) / Re-analyze (a past day): finalize the provisional day
   // into named blocks and refresh deterministic-floor / low-confidence labels.
-  // An optional hint (what the user typed they did) grounds the AI when the
-  // evidence is thin.
+  // The run itself (ipc call, progress subscription, outcome) lives in the
+  // lifted controller so it survives selecting a block mid-run (DEV-270); this
+  // only clears the optional-note step on success.
   const handleAnalyze = async (hint?: string) => {
-    if (analyzing) return
-    track(ANALYTICS_EVENT.ANALYZE_DAY_CLICKED, {
-      date: payload.date,
-      tracked_hours: payload.totalSeconds / 3600,
-      block_count_before: payload.blocks.length,
-    })
-    setAnalyzing(true)
-    setAnalyzeStatus(null)
-    try {
-      const result = await ipc.db.rebuildTimelineDay(payload.date, hint)
-      daySummaryRecapCache.delete(payload.date)
-      await onRefresh?.()
+    const result = await runAnalyze(hint)
+    if (result) {
       setWrapOpen(false)
       setWrapNote('')
-      setAnalyzeStatus(analyzeOutcomeMessage(result, provisional))
-    } catch (error) {
-      const { message } = sanitizeIpcError(error, 'Analysis failed. Try again in a moment.')
-      setAnalyzeStatus(message)
-    } finally {
-      setAnalyzing(false)
     }
   }
 
@@ -1724,8 +1838,17 @@ function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePaylo
         <>
           {/* The day recap — calm, grounded prose once generated. */}
           {recap?.summary && (
-            <div style={{ fontSize: 14, lineHeight: 1.7, color: 'var(--color-text-primary)' }}>
-              {recap.summary}
+            <div style={{ display: 'grid', gap: 6 }}>
+              {/* Nothing fails silently: when the AI recap couldn't run, the
+                  factual fallback says so plainly rather than posing as prose. */}
+              {recap.degraded && (
+                <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>
+                  AI recap unavailable — showing the day's facts. Try again in a moment.
+                </div>
+              )}
+              <div style={{ fontSize: 14, lineHeight: 1.7, color: 'var(--color-text-primary)' }}>
+                {recap.summary}
+              </div>
             </div>
           )}
 
@@ -1733,14 +1856,27 @@ function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePaylo
             <div style={{ fontSize: 11.5, lineHeight: 1.5, color: '#f87171' }}>{recapError}</div>
           )}
 
-          {onRefresh && (
+          {/* The agent's answer-or-skip questions — only when it genuinely has
+              a material one. Answering refines the day; skipping dismisses it. */}
+          {clarifications.length > 0 && (
+            <div style={{ display: 'grid', gap: 8 }}>
+              <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}>
+                A couple of quick checks to get today right — answer or skip.
+              </div>
+              {clarifications.map((clarification) => (
+                <ClarificationCard key={clarification.id} clarification={clarification} onResolve={resolveClarification} />
+              ))}
+            </div>
+          )}
+
+          {(
             // The divider only draws when prose sits above it — as the panel's
             // first element it would read as a stray line under the padding.
             <div style={{ borderTop: (recap?.summary || recapError) ? '1px solid var(--color-border-ghost)' : 'none', paddingTop: (recap?.summary || recapError) ? 14 : 0, display: 'grid', gap: 8, justifyItems: 'start', width: '100%' }}>
               {analyzing ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 650, color: 'var(--color-text-primary)' }}>
                   <span style={{ width: 13, height: 13, borderRadius: '50%', border: '2px solid var(--color-border-ghost)', borderTopColor: 'var(--color-text-secondary)', display: 'inline-block', animation: 'spin 0.7s linear infinite' }} />
-                  Analyzing day…
+                  {analyzeProgress ? analyzeProgressMessage(analyzeProgress) : 'Analyzing day…'}
                 </div>
               ) : provisional ? (
                 // TODAY, unanalyzed: Analyze day shapes the provisional day into
@@ -1798,7 +1934,7 @@ function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePaylo
                     style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', borderRadius: 10, padding: '7px 12px', fontSize: 12.5, fontWeight: 600, cursor: analyzing ? 'default' : 'pointer', opacity: analyzing ? 0.6 : 1, display: 'inline-flex', alignItems: 'center', gap: 7 }}
                   >
                     {analyzing && <span aria-hidden style={{ width: 12, height: 12, borderRadius: '50%', border: '2px solid var(--color-border-ghost)', borderTopColor: 'var(--color-text-secondary)', display: 'inline-block', animation: 'spin 0.7s linear infinite' }} />}
-                    {analyzing ? 'Analyzing…' : 'Re-analyze with AI'}
+                    {analyzing ? (analyzeProgress ? analyzeProgressMessage(analyzeProgress) : 'Analyzing…') : 'Re-analyze with AI'}
                   </button>
                   <button
                     type="button"
@@ -1860,7 +1996,7 @@ function BlockDetailInspector({
   // seconds. Off-task evidence is split out below as side trips (§6). The
   // nesting itself (which rows are children of which app) is pure logic,
   // extracted to blockDetailRowTree.ts so it's unit-testable without a DOM.
-  const { evidence, detours, detourSeconds } = buildDetailRowTree(block)
+  const { evidence, detours, detourSeconds, briefCount, briefSeconds } = buildDetailRowTree(block)
 
   // DEV-189: the calendar event this block's captured meeting-app evidence
   // supports, when one matched. The block's own time stays observed activity;
@@ -1872,10 +2008,20 @@ function BlockDetailInspector({
   // The block's type tag + how the time inside splits by category. Real facts,
   // compactly: "Focused work" · Development 2h 10m · AI tools 40m.
   const typeTag = blockTypeTag(block)
-  const categorySplit = Object.entries(block.categoryDistribution ?? {})
+  // The category appears once (DEV-272). A duration chip that merely restates
+  // the type tag ("Browsing" under a "Browsing" tag) is dropped; only a genuine
+  // split across two-plus categories earns its own chips.
+  const categorySplitAll = Object.entries(block.categoryDistribution ?? {})
     .filter((entry): entry is [AppCategory, number] => typeof entry[1] === 'number' && entry[1] >= 60)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 3)
+  const categorySplit = categorySplitAll.length <= 1
+    ? categorySplitAll.filter(([category]) => activityCategoryLabel(category) !== typeTag)
+    : categorySplitAll
+  // The type tag is dropped when it only echoes the block's own title (a
+  // "Browsing" block titled "Browsing"), so the category is stated once, not
+  // three times (DEV-272).
+  const showTypeTag = typeTag.trim().toLowerCase() !== userVisibleBlockLabel(block).trim().toLowerCase()
 
   // Presentation (name/detail/icon/onOpen) for a row tree node, built from
   // whichever raw source object it carries. Kept separate from the pure
@@ -1892,8 +2038,8 @@ function BlockDetailInspector({
     if (row.kind === 'artifact' && row.artifact) {
       const artifact = row.artifact
       return {
-        name: safeTimelineText(artifact.displayTitle.trim()),
-        detail: artifact.subtitle || artifact.host || artifact.path || null,
+        name: cleanTitleForDisplay(artifact.displayTitle.trim()),
+        detail: artifact.subtitle ? formatDisplayAppName(artifact.subtitle) : (artifact.host || artifact.path || null),
         icon: (
           <EntityIcon
             artifactType={artifact.artifactType}
@@ -2040,7 +2186,7 @@ function BlockDetailInspector({
               {userVisibleBlockLabel(block)}
             </div>
             <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', marginTop: 3 }}>
-              {formatFullDate(payload.date)} ⋅ {formatClockTime(block.startTime)} – {formatClockTime(block.endTime)} · {formatDuration(blockActiveSeconds(block))}
+              {formatFullDate(payload.date)} ⋅ {formatClockTime(block.startTime)} – {formatClockTime(block.endTime)} · {formatDuration(blockDisplayedSpanSeconds(block))}
             </div>
           </div>
           <button type="button" aria-label="Back to day summary" title="Back to day summary" onClick={onClose} style={{ ...iconButtonStyle(), flexShrink: 0, marginTop: -3, marginRight: -3 }} {...iconHover}>
@@ -2060,19 +2206,21 @@ function BlockDetailInspector({
           padding: '16px 22px 20px',
         }}>
           {/* What kind of block this was, and how the time inside splits. */}
-          {(typeTag || categorySplit.length > 0) && (
+          {((showTypeTag && typeTag) || categorySplit.length > 0) && (
             <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginBottom: 14 }}>
-              <span style={{
-                padding: '3px 9px',
-                borderRadius: 999,
-                fontSize: 11,
-                fontWeight: 700,
-                color: accent,
-                background: `${accent}1c`,
-                border: `1px solid ${accent}40`,
-              }}>
-                {typeTag}
-              </span>
+              {showTypeTag && typeTag && (
+                <span style={{
+                  padding: '3px 9px',
+                  borderRadius: 999,
+                  fontSize: 11,
+                  fontWeight: 700,
+                  color: accent,
+                  background: `${accent}1c`,
+                  border: `1px solid ${accent}40`,
+                }}>
+                  {typeTag}
+                </span>
+              )}
               {categorySplit.map(([category, seconds]) => (
                 <span key={category} style={{
                   padding: '3px 9px',
@@ -2159,6 +2307,13 @@ function BlockDetailInspector({
                 <div style={{ display: 'grid', gap: 10 }}>
                   {evidence.map((row) => renderEvidenceRow(row, false))}
                 </div>
+                {briefCount > 0 && (
+                  // Sub-minute apps and pages folded into one quiet line instead
+                  // of standing as their own 2-second rows (DEV-272).
+                  <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 8 }}>
+                    + {briefCount} brief {briefCount === 1 ? 'glimpse' : 'glimpses'} under a minute{briefSeconds >= 60 ? ` · ${formatDuration(briefSeconds)}` : ''}
+                  </div>
+                )}
               </section>
             )}
 
@@ -2263,7 +2418,7 @@ function WeekEventPopover({
         </div>
         {/* One quiet metadata line: when, how long, what kind. */}
         <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 5, paddingLeft: 18, fontVariantNumeric: 'tabular-nums' }}>
-          {formatFullDate(date)} · {formatClockTime(block.startTime)} – {formatClockTime(block.endTime)} · {formatDuration(blockActiveSeconds(block))}
+          {formatFullDate(date)} · {formatClockTime(block.startTime)} – {formatClockTime(block.endTime)} · {formatDuration(blockDisplayedSpanSeconds(block))}
         </div>
         <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 2, paddingLeft: 18 }}>
           {activityCategoryLabel(block.dominantCategory)}
@@ -2873,6 +3028,14 @@ export default function Timeline() {
   const payload = timelineResource.data?.date === date ? timelineResource.data : null
   const error = timelineResource.error
   const loading = view === 'day' && (!payload || timelineResource.loading)
+
+  // Analyze run-state lives here, above the summary/block-detail panel swap, so
+  // its progress and outcome survive selecting a block mid-run (DEV-270).
+  const dayAnalysis = useDayAnalysis(
+    date,
+    payload?.blocks.some((block) => block.provisional) ?? false,
+    timelineResource.refresh,
+  )
 
   const blockMap = useMemo(() => {
     const map = new Map<string, WorkContextBlock>()
@@ -3520,17 +3683,29 @@ export default function Timeline() {
                         block shows its detail; no selection shows the day
                         summary. Nothing floats over the timeline. */}
                     {selectedBlock ? (
-                      <BlockDetailInspector
-                        block={selectedBlock}
-                        payload={payload}
-                        onCorrection={correction.request}
-                        onClose={() => {
-                          setSelectedBlockId(null)
-                          setMergeRangeEndId(null)
-                        }}
-                      />
+                      <>
+                        {/* Analyze feedback follows you into a block's detail view
+                            so the run never looks like it silently stopped (DEV-270). */}
+                        {(dayAnalysis.analyzing || dayAnalysis.status) && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--color-text-secondary)', padding: '8px 12px', borderRadius: 10, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', marginBottom: 10 }}>
+                            {dayAnalysis.analyzing && <span aria-hidden style={{ width: 12, height: 12, borderRadius: '50%', border: '2px solid var(--color-border-ghost)', borderTopColor: 'var(--color-text-secondary)', display: 'inline-block', animation: 'spin 0.7s linear infinite' }} />}
+                            {dayAnalysis.analyzing
+                              ? (dayAnalysis.progress ? analyzeProgressMessage(dayAnalysis.progress) : 'Analyzing day…')
+                              : dayAnalysis.status}
+                          </div>
+                        )}
+                        <BlockDetailInspector
+                          block={selectedBlock}
+                          payload={payload}
+                          onCorrection={correction.request}
+                          onClose={() => {
+                            setSelectedBlockId(null)
+                            setMergeRangeEndId(null)
+                          }}
+                        />
+                      </>
                     ) : (
-                      <DaySummaryInspector payload={payload} onRefresh={timelineResource.refresh} />
+                      <DaySummaryInspector payload={payload} analysis={dayAnalysis} />
                     )}
                     {/* Dev preview only (?panelVariants=1): the two candidate
                         height caps side by side, to compare the short (320)

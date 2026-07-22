@@ -119,6 +119,7 @@ export const DELETION_OWNERSHIP: Record<string, DeletionOwnership> = {
   projects: { kind: 'user', owner: OWN_SETTINGS_FLOW },
   supplied_memory_facts: { kind: 'user', owner: 'memory forget flow (deleteSuppliedFact)' },
   timeline_block_reviews: { kind: 'user', owner: 'correction undo/redo flows' },
+  timeline_clarification_skips: { kind: 'user', owner: 'day rebuild clears the day\'s rows; a dismissal is a local UI preference, not evidence' },
   timeline_boundary_corrections: { kind: 'user', owner: 'correction undo/redo flows' },
   user_memory_facts: { kind: 'user', owner: 'memory forget flow' },
   work_memory_facts: { kind: 'user', owner: 'memory forget flow' },

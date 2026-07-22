@@ -422,6 +422,15 @@ export interface RebuildTimelineDayResult {
   failed: number
 }
 
+/** A progress tick streamed while a day is analyzed (DEV-270). `stage` names
+ *  the phase the pipeline is actually in; `done`/`total` are populated during
+ *  the per-block naming phase so the UI can show real progress, not a spinner. */
+export interface TimelineAnalyzeProgress {
+  stage: 'preparing' | 'merging' | 'naming' | 'finishing'
+  done: number
+  total: number
+}
+
 /** One scheduled calendar event as the Timeline day view shows it (DEV-189).
  *  `attendance` is honest: 'matched' means captured meeting-app evidence OR
  *  the person's explicit confirmation supports it (a block id is present only
@@ -439,6 +448,48 @@ export interface TimelineScheduledMeeting {
   attendance: 'matched' | 'calendar_only'
   marked: 'attended' | 'skipped' | 'moved' | 'unrelated' | null
   matchedBlockId: string | null
+}
+
+// One thing the day-analysis agent could not settle from evidence and that
+// would materially change the account — surfaced to the person as an
+// answer-or-skip question (the interpretation agent's clarification contract).
+// Answering writes a durable correction (a block label, an attendance mark);
+// skipping is remembered so the same question is not re-asked.
+export interface TimelineClarificationOption {
+  id: string
+  label: string
+}
+
+export interface TimelineClarification {
+  /** Stable across reads (date + kind + block/event identity) so a skip or
+   *  answer de-duplicates the same question. */
+  id: string
+  kind: 'unnamed-block' | 'unconfirmed-meeting'
+  date: string
+  /** The whole span the question is about, for display. */
+  timeRange: string
+  question: string
+  /** Candidate answers drawn from the block's own evidence; the UI always adds
+   *  a free-text option and a Skip. */
+  options: TimelineClarificationOption[]
+  /** Present for 'unnamed-block'. */
+  blockId?: string
+  /** Present for 'unconfirmed-meeting' — the attendance-mark identity. */
+  eventKey?: string
+  meetingTitle?: string
+}
+
+export interface TimelineClarificationAnswer {
+  id: string
+  kind: 'unnamed-block' | 'unconfirmed-meeting'
+  /** 'skip' remembers the dismissal; 'answer' applies the durable correction. */
+  action: 'answer' | 'skip'
+  blockId?: string
+  /** For an answered 'unnamed-block': the chosen or typed activity label. */
+  label?: string
+  eventKey?: string
+  /** For an answered 'unconfirmed-meeting'. */
+  attendance?: 'attended' | 'skipped' | 'moved' | 'unrelated'
 }
 
 export type HistoryDayPayload = DayTimelinePayload
@@ -609,6 +660,12 @@ export interface FocusReflectionSavePayload {
 export interface AIDaySummaryResult {
   summary: string
   questionSuggestions: string[]
+  /** True when this is the deterministic factual fallback shown because the AI
+   *  recap could not be generated (unavailable / timed out / unparseable) — so
+   *  the UI can say so plainly instead of passing a template off as the recap
+   *  (DEV-270/275: nothing fails silently). Absent on a real AI recap and on the
+   *  empty-day line. */
+  degraded?: boolean
 }
 
 export type AIAnswerKind =
@@ -2890,6 +2947,13 @@ export const IPC = {
     GET_HISTORY_DAY: 'db:get-history-day',
     GET_TIMELINE_DAY: 'db:get-timeline-day',
     REBUILD_TIMELINE_DAY: 'db:rebuild-timeline-day',
+    // Progress ticks streamed while REBUILD_TIMELINE_DAY runs (DEV-270), so the
+    // Analyze button shows what the system is actually doing, not a blank spinner.
+    ANALYZE_PROGRESS: 'db:analyze-progress',
+    // The material answer-or-skip questions the day-analysis agent has for a day,
+    // and the channel to answer or dismiss them (DEV-247/270 clarification).
+    GET_DAY_CLARIFICATIONS: 'db:get-day-clarifications',
+    RESOLVE_DAY_CLARIFICATION: 'db:resolve-day-clarification',
     GET_APP_SUMMARIES: 'db:get-app-summaries',
     GET_APP_SUMMARIES_FOR_DATE: 'db:get-app-summaries-for-date',
     GET_ALL_APPS_FOR_LABELING: 'db:get-all-apps-for-labeling',

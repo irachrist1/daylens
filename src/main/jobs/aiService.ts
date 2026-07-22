@@ -33,7 +33,8 @@ import {
   parseStarterSuggestions,
 } from '../lib/followUpSuggestions'
 import { transformInstruction } from '@shared/answerTransforms'
-import { looksLikeRawArtifactLabel } from '@shared/blockLabel'
+import { looksLikeRawArtifactLabel, userVisibleBlockLabel } from '@shared/blockLabel'
+import { rawLabelForm } from '@shared/labelVoice'
 import { partitionDomainsWorkFirst } from '@shared/workKind'
 import { appNarrativeScopeKey, THIN_APP_NARRATIVE_SUMMARY } from '@shared/appNarrativeContract'
 import { userProfileDirective } from '@shared/userProfile'
@@ -1430,70 +1431,6 @@ function reviewedWorkIntent(block: WorkContextBlock): ReturnType<typeof inferWor
   }
 }
 
-function leadSentenceForIntent(block: WorkContextBlock): string {
-  const duration = formatDuration(blockDurationSeconds(block))
-  const intent = reviewedWorkIntent(block)
-
-  switch (intent.role) {
-    case 'execution':
-      return intent.subject
-        ? `The clearest named block was ${intent.subject} for ${duration}.`
-        : `The clearest block lasted ${duration}, but the label is still broad.`
-    case 'research':
-      return intent.subject
-        ? `A large share of today was captured around ${intent.subject} for ${duration}.`
-        : `A large share of today was browsing or page context for ${duration}, but intent is not certain.`
-    case 'review':
-      return intent.subject
-        ? `A large share of today touched ${intent.subject} for ${duration}.`
-        : `A large share of today looked like review for ${duration}, based on the available titles.`
-    case 'communication':
-      return intent.subject
-        ? `A large share of today was communication around ${intent.subject} for ${duration}.`
-        : `A large share of today was communication for ${duration}.`
-    case 'coordination':
-      return intent.subject
-        ? `A large share of today was coordination around ${intent.subject} for ${duration}.`
-        : `A large share of today was coordination for ${duration}.`
-    case 'ambient':
-      return intent.subject
-        ? `A meaningful chunk of today was browser or app context on ${intent.subject} for ${duration}.`
-        : `A meaningful chunk of today was browser or app context for ${duration}.`
-    case 'ambiguous':
-    default:
-      return intent.subject
-        ? `The day mixed together work touching ${intent.subject} for ${duration}.`
-        : `The day mixed together several threads over ${duration}.`
-  }
-}
-
-function supportingIntentSentence(primary: WorkContextBlock, rankedBlocks: WorkContextBlock[]): string | null {
-  const primaryIntent = reviewedWorkIntent(primary)
-  const supporting = rankedBlocks
-    .slice(1)
-    .map((block) => ({ block, intent: reviewedWorkIntent(block) }))
-    .find(({ intent }) => intent.role !== primaryIntent.role)
-
-  if (!supporting) return null
-
-  if (primaryIntent.role === 'execution' && (supporting.intent.role === 'research' || supporting.intent.role === 'ambient')) {
-    return `${supporting.intent.summary} was supporting context, based on the available titles.`
-  }
-
-  if ((primaryIntent.role === 'research' || primaryIntent.role === 'ambient') && supporting.intent.role === 'execution') {
-    return `The more concrete work evidence showed up in ${supporting.intent.summary.toLowerCase()}.`
-  }
-
-  return null
-}
-
-function focusSentence(payload: DayTimelinePayload): string {
-  if (payload.focusPct >= 70) {
-    return `Focus held for ${formatDuration(payload.focusSeconds)} (${payload.focusPct}% of tracked time).`
-  }
-  return `Focus was more fragmented, with ${formatDuration(payload.focusSeconds)} counted as focused time (${payload.focusPct}%).`
-}
-
 
 // Follow-up chips are fully deterministic and grounded in the answer's own
 // named entities. This is a deliberate three-in-one fix:
@@ -1813,7 +1750,30 @@ async function persistMessageArtifacts(
   }
 }
 
-function fallbackDaySummary(payload: DayTimelinePayload): AIDaySummaryResult {
+// Neutral / placeholder labels that name no real activity — a coarse
+// un-analyzed sitting ("Morning") or an unnamed block. The factual fallback
+// must not present these as "what you worked on".
+const NON_ACTIVITY_LABELS = new Set([
+  'morning', 'afternoon', 'evening', 'night', 'late night',
+  'earlier today', 'active now', 'untitled block',
+])
+
+// The longest block's name, but only when it actually names an activity — never
+// a coarse time-of-day placeholder or an unnamed/provisional block.
+function recapWorthyLabel(block: WorkContextBlock): string | null {
+  if (block.provisional) return null
+  const label = userVisibleBlockLabel(block).trim()
+  if (!label || NON_ACTIVITY_LABELS.has(label.toLowerCase())) return null
+  if (rawLabelForm(label)) return null
+  return label
+}
+
+// The deterministic factual fallback, shown when the AI recap is unavailable.
+// It is deliberately a plain, honest factual line — not prose imitating the AI,
+// and free of internal vocabulary ("trusted blocks", "strongest evidence")
+// (DEV-275). `degraded` marks it as the "AI couldn't run" line so the UI can
+// say so plainly (DEV-270: nothing fails silently).
+function fallbackDaySummary(payload: DayTimelinePayload, degraded = false): AIDaySummaryResult {
   if (payload.totalSeconds === 0) {
     return {
       summary: 'No tracked activity yet today. Once Daylens has real local history, this screen can answer questions about your work, files, pages, and focus patterns.',
@@ -1825,19 +1785,19 @@ function fallbackDaySummary(payload: DayTimelinePayload): AIDaySummaryResult {
     }
   }
 
-  const trustedBlocks = payload.blocks.filter(isTrustedTimelineBlock)
-  const rankedBlocks = [...trustedBlocks]
-    .sort((left, right) => blockDurationSeconds(right) - blockDurationSeconds(left))
+  const blocks = payload.blocks.filter(isTrustedTimelineBlock)
+  const longest = [...blocks].sort((left, right) => blockDurationSeconds(right) - blockDurationSeconds(left))[0]
+  const longestName = longest ? recapWorthyLabel(longest) : null
+  const entities = (payload.dayEntities ?? [])
+    .filter((entity) => entity.seconds >= 300)
     .slice(0, 3)
-  const primary = rankedBlocks[0]
-  const evidence = primary ? namedEvidenceForSummary(primary) : []
+    .map((entity) => entity.name)
 
   const summaryParts = [
-    `You tracked ${formatDuration(payload.totalSeconds)} across ${trustedBlocks.length} trusted block${trustedBlocks.length === 1 ? '' : 's'} today.`,
-    primary ? leadSentenceForIntent(primary) : null,
-    evidence.length > 0 ? `Strongest evidence included ${evidence.join(', ')}.` : null,
-    primary ? supportingIntentSentence(primary, rankedBlocks) : null,
-    focusSentence(payload),
+    `${formatDuration(payload.totalSeconds)} tracked across ${blocks.length} block${blocks.length === 1 ? '' : 's'}.`,
+    longestName
+      ? `Longest stretch: ${longestName} (${formatDuration(blockDurationSeconds(longest))}).`
+      : entities.length > 0 ? `Mostly around ${entities.join(', ')}.` : null,
   ]
 
   return {
@@ -1847,6 +1807,7 @@ function fallbackDaySummary(payload: DayTimelinePayload): AIDaySummaryResult {
       'Which files, docs, or pages did I touch today?',
       payload.blocks.length >= 3 ? 'Where did my focus break down today?' : 'What should I pick back up next?',
     ],
+    ...(degraded ? { degraded: true } : {}),
   }
 }
 
@@ -1939,6 +1900,36 @@ export function buildDaySummaryScaffold(payload: DayTimelinePayload): string {
     startedAt: formatClock(session.startTime),
   }))
 
+  // Scheduled calendar events, with the honest scheduling-vs-attendance
+  // distinction the authority order requires: a calendar event proves what was
+  // PLANNED; only "attended" (the person's own confirmation) or a matched
+  // captured block proves it HAPPENED. The model must never assert a meeting
+  // occurred from a calendar row alone.
+  const meetings = (payload.scheduledMeetings ?? []).map((meeting) => ({
+    title: meeting.title,
+    scheduled: `${formatClock(meeting.startMs)}-${formatClock(meeting.endMs)}`,
+    // What the evidence supports about presence, in plain terms for the model.
+    presence: meeting.marked === 'attended'
+      ? 'you confirmed you attended'
+      : meeting.marked === 'skipped'
+        ? 'you marked this skipped'
+        : meeting.marked === 'moved'
+          ? 'you marked this moved'
+          : meeting.marked === 'unrelated'
+            ? 'you marked this unrelated'
+            : meeting.attendance === 'matched'
+              ? 'tracked activity overlaps it (likely occurred)'
+              : 'scheduled only — no evidence it occurred',
+    attendeeCount: meeting.attendeeCount ?? undefined,
+  }))
+
+  // The durable entities the day's evidence supports naming — the real projects,
+  // clients, people, and repositories, so the recap names the work, not the tool.
+  const entities = (payload.dayEntities ?? [])
+    .filter((entity) => entity.seconds >= 60)
+    .slice(0, 8)
+    .map((entity) => ({ type: entity.type, name: entity.name, duration: formatDuration(entity.seconds) }))
+
   return JSON.stringify({
     date: payload.date,
     totals: {
@@ -1953,6 +1944,8 @@ export function buildDaySummaryScaffold(payload: DayTimelinePayload): string {
     topCategories,
     blocks,
     focusSessions,
+    ...(meetings.length > 0 ? { meetings } : {}),
+    ...(entities.length > 0 ? { entities } : {}),
   })
 }
 
@@ -1968,7 +1961,11 @@ function currentLocalDateString(): string {
 export async function generateDaySummary(dateStr: string): Promise<AIDaySummaryResult> {
   const db = getDb()
   const liveSession = dateStr === currentLocalDateString() ? getCurrentSession() : null
-  const payload = getTimelineDayPayload(db, dateStr, liveSession)
+  // Read the day exactly as the timeline shows it (DEV-247): analysis:false, so
+  // the recap describes the same corrected blocks the person sees — an analyzed
+  // day's settled blocks, an un-analyzed day's coarse sittings — never a
+  // divergent fine build the timeline never rendered.
+  const payload = getTimelineDayPayload(db, dateStr, liveSession, { analysis: false })
   const fallback = fallbackDaySummary(payload)
 
   if (payload.totalSeconds === 0) {
@@ -1991,6 +1988,9 @@ export async function generateDaySummary(dateStr: string): Promise<AIDaySummaryR
     'Focus on what the person was actually working on, what moved forward, and what deserves follow-up.',
     'Prefer the structured workIntent signal over raw homepage, feed, or generic tab labels when they conflict.',
     'Treat generic feed/home usage as context unless the evidence clearly says it was the main task.',
+    'Name the actual work and the entities involved (the projects, clients, people, and repositories in "entities"), not the tools that hosted it.',
+    'The "meetings" list is scheduled calendar context. A scheduled time proves only what was planned. Say a meeting happened only when its "presence" field confirms it (you attended, or tracked activity overlaps it) — never assert attendance from a calendar row alone, and respect a meeting marked skipped/moved/unrelated.',
+    'Follow the evidence authority order: the person’s own confirmations and corrections outrank device observation, which outranks a connector/calendar fact, which outranks inference. State uncertainty plainly rather than guessing.',
     'Never use raw app names as the subject of a sentence. Instead, describe what the app is used for: Warp or Terminal → "your terminal", a browser (Chrome, Safari, Arc, Firefox) → "your browser", VS Code or Cursor → "your editor", Figma → "your design tool", Slack or Teams → "your messaging app", X.com or Twitter → "social browsing" or a specific activity from the page title. Use the specific app name only when a more descriptive phrase would be unclear.',
     'Use window titles and page titles as evidence for what the user was doing. Do not use the app name as a proxy for the activity. When a page or thread title is available, prefer describing the specific content over naming the platform.',
     'Ignore badge-count prefixes like "(4)" when interpreting page or tab titles.',
@@ -2037,12 +2037,16 @@ export async function generateDaySummary(dateStr: string): Promise<AIDaySummaryR
     )
 
     const parsed = parseDaySummaryResult(text, fallback.questionSuggestions)
-    const result = parsed ?? fallback
-    daySummaryCache.set(cacheKey, result)
-    return result
+    if (parsed) {
+      daySummaryCache.set(cacheKey, parsed)
+      return parsed
+    }
+    // The model answered but its output was unusable. Surface the factual
+    // fallback marked degraded, and do NOT cache it, so a later open retries AI.
+    return { ...fallback, degraded: true }
   } catch (error) {
     console.warn(`[ai] day_summary failed for ${dateStr}:`, error)
-    return fallback
+    return { ...fallback, degraded: true }
   }
 }
 

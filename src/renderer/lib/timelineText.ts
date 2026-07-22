@@ -22,6 +22,15 @@ export function safeTimelineText(text: string): string {
   return sanitizeForModel(text)
 }
 
+// Terminal window titles arrive with a leading status glyph — a braille spinner
+// (⠿, ⣷…), an activity mark (✳, ✶…), or a bullet — that is process chrome, not
+// content. Strip it for display so a row reads "Traycer", not "⠿ Traycer".
+const LEADING_STATUS_GLYPH_RE = /^[\s⠀-⣿✳✶✽✻✼✱✲✦✧✻●○◌◍◎◦∙·•▪▸▹►▶◆◇*]+/u
+
+export function cleanTitleForDisplay(text: string): string {
+  return safeTimelineText(text.replace(LEADING_STATUS_GLYPH_RE, '').trim())
+}
+
 export function shortDomainLabel(domain: string): string {
   return domain.replace(/^www\./i, '')
 }

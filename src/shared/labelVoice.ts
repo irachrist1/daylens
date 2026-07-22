@@ -118,6 +118,11 @@ const RAW_URL_RE = /https?:\/\/|www\./i
 const RAW_FILE_EXTENSION_RE = /\.(ipynb|pdf|docx?|xlsx?|pptx?|csv|key|numbers|pages)\b/i
 const UNDERSCORE_FILENAME_RE = /[a-z0-9]_[a-z0-9]/i
 const NOTIFICATION_COUNT_RE = /^\(\d+\)\s/
+// A label that is nothing but a date is an internal key, not an activity, and
+// must never rank as "what mattered". Rejects a bare ISO or slashed date as the
+// WHOLE label; a date inside a real phrase ("Reviewed the FY2026 report") is
+// untouched.
+const BARE_DATE_RE = /^\d{4}[-/]\d{1,2}[-/]\d{1,2}$/
 // Common web TLDs only, so a code filename ("run.ts") never reads as a domain.
 const BARE_DOMAIN_RE = /^(?:[a-z0-9-]+\.)+(?:com|org|io|dev|app|net|ai|co|edu|gov)$/i
 const TRAILING_BROWSER_RE =
@@ -228,6 +233,7 @@ export function rawLabelForm(value: string | null | undefined): string | null {
   const text = (value ?? '').trim()
   if (!text) return null
   if (RAW_URL_RE.test(text)) return 'raw URL'
+  if (BARE_DATE_RE.test(text)) return 'bare date'
   if (BARE_DOMAIN_RE.test(text)) return 'bare domain'
   if (RAW_FILE_EXTENSION_RE.test(text)) return 'file extension'
   if (UNDERSCORE_FILENAME_RE.test(text)) return 'underscore filename'
@@ -431,6 +437,56 @@ export function summarizeLabelVoice(evaluated: EvaluatedLabel[]): LabelVoiceSumm
     ).length,
     rules,
   }
+}
+
+// ── Recap voice ────────────────────────────────────────────────────────────
+// The day recap and block narrative are prose a person reads about their own
+// day. They must not leak internal vocabulary ("trusted blocks", "strongest
+// evidence", "clearest named block") or read as a stat dump ("focus held for X
+// of tracked time"). This check fails those shapes and passes calm prose.
+
+// Internal vocabulary and template scaffolding a person would never write about
+// their own day. Matched case-insensitively as substrings.
+const RECAP_INTERNAL_PHRASES = [
+  'trusted block',
+  'strongest evidence',
+  'evidence included',
+  'clearest named block',
+  'clearest block',
+  'named block',
+  'based on the available titles',
+  'supporting context',
+  'focus held for',
+  'of tracked time',
+  'top apps',
+  'based on the provided data',
+  'work intent',
+  'dominant category',
+]
+
+export interface RecapVoiceFinding {
+  phrase: string
+  reason: string
+}
+
+/** Voice violations in a generated recap or block narrative. Empty = clean. */
+export function recapVoiceFindings(text: string | null | undefined): RecapVoiceFinding[] {
+  const value = (text ?? '').trim()
+  if (!value) return []
+  const lower = value.toLowerCase()
+  const findings: RecapVoiceFinding[] = []
+  for (const phrase of RECAP_INTERNAL_PHRASES) {
+    if (lower.includes(phrase)) findings.push({ phrase, reason: 'internal vocabulary / template phrasing' })
+  }
+  for (const term of PLUMBING_TERMS) {
+    if (lower.includes(term)) findings.push({ phrase: term, reason: 'capture/telemetry vocabulary' })
+  }
+  for (const term of HYPE_TERMS) {
+    if (lower.includes(term)) findings.push({ phrase: term, reason: 'marketing filler' })
+  }
+  const judgment = JUDGMENT_RE.exec(value)
+  if (judgment) findings.push({ phrase: judgment[0], reason: 'judges productivity/worth' })
+  return findings
 }
 
 /** Markdown-ready lines for a review report's label-voice section. */
