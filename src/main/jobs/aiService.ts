@@ -33,8 +33,9 @@ import {
   parseStarterSuggestions,
 } from '../lib/followUpSuggestions'
 import { transformInstruction } from '@shared/answerTransforms'
-import { looksLikeRawArtifactLabel, userVisibleBlockLabel } from '@shared/blockLabel'
-import { rawLabelForm } from '@shared/labelVoice'
+import { userVisibleBlockLabel } from '@shared/blockLabel'
+import { evaluateLabelVoice, labelVoiceContextForBlock, rawLabelForm } from '@shared/labelVoice'
+import { activityCategoryLabel } from '@shared/activityCategories'
 import { partitionDomainsWorkFirst } from '@shared/workKind'
 import { appNarrativeScopeKey, THIN_APP_NARRATIVE_SUMMARY } from '@shared/appNarrativeContract'
 import { userProfileDirective } from '@shared/userProfile'
@@ -3002,6 +3003,16 @@ export async function suggestAppCategory(bundleId: string, appName: string): Pro
   return noSuggestion
 }
 
+// The deterministic name used when the model cannot produce a voiced label.
+// The evidence-based fallback is usually fine, but it can itself be a raw
+// artifact form ("handoff.md") — never persist that as an "ai" label; name the
+// category honestly instead (a floor the clarification agent then asks about).
+function voiceSafeFallbackLabel(block: WorkContextBlock): string {
+  const fallback = userVisibleLabelForBlock(block)
+  if (!rawLabelForm(fallback)) return fallback
+  return activityCategoryLabel(block.dominantCategory)
+}
+
 export async function generateWorkBlockInsight(
   block: WorkContextBlock,
   options?: {
@@ -3033,37 +3044,68 @@ export async function generateWorkBlockInsight(
     'Return only valid JSON.',
   ].join(' ')
 
-  try {
-    const { text, config } = await withTimeout(
-      executeTextAIJob(
-        {
-          jobType: options?.jobType ?? (block.isLive ? 'block_label_preview' : 'block_label_finalize'),
-          screen: 'timeline_day',
-          triggerSource: options?.triggerSource ?? (block.isLive ? 'system' : 'background'),
-          systemPrompt,
-          userMessage: [
-            workBlockPrompt(block),
-            options?.rejectedLabel?.trim()
-              ? `The previous label "${options.rejectedLabel.trim()}" was marked inaccurate by the user. Produce a clearly different, more accurate label grounded only in the evidence above.`
-              : '',
-            options?.userHint?.trim()
-              ? `The user described their day as: "${options.userHint.trim()}". Treat this as a strong hint for what they were doing, but stay grounded in the evidence above, and only apply it where it fits this block's activity.`
-              : '',
-          ].filter(Boolean).join('\n\n'),
-        },
-        sendWithProvider,
-      ),
-      BLOCK_INSIGHT_TIMEOUT_MS,
-      'Block insight timed out',
-    )
-    options?.onModel?.(config.model)
-    const parsed = parseWorkBlockInsight(text)
+  // The label-voice contract (label-voice.md, DEV-276): the model's label must
+  // clear the invariant rules and must not echo a captured title or a bare app
+  // name — a raw window title, filename, ticket description, or JSON string is
+  // never a label. A rejected label gets exactly one corrective retry with the
+  // violation named; if that also fails, the deterministic evidence name (voice
+  // gated itself) stands and the block stays a re-analysis target.
+  const voiceContext = labelVoiceContextForBlock(block)
+  const labelRejection = (candidate: string | null | undefined): string | null => {
+    const label = candidate?.trim()
+    if (!label) return 'the label was empty'
+    for (const finding of evaluateLabelVoice(label, voiceContext)) {
+      if (finding.passed) continue
+      if (finding.tier === 'invariant'
+        || finding.rule === 'no-verbatim-window-title'
+        || finding.rule === 'activity-not-software') {
+        return finding.detail ?? finding.rule
+      }
+    }
+    return null
+  }
 
-    // §3.5 / invariant 3: even the model may not name a block after a raw machine
-    // identifier (AGENT, AGENT-EXECUTION-PLAN.md). If it does, drop to the guarded
-    // evidence-based name rather than persist the raw token as an "ai" label.
-    const aiLabel = parsed?.label?.trim()
-    const label = aiLabel && !looksLikeRawArtifactLabel(aiLabel) ? aiLabel : userVisibleLabelForBlock(block)
+  try {
+    const requestInsight = async (voiceFeedback?: string) => {
+      const { text, config } = await withTimeout(
+        executeTextAIJob(
+          {
+            jobType: options?.jobType ?? (block.isLive ? 'block_label_preview' : 'block_label_finalize'),
+            screen: 'timeline_day',
+            triggerSource: options?.triggerSource ?? (block.isLive ? 'system' : 'background'),
+            systemPrompt,
+            userMessage: [
+              workBlockPrompt(block),
+              options?.rejectedLabel?.trim()
+                ? `The previous label "${options.rejectedLabel.trim()}" was marked inaccurate by the user. Produce a clearly different, more accurate label grounded only in the evidence above.`
+                : '',
+              options?.userHint?.trim()
+                ? `The user described their day as: "${options.userHint.trim()}". Treat this as a strong hint for what they were doing, but stay grounded in the evidence above, and only apply it where it fits this block's activity.`
+                : '',
+              voiceFeedback ?? '',
+            ].filter(Boolean).join('\n\n'),
+          },
+          sendWithProvider,
+        ),
+        BLOCK_INSIGHT_TIMEOUT_MS,
+        'Block insight timed out',
+      )
+      options?.onModel?.(config.model)
+      return parseWorkBlockInsight(text)
+    }
+
+    let parsed = await requestInsight()
+    let rejection = labelRejection(parsed?.label)
+    if (rejection && !block.isLive) {
+      parsed = await requestInsight(
+        `Your previous label "${parsed?.label ?? ''}" was rejected: ${rejection}. `
+        + 'Name what the person was DOING in everyday words (verb + object). '
+        + 'Never a window title, page title, filename, app name, ticket text, or JSON.',
+      )
+      rejection = labelRejection(parsed?.label)
+    }
+
+    const label = rejection ? voiceSafeFallbackLabel(block) : parsed!.label!.trim()
     const insight = {
       label,
       narrative: parsed?.narrative || fallbackNarrativeForBlock(block),
@@ -3080,7 +3122,7 @@ export async function generateWorkBlockInsight(
   } catch (error) {
     if (options?.throwOnError) throw error
     const insight = {
-      label: userVisibleLabelForBlock(block),
+      label: voiceSafeFallbackLabel(block),
       narrative: fallbackNarrativeForBlock(block),
     }
     if (!block.isLive && block.aiLabel) {

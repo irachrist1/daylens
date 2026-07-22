@@ -222,12 +222,26 @@ function wordCount(value: string): number {
   return value.split(/\s+/).filter(Boolean).length
 }
 
+// A label that is one token ending in a file extension is the artifact, not
+// the activity ("handoff.md", "run.ts"). DEV-276 recorded that a filename is
+// never a label — including ordinary code filenames, which an earlier design
+// allowed as deterministic fallbacks. Requires a letter-led extension so a
+// version number ("1.0.45") or trailing ellipsis never matches.
+const BARE_FILENAME_RE = /^[\w()[\]#@~+-]+\.[a-z][a-z0-9]{0,5}$/i
+// Structural JSON: an opening brace, an array of objects/strings, or a quoted
+// key with a colon anywhere. A colon in prose ("Sprint planning: retro") and a
+// bracketed title fragment ("[Week 1]") never match.
+const JSON_FRAGMENT_RE = /^\{|^\[\s*[{["]|"[^"]*"\s*:/
+// A label that is nothing but a bracketed fragment is tab-title cruft
+// ("[Week 1]"), never an activity.
+const BRACKETED_FRAGMENT_RE = /^\[[^\]]*\]$/
+
 /**
  * The raw machine form a label carries, or null when it carries none.
  * Also used for intent subjects: a subject must not be a machine artifact
- * either. Ordinary code filenames and repo paths ("run.ts", "src/main") are
- * deliberately allowed here — rejecting those is the AI naming path's job and
- * is scored by the target-tier rules instead.
+ * either. Repo paths ("src/main") remain allowed; single filenames do not
+ * (DEV-276: a raw window title, a filename, a ticket description, or a JSON
+ * string is never a label).
  */
 export function rawLabelForm(value: string | null | undefined): string | null {
   const text = (value ?? '').trim()
@@ -238,6 +252,9 @@ export function rawLabelForm(value: string | null | undefined): string | null {
   if (RAW_FILE_EXTENSION_RE.test(text)) return 'file extension'
   if (UNDERSCORE_FILENAME_RE.test(text)) return 'underscore filename'
   if (looksLikeRawArtifactLabel(text)) return 'machine identifier'
+  if (BARE_FILENAME_RE.test(text)) return 'filename'
+  if (JSON_FRAGMENT_RE.test(text)) return 'JSON fragment'
+  if (BRACKETED_FRAGMENT_RE.test(text)) return 'bracketed title fragment'
   if (NOTIFICATION_COUNT_RE.test(text)) return 'notification count'
   if (text.split(/\s*\|\s*/).filter(Boolean).length >= 3) return 'browser-tab soup'
   if (TRAILING_BROWSER_RE.test(text)) return 'trailing browser name'
