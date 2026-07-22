@@ -193,11 +193,11 @@ function drawPanel(ctx: WrapExportCtx, model: WrapExportSlideModel, left: number
   // Brand row.
   let y = top + 150
   ctx.fillStyle = model.accent
-  ctx.font = '700 28px Inter, system-ui, sans-serif'
+  ctx.font = '700 28px -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif'
   ctx.fillText('DAYLENS', left + PAD, y)
   ctx.textAlign = 'right'
   ctx.fillStyle = 'rgba(255,255,255,0.6)'
-  ctx.font = '700 26px Inter, system-ui, sans-serif'
+  ctx.font = '700 26px -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif'
   ctx.fillText(model.kicker.toUpperCase().slice(0, 42), left + W - PAD, y)
   ctx.textAlign = 'left'
 
@@ -205,12 +205,12 @@ function drawPanel(ctx: WrapExportCtx, model: WrapExportSlideModel, left: number
 
   if (model.headline) {
     ctx.fillStyle = '#ffffff'
-    ctx.font = '900 132px Inter, system-ui, sans-serif'
+    ctx.font = '900 132px -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif'
     ctx.fillText(truncateToWidth(ctx, model.headline, W - PAD * 2), left + PAD, y)
     y += 56
     if (model.sublabel) {
       ctx.fillStyle = 'rgba(255,255,255,0.62)'
-      ctx.font = '400 34px Inter, system-ui, sans-serif'
+      ctx.font = '400 34px -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif'
       ctx.fillText(truncateToWidth(ctx, model.sublabel, W - PAD * 2), left + PAD, y)
       y += 40
     }
@@ -219,7 +219,7 @@ function drawPanel(ctx: WrapExportCtx, model: WrapExportSlideModel, left: number
 
   if (model.line) {
     ctx.fillStyle = 'rgba(255,255,255,0.92)'
-    ctx.font = '600 44px Inter, system-ui, sans-serif'
+    ctx.font = '600 44px -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif'
     for (const line of wrapText(ctx, model.line, W - PAD * 2).slice(0, 10)) {
       ctx.fillText(line, left + PAD, y)
       y += 62
@@ -229,11 +229,11 @@ function drawPanel(ctx: WrapExportCtx, model: WrapExportSlideModel, left: number
 
   for (const row of model.rows) {
     ctx.fillStyle = '#ffffff'
-    ctx.font = '600 36px Inter, system-ui, sans-serif'
+    ctx.font = '600 36px -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif'
     ctx.fillText(truncateToWidth(ctx, row.name, W - PAD * 2 - 240), left + PAD, y)
     ctx.textAlign = 'right'
     ctx.fillStyle = 'rgba(255,255,255,0.6)'
-    ctx.font = '500 32px Inter, system-ui, sans-serif'
+    ctx.font = '500 32px -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif'
     ctx.fillText(row.value, left + W - PAD, y)
     ctx.textAlign = 'left'
     y += 26
@@ -246,7 +246,7 @@ function drawPanel(ctx: WrapExportCtx, model: WrapExportSlideModel, left: number
 
   // Watermark footer.
   ctx.fillStyle = 'rgba(255,255,255,0.45)'
-  ctx.font = '500 28px Inter, system-ui, sans-serif'
+  ctx.font = '500 28px -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif'
   ctx.textAlign = 'center'
   ctx.fillText(footer, left + W / 2, top + H - 84)
   ctx.textAlign = 'left'
