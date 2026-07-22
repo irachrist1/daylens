@@ -277,7 +277,6 @@ function CalendarBlockCard({
   const label = userVisibleBlockLabel(block)
   const timeRange = `${formatClockTime(block.startTime)} – ${formatClockTime(block.endTime)}`
   const showTime = height >= (compact ? 34 : 40)
-  const showSummary = !compact && height >= 128
   const titleLines = height >= (compact ? 48 : 56) ? 2 : 1
 
   return (
@@ -378,28 +377,28 @@ function CalendarBlockCard({
           }} />
         )}
       </div>
+      {/* Title + time only — the narrative lives in the detail panel (day
+          view) or the popover (week view), shown on click. Cards stay calm. */}
       {showTime && (
-        <div style={{ fontSize: compact ? 10 : 11, color: 'var(--color-text-tertiary)', marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {timeRange} · {formatDuration(blockActiveSeconds(block))}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: compact ? 10 : 11, color: 'var(--color-text-tertiary)', marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          <ClockGlyph size={compact ? 9 : 10} />
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {timeRange} · {formatDuration(blockActiveSeconds(block))}
+          </span>
         </div>
-      )}
-      {showSummary && !dimmed && (
-        <p style={{
-          fontSize: 12,
-          lineHeight: 1.5,
-          color: 'var(--color-text-secondary)',
-          margin: '4px 0 0',
-          display: '-webkit-box',
-          WebkitBoxOrient: 'vertical',
-          WebkitLineClamp: Math.max(1, Math.floor((height - 64) / 18)),
-          overflow: 'hidden',
-          overflowWrap: 'break-word',
-        }}>
-          {blockNarrative(block) ?? blockShortSummary(block)}
-        </p>
       )}
       </div>
     </button>
+  )
+}
+
+// A tiny clock, Apple-Calendar style, marking a line as a time range.
+function ClockGlyph({ size = 10 }: { size?: number }) {
+  return (
+    <svg aria-hidden width={size} height={size} viewBox="0 0 12 12" style={{ flexShrink: 0, opacity: 0.75 }}>
+      <circle cx="6" cy="6" r="5" fill="none" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M6 3.4 V6 L7.8 7.4" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   )
 }
 
@@ -520,8 +519,8 @@ function CalendarDayTrack({
 
   return (
     <div style={{ position: 'relative', height: trackHeight, minWidth: 0 }}>
-      {/* Faint hour lines, Google-Calendar style: the grid reads as a grid
-          without any wrapping chrome, in both the day and week tracks. */}
+      {/* Hour lines, quieter than any card border: the grid should be felt,
+          not read — a whisper under the blocks in both day and week tracks. */}
       {Array.from({ length: hourCount }, (_, index) => (
         <div
           key={index}
@@ -531,6 +530,7 @@ function CalendarDayTrack({
             left: 0,
             right: 0,
             borderTop: '1px solid var(--color-border-ghost)',
+            opacity: 0.45,
             pointerEvents: 'none',
           }}
         />
@@ -603,7 +603,11 @@ function CalendarDayTrack({
               ...laneGeometry(laneKeyForMeeting(meeting)),
               borderRadius: 5,
               border: confirmed ? '1px solid var(--color-border)' : '1px dashed var(--color-border)',
-              background: confirmed ? 'rgba(127, 127, 127, 0.10)' : 'rgba(127, 127, 127, 0.05)',
+              // Attended reads as "consumed": the Apple-Calendar diagonal
+              // hatch, unmistakable at a glance without adding any words.
+              background: confirmed
+                ? 'repeating-linear-gradient(-45deg, rgba(127, 127, 127, 0.13) 0 3px, transparent 3px 8px)'
+                : 'rgba(127, 127, 127, 0.05)',
               padding: '3px 9px',
               overflow: 'hidden',
               cursor: onScheduledMeetingClick ? 'pointer' : 'default',
@@ -623,8 +627,11 @@ function CalendarDayTrack({
               {meeting.title}
             </div>
             {ghostHeight >= 36 && (
-              <div style={{ fontSize: 10.5, color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontVariantNumeric: 'tabular-nums' }}>
-                {formatClockTime(meeting.startMs)} – {formatClockTime(meeting.endMs)} · {stateLine}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10.5, color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontVariantNumeric: 'tabular-nums' }}>
+                <ClockGlyph size={9} />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {formatClockTime(meeting.startMs)} – {formatClockTime(meeting.endMs)} · {stateLine}
+                </span>
               </div>
             )}
           </div>
