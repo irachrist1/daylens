@@ -61,6 +61,11 @@ test('no-raw-artifact-forms names the machine form it rejects', () => {
   assert.equal(rawLabelForm('W2_Reading assignment'), 'underscore filename')
   assert.equal(rawLabelForm('AGENT-EXECUTION-PLAN.md'), 'machine identifier')
   assert.equal(rawLabelForm('(3) Inbox'), 'notification count')
+  // A bare date is an internal key, not an activity (DEV-247: "2026-07-20" was
+  // ranked as a week activity). A date inside a real phrase stays allowed.
+  assert.equal(rawLabelForm('2026-07-20'), 'bare date')
+  assert.equal(rawLabelForm('2026/7/20'), 'bare date')
+  assert.equal(rawLabelForm('Reviewed the FY2026 report'), null)
   assert.equal(rawLabelForm('W2 Reading | Intro to ML | Perusall'), 'browser-tab soup')
   assert.equal(rawLabelForm('Quarterly plan - Google Chrome'), 'trailing browser name')
   // Ordinary code filenames stay allowed: rejecting those is the AI naming

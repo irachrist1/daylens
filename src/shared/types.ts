@@ -422,6 +422,15 @@ export interface RebuildTimelineDayResult {
   failed: number
 }
 
+/** A progress tick streamed while a day is analyzed (DEV-270). `stage` names
+ *  the phase the pipeline is actually in; `done`/`total` are populated during
+ *  the per-block naming phase so the UI can show real progress, not a spinner. */
+export interface TimelineAnalyzeProgress {
+  stage: 'preparing' | 'merging' | 'naming' | 'finishing'
+  done: number
+  total: number
+}
+
 /** One scheduled calendar event as the Timeline day view shows it (DEV-189).
  *  `attendance` is honest: 'matched' means captured meeting-app evidence OR
  *  the person's explicit confirmation supports it (a block id is present only
@@ -609,6 +618,12 @@ export interface FocusReflectionSavePayload {
 export interface AIDaySummaryResult {
   summary: string
   questionSuggestions: string[]
+  /** True when this is the deterministic factual fallback shown because the AI
+   *  recap could not be generated (unavailable / timed out / unparseable) — so
+   *  the UI can say so plainly instead of passing a template off as the recap
+   *  (DEV-270/275: nothing fails silently). Absent on a real AI recap and on the
+   *  empty-day line. */
+  degraded?: boolean
 }
 
 export type AIAnswerKind =
@@ -2890,6 +2905,9 @@ export const IPC = {
     GET_HISTORY_DAY: 'db:get-history-day',
     GET_TIMELINE_DAY: 'db:get-timeline-day',
     REBUILD_TIMELINE_DAY: 'db:rebuild-timeline-day',
+    // Progress ticks streamed while REBUILD_TIMELINE_DAY runs (DEV-270), so the
+    // Analyze button shows what the system is actually doing, not a blank spinner.
+    ANALYZE_PROGRESS: 'db:analyze-progress',
     GET_APP_SUMMARIES: 'db:get-app-summaries',
     GET_APP_SUMMARIES_FOR_DATE: 'db:get-app-summaries-for-date',
     GET_ALL_APPS_FOR_LABELING: 'db:get-all-apps-for-labeling',

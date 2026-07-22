@@ -55,6 +55,7 @@ import type {
   CalendarRangeDay,
   DayTimelinePayload,
   RebuildTimelineDayResult,
+  TimelineAnalyzeProgress,
   DistractionCostPayload,
   FocusReflectionSavePayload,
   FocusSession,
@@ -222,6 +223,12 @@ const api = {
   db: {
     getTimelineDay: (date: string): Promise<DayTimelinePayload> => ipcRenderer.invoke(IPC.DB.GET_TIMELINE_DAY, date),
     rebuildTimelineDay: (date: string, hint?: string): Promise<RebuildTimelineDayResult> => ipcRenderer.invoke(IPC.DB.REBUILD_TIMELINE_DAY, date, hint),
+    // Subscribe to analyze progress ticks (DEV-270) for the duration of one run.
+    onAnalyzeProgress: (callback: (update: TimelineAnalyzeProgress) => void): (() => void) => {
+      const handler = (_e: unknown, update: TimelineAnalyzeProgress): void => callback(update)
+      ipcRenderer.on(IPC.DB.ANALYZE_PROGRESS, handler)
+      return () => { ipcRenderer.removeListener(IPC.DB.ANALYZE_PROGRESS, handler) }
+    },
     getRecapRange: (dates: string[]): Promise<DayTimelinePayload[]> => ipcRenderer.invoke(IPC.DB.GET_RECAP_RANGE, dates),
     getTimelineRangeBlocks: (fromDate: string, toDate: string): Promise<CalendarRangeDay[]> =>
       ipcRenderer.invoke(IPC.DB.GET_TIMELINE_RANGE_BLOCKS, fromDate, toDate),

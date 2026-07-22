@@ -13,7 +13,7 @@
 // and relabel fall back cleanly to the heuristic blocks — nothing throws in the
 // automatic path.
 import type Database from 'better-sqlite3'
-import type { LiveSession, WorkContextBlock, WorkContextInsight, DayTimelinePayload } from '@shared/types'
+import type { LiveSession, WorkContextBlock, WorkContextInsight, DayTimelinePayload, TimelineAnalyzeProgress } from '@shared/types'
 import { materializeTimelineDayProjection } from '../core/query/projections'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { dayBoundaryCorrectionAnchors, mergeTimelineEpisodes, shouldReanalyzeBlockWithAI, writeTimelineBlockReview } from './workBlocks'
@@ -57,6 +57,33 @@ export interface AnalyzeTimelineDayDeps {
     block: WorkContextBlock,
     opts: { jobType: 'block_cleanup_relabel'; triggerSource: BlockInsightTrigger; throwOnError: boolean; userHint?: string },
   ) => Promise<WorkContextInsight>
+  // Streams what the pipeline is actually doing (DEV-270), so the Analyze UI can
+  // show real progress instead of a blank spinner. Absent in the automatic path.
+  onProgress?: (update: TimelineAnalyzeProgress) => void
+}
+
+// How many per-block naming calls run at once. The relabel of one block is
+// independent of another (each reads its own evidence, writes its own label), so
+// naming an N-block day serially — the DEV-270 latency sink — is pure waste. The
+// DB writes are collected after each network call resolves, so nothing races.
+const RELABEL_CONCURRENCY = 4
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let next = 0
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const index = next++
+      if (index >= items.length) return
+      results[index] = await worker(items[index], index)
+    }
+  })
+  await Promise.all(runners)
+  return results
 }
 
 export interface AnalyzeTimelineDayResult {
@@ -168,6 +195,11 @@ export async function analyzeTimelineDay(
   const materialize = (): DayTimelinePayload =>
     materializeTimelineDayProjection(db, dateStr, resolveLiveSession(dateStr))
 
+  const emitProgress = (update: TimelineAnalyzeProgress): void => {
+    try { deps.onProgress?.(update) } catch { /* a dead renderer must never break analysis */ }
+  }
+  emitProgress({ stage: 'preparing', done: 0, total: 0 })
+
   let payload = materialize()
   let changed = false
   let merged = false
@@ -249,6 +281,8 @@ export async function analyzeTimelineDay(
     changed = true
   }
 
+  emitProgress({ stage: 'merging', done: 0, total: 0 })
+
   // Deterministic fragment repair (DEV-232): consecutive blocks carrying the
   // same label with no real absence between them are one continued activity
   // chopped by the old duration ceiling — four back-to-back "Working on Cursor
@@ -328,22 +362,45 @@ export async function analyzeTimelineDay(
     }
   }
 
-  for (const block of payload.blocks) {
-    if (!shouldReanalyzeBlockWithAI(block)) continue
-    attempted++
-    try {
-      const insight = await blockInsight(
-        { ...block, label: { ...block.label, override: null } },
-        { jobType: 'block_cleanup_relabel', triggerSource, throwOnError: true, userHint },
-      )
-      const wrote = applyAIInsightToTimelineBlock(db, block, insight)
+  // Name each block that still needs it. The calls are independent, so they run
+  // with bounded concurrency instead of one-at-a-time (DEV-270: the day no
+  // longer spins for as long as it takes N serial provider round-trips). Each
+  // insight is fetched over the network in parallel; the DB write that applies
+  // it is done here, after the call resolves, so the writes never race.
+  const relabelTargets = payload.blocks.filter((block) => shouldReanalyzeBlockWithAI(block))
+  attempted += relabelTargets.length
+  if (relabelTargets.length > 0) {
+    let named = 0
+    emitProgress({ stage: 'naming', done: 0, total: relabelTargets.length })
+    type RelabelOutcome =
+      | { block: WorkContextBlock; insight: WorkContextInsight }
+      | { block: WorkContextBlock; error: string }
+    const insights = await mapWithConcurrency(relabelTargets, RELABEL_CONCURRENCY, async (block): Promise<RelabelOutcome> => {
+      try {
+        const insight = await blockInsight(
+          { ...block, label: { ...block.label, override: null } },
+          { jobType: 'block_cleanup_relabel', triggerSource, throwOnError: true, userHint },
+        )
+        return { block, insight }
+      } catch (error) {
+        return { block, error: error instanceof Error ? error.message : String(error) }
+      } finally {
+        emitProgress({ stage: 'naming', done: ++named, total: relabelTargets.length })
+      }
+    })
+    for (const result of insights) {
+      if ('error' in result) {
+        console.warn(`[timeline] AI re-analysis failed for block ${result.block.id}:`, result.error)
+        failures.push(result.error)
+        continue
+      }
+      const wrote = applyAIInsightToTimelineBlock(db, result.block, result.insight)
       if (wrote) relabeled++
       changed = wrote || changed
-    } catch (error) {
-      console.warn(`[timeline] AI re-analysis failed for block ${block.id}:`, error)
-      failures.push(error instanceof Error ? error.message : String(error))
     }
   }
+
+  emitProgress({ stage: 'finishing', done: relabelTargets.length, total: relabelTargets.length })
 
   if ((deps.surfaceErrors ?? true) && attempted > 0 && !changed && failures.length > 0) {
     throw new Error(`AI re-analysis failed: ${failures[0]}`)

@@ -125,6 +125,7 @@ import type {
   CorrectionUndoResult,
   PurgeTrackedEvidencePayload,
   WorkMemorySettingsSummary,
+  TimelineAnalyzeProgress,
 } from '@shared/types'
 import { FOCUSED_CATEGORIES, ALL_TIME_DAYS } from '@shared/types'
 import { isRealDayHarness } from '../lib/realDayHarness'
@@ -412,16 +413,22 @@ export function registerDbHandlers(): void {
     return mergeLiveSessionForDate(getSessionsForRange(getDb(), from, to), dateStr)
   })
 
+  // analysis:false — the renderer shows the day as the user sees it: a day that
+  // has not been analyzed (or was rebuilt after a partial-seal repair, DEV-267)
+  // reads as coarse, neutral sittings, not fine app fragments (DEV-268).
   ipcMain.handle(IPC.DB.GET_HISTORY_DAY, (_e, dateStr: string) => {
-    return getHistoryDayProjection(getDb(), dateStr, getLiveSessionForDate(dateStr), { materialize: false })
+    return getHistoryDayProjection(getDb(), dateStr, getLiveSessionForDate(dateStr), { materialize: false, analysis: false })
   })
 
   ipcMain.handle(IPC.DB.GET_TIMELINE_DAY, (_e, dateStr: string) => {
-    const payload = getTimelineDayProjection(getDb(), dateStr, getLiveSessionForDate(dateStr), { materialize: false })
+    const payload = getTimelineDayProjection(getDb(), dateStr, getLiveSessionForDate(dateStr), { materialize: false, analysis: false })
     return payload
   })
 
   ipcMain.handle(IPC.DB.REBUILD_TIMELINE_DAY, async (_e, dateStr: string, hint?: string) => {
+    const onProgress = (update: TimelineAnalyzeProgress): void => {
+      if (!_e.sender.isDestroyed()) _e.sender.send(IPC.DB.ANALYZE_PROGRESS, update)
+    }
     // "Rebuild" is intentionally no longer a destructive block wipe. Days
     // already self-heal on open; the useful manual action is to spend AI work
     // only where the day is still on a deterministic floor or low-confidence
@@ -436,6 +443,7 @@ export function registerDbHandlers(): void {
       userHint: hint?.trim() || undefined,
       resolveLiveSession: getLiveSessionForDate,
       triggerSource: 'user',
+      onProgress,
     })
     return {
       payload: result.payload,
