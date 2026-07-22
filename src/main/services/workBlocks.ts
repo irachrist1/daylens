@@ -1987,6 +1987,27 @@ function writeBoundaryCorrection(
   `).run(id, dateStr, leftSessionId, rightSessionId, now, now, spanStartMs, spanEndMs)
 }
 
+// Record a merge anchored purely on its wall-clock span, for the settled-day
+// case where the block's sessions carry synthetic (derived-namespace) ids and
+// there is no persisted pair to key on. The rebuild reads this through
+// mergedSpans, which erases any boundary whose junction falls inside the span —
+// so the merge round-trips regardless of what ids the sessions carry later.
+// The synthetic id pair is derived from the span and offset by one so it can
+// never collide with a split's (-cutMs, -cutMs) row or with real (positive) ids.
+function writeSpanMergeCorrection(
+  db: Database.Database,
+  dateStr: string,
+  spanStartMs: number,
+  spanEndMs: number,
+): void {
+  const now = Date.now()
+  const id = `bnd_${sha1(`span:${dateStr}:${spanStartMs}:${spanEndMs}`).slice(0, 18)}`
+  db.prepare(`
+    INSERT OR REPLACE INTO timeline_boundary_corrections (id, date, left_session_id, right_session_id, kind, created_at, updated_at, span_start_ms, span_end_ms)
+    VALUES (?, ?, ?, ?, 'merge', ?, ?, ?, ?)
+  `).run(id, dateStr, -spanStartMs, -spanEndMs - 1, now, now, spanStartMs, spanEndMs)
+}
+
 // Merge a contiguous span of episodes into one. A timeline block is continuous
 // time, so merging non-adjacent blocks (A and C with B between them) has only
 // one coherent meaning: fuse the whole A→B→C span. We record a forced join at
@@ -2067,10 +2088,19 @@ export function mergeTimelineEpisodes(
     const leftLast = [...earlier.sessions].filter((s) => s.id >= 0).sort((a, b) => a.startTime - b.startTime).pop()
     const rightFirst = [...later.sessions].filter((s) => s.id >= 0).sort((a, b) => a.startTime - b.startTime)[0]
     if (!leftLast || !rightFirst) {
-      // A boundary correction is keyed by two persisted sessions. The live block
-      // holds only its in-flight session until the tracker flushes it, so a merge
-      // touching a just-started episode has nothing to anchor on yet.
-      throw new Error('This episode is still live — give it a moment to settle, then merge.')
+      // A settled day is served from the DERIVED session namespace, whose ids are
+      // synthetic negatives — so there is no persisted session pair to key on even
+      // though nothing is live. That made every merge on a past day fail with a
+      // false "still live" message (DEV-233). The span anchor is what a rebuild
+      // actually honours (see makeBoundaryCorrections: "whatever ids the sessions
+      // carry today"), so record the merge against the boundary timestamp, the
+      // same durable anchoring writeSplitCorrection uses. Only a block with no
+      // evidence at all — a just-started live episode — has nothing to record.
+      if (earlier.sessions.length === 0 || later.sessions.length === 0) {
+        throw new Error('This episode is still live — give it a moment to settle, then merge.')
+      }
+      writeSpanMergeCorrection(db, dateStr, earlier.startTime, later.endTime)
+      continue
     }
     // The span anchor covers the whole fused pair: any boundary a future
     // rebuild proposes strictly inside (earlier.start, later.end) is erased.

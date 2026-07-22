@@ -911,6 +911,49 @@ test('a user merge erases a boundary that survives a rebuild', () => {
   db.close()
 })
 
+test('a settled day whose sessions carry synthetic ids still merges (DEV-233)', () => {
+  const db = createDb()
+  // A past day is served from the derived-session namespace, whose ids are
+  // synthetic negatives. There is no persisted session pair to key a boundary
+  // correction on — which used to fail every merge on a settled day with a false
+  // "This episode is still live" message. The merge must anchor on its span.
+  insertSession(db, { title: 'Camera comparison research - DPReview - Google Chrome', startMinute: 0, durationMinutes: 25 })
+  insertSession(db, { title: 'City council election results - Local News - Google Chrome', startMinute: 25, durationMinutes: 25 })
+
+  const before = getTimelineDayPayload(db, TEST_DATE).blocks
+  assert.equal(before.length, 2)
+
+  // Re-key every session into the synthetic (negative) namespace, exactly as a
+  // settled day's projection hands them to the merge.
+  const synthetic = before.map((block) => ({
+    ...block,
+    sessions: block.sessions.map((session, index) => ({ ...session, id: -(index + 1) })),
+  }))
+  assert.ok(synthetic.every((b) => b.sessions.every((s) => s.id < 0)), 'fixture must have no positive session ids')
+
+  mergeTimelineEpisodes(db, TEST_DATE, synthetic)
+
+  assert.equal(getTimelineDayPayload(db, TEST_DATE).blocks.length, 1, 'the merge must apply on a settled day')
+
+  db.prepare(`UPDATE timeline_blocks SET heuristic_version = 'timeline-v3'`).run()
+  assert.equal(getTimelineDayPayload(db, TEST_DATE).blocks.length, 1, 'the span-anchored merge must survive a rebuild')
+  db.close()
+})
+
+test('a merge still refuses a block with no evidence at all (live episode)', () => {
+  const db = createDb()
+  insertSession(db, { title: 'Camera comparison research - DPReview - Google Chrome', startMinute: 0, durationMinutes: 25 })
+  insertSession(db, { title: 'City council election results - Local News - Google Chrome', startMinute: 25, durationMinutes: 25 })
+  const before = getTimelineDayPayload(db, TEST_DATE).blocks
+  const emptied = [{ ...before[0], sessions: [] }, before[1]]
+  assert.throws(
+    () => mergeTimelineEpisodes(db, TEST_DATE, emptied),
+    /still live/,
+    'a block with no sessions has nothing to anchor and must say so',
+  )
+  db.close()
+})
+
 test('merging a non-adjacent span absorbs the blocks in between and survives a rebuild', () => {
   const db = createDb()
   // Three distinct browsing topics → three blocks by default. Selecting the
