@@ -72,17 +72,28 @@ function blockNarrative(block: WorkContextBlock): string | null {
 const DAY_HOUR_HEIGHT = 88
 const WEEK_HOUR_HEIGHT = 52
 const TIME_GUTTER_WIDTH = 56
-// Day/week zoom (DEV-235): the base hour heights above scale by this factor so
-// the calendar densifies or opens up like a standard calendar app. Persisted
-// per user so the chosen density sticks across sessions.
+// Day/week zoom (DEV-235): shortcut/gesture-driven only — ⌘+/⌘−/⌘0 and
+// pinch (or ⌘-scroll) on the grid; no persistent on-screen control. Day and
+// week each keep their own zoom level, persisted so the choice sticks.
 const TIMELINE_ZOOM_MIN = 0.6
 const TIMELINE_ZOOM_MAX = 1.8
 const TIMELINE_ZOOM_STEP = 0.2
-const TIMELINE_ZOOM_KEY = 'daylens.timeline.zoom'
-function loadTimelineZoom(): number {
-  if (typeof localStorage === 'undefined') return 1
-  const stored = Number(localStorage.getItem(TIMELINE_ZOOM_KEY))
-  return Number.isFinite(stored) && stored >= TIMELINE_ZOOM_MIN && stored <= TIMELINE_ZOOM_MAX ? stored : 1
+type ZoomableView = 'day' | 'week'
+const TIMELINE_ZOOM_KEYS: Record<ZoomableView, string> = {
+  day: 'daylens.timeline.zoom.day',
+  week: 'daylens.timeline.zoom.week',
+}
+// The pre-split single-factor key; migrated into both views on first load.
+const TIMELINE_ZOOM_LEGACY_KEY = 'daylens.timeline.zoom'
+function loadTimelineZoom(): Record<ZoomableView, number> {
+  if (typeof localStorage === 'undefined') return { day: 1, week: 1 }
+  const legacy = Number(localStorage.getItem(TIMELINE_ZOOM_LEGACY_KEY))
+  const fallback = Number.isFinite(legacy) && legacy >= TIMELINE_ZOOM_MIN && legacy <= TIMELINE_ZOOM_MAX ? legacy : 1
+  const load = (view: ZoomableView): number => {
+    const stored = Number(localStorage.getItem(TIMELINE_ZOOM_KEYS[view]))
+    return Number.isFinite(stored) && stored >= TIMELINE_ZOOM_MIN && stored <= TIMELINE_ZOOM_MAX ? stored : fallback
+  }
+  return { day: load('day'), week: load('week') }
 }
 // Smallest drawable card. The engine's 15-minute floor means a real block at
 // the day scale is ≥ 22px; this only catches meetings and edge-case slivers,
@@ -246,7 +257,9 @@ function CalendarBlockCard({
   // pending merge, without claiming the single-selection panel.
   inMergeRange?: boolean
   // True when a tag filter is active and this block isn't in it. Filtered
-  // blocks fade but stay in place — the shape of the day never lies.
+  // blocks become flat neutral gray ghost cards — full-size, text dimmed but
+  // readable, still clickable — so the shape of the day never lies (decided
+  // Jul 22, DEV-235).
   dimmed?: boolean
   onClick?: (event: ReactMouseEvent) => void
   onContextMenu?: (event: ReactMouseEvent) => void
@@ -291,56 +304,58 @@ function CalendarBlockCard({
         justifyContent: 'flex-start',
         textAlign: 'left',
         cursor: 'pointer',
-        borderRadius: compact ? 6 : 8,
-        // The thin border stays on every block so neighbouring blocks read as
-        // separate cards; the solid accent stripe on the left carries the
-        // category colour unmistakably at every size (the low-alpha fills
-        // alone read as "no colour" on the light theme).
-        // The live block reads as "happening now": solid accent border and a
-        // stronger fill, against the quieter tint of finished blocks.
-        border: block.isLive
-          ? `1.5px solid ${accent}`
-          : (isSelected || inMergeRange) ? `1px solid ${accent}88` : `1px solid ${accent}30`,
-        borderLeft: `3px solid ${accent}`,
-        // Frosted glass: a stronger tint over a backdrop blur, so the hour
-        // lines behind the card haze out instead of striking through the
-        // title and summary text.
-        background: (isSelected || inMergeRange) ? `${accent}40` : block.isLive ? `${accent}36` : `${accent}2a`,
-        backdropFilter: 'blur(10px) saturate(1.4)',
-        WebkitBackdropFilter: 'blur(10px) saturate(1.4)',
+        // Tight radius, flat fill: the calendar-app card shape. The old 3px
+        // border-left rounded into pill caps at the stripe's ends — the accent
+        // stripe is now an inset element (below) with square ends.
+        borderRadius: compact ? 4 : 5,
+        border: dimmed
+          ? '1px solid var(--color-border-ghost)'
+          : block.isLive
+            ? `1.5px solid ${accent}`
+            : (isSelected || inMergeRange) ? `1px solid ${accent}88` : `1px solid ${accent}26`,
+        background: dimmed
+          ? 'var(--color-surface-low, var(--color-surface))'
+          : (isSelected || inMergeRange) ? `${accent}40` : block.isLive ? `${accent}33` : `${accent}26`,
         boxShadow: isSelected ? '0 6px 20px rgba(0,0,0,0.18)' : 'none',
-        transition: 'border-color 120ms, background 120ms',
-        padding: compact ? '2px 6px' : '4px 9px',
+        transition: 'border-color 120ms, background 120ms, opacity 120ms',
+        padding: compact ? '2px 6px 2px 9px' : '4px 9px 4px 12px',
         // Day view: overflow stays visible so the sticky content wrapper below
         // can slide within the block. (overflow:hidden would make the card its
         // own scrollport and freeze the sticky text at the block top.) The
         // week's compact cards keep the clip — they're too small to stick.
-        // A filtered-out block clips its content: with no text to overflow, it
-        // can never stack its label onto a matching block's or an event's
-        // (DEV-234). Matching blocks keep overflow visible for their sticky text.
+        // A ghosted (filtered-out) block clips too: its dimmed text truncates
+        // instead of overflowing onto a matching block or an event (DEV-234).
         overflow: (compact || dimmed) ? 'hidden' : 'visible',
         minWidth: 0,
-        opacity: dimmed ? 0.32 : muted ? 0.75 : 1,
+        opacity: dimmed ? 0.55 : muted ? 0.75 : 1,
         zIndex: isSelected ? 3 : 1,
       }}
     >
-      {/* Filtered-out blocks render as a bare category-coloured bar — no text at
-          all — so a filter highlights the matches without ever colliding labels
-          (DEV-234). The button still carries its aria-label for screen readers. */}
-      {dimmed ? null : (
-      <>
+      {/* The category stripe: inset with square ends so it never rounds into
+          pill caps, hidden on ghosted blocks so only matches carry color. */}
+      {!dimmed && (
+        <span aria-hidden style={{
+          position: 'absolute',
+          left: compact ? 2 : 3,
+          top: compact ? 2 : 3,
+          bottom: compact ? 2 : 3,
+          width: 3,
+          borderRadius: 1,
+          background: accent,
+        }} />
+      )}
       {/* The text pins into view while a tall block spans past the top of the
           scrollport — the block stays fixed in its time slot; only the timeline
           scrolls. Sticky keeps the title, time, and summary fully readable at
           every scroll position, with a small breathing offset. */}
-      <div style={compact ? undefined : { position: 'sticky', top: 8, minWidth: 0 }}>
+      <div style={(compact || dimmed) ? undefined : { position: 'sticky', top: 8, minWidth: 0 }}>
       <div style={{ display: 'flex', alignItems: 'start', gap: 6, minWidth: 0 }}>
         <span style={{
           flex: 1,
           minWidth: 0,
           fontSize: compact ? 11 : 12.5,
-          fontWeight: 650,
-          color: 'var(--color-text-primary)',
+          fontWeight: dimmed ? 550 : 650,
+          color: dimmed ? 'var(--color-text-tertiary)' : 'var(--color-text-primary)',
           lineHeight: 1.25,
           display: '-webkit-box',
           WebkitBoxOrient: 'vertical',
@@ -368,7 +383,7 @@ function CalendarBlockCard({
           {timeRange} · {formatDuration(blockActiveSeconds(block))}
         </div>
       )}
-      {showSummary && (
+      {showSummary && !dimmed && (
         <p style={{
           fontSize: 12,
           lineHeight: 1.5,
@@ -384,8 +399,6 @@ function CalendarBlockCard({
         </p>
       )}
       </div>
-      </>
-      )}
     </button>
   )
 }
@@ -561,15 +574,21 @@ function CalendarDayTrack({
         const top = topFor(meeting.startMs)
         const ghostHeight = Math.max(20, topFor(meeting.endMs) - top)
         const confirmed = meeting.attendance === 'matched'
+        const declined = meeting.marked === 'skipped' || meeting.marked === 'unrelated'
+        // Outlined ghost card (decided Jul 22, DEV-264): a real card spanning
+        // the event's scheduled duration — hairline border, near-transparent
+        // fill. Dashed = unconfirmed plan; solid + check = you attended;
+        // struck title, fainter = you said you didn't. "Planned" next to the
+        // solid "happened" blocks — never activity, never counted time.
         const stateLine = confirmed
-          ? 'Attended · you confirmed'
+          ? '✓ Attended'
           : meeting.marked === 'skipped'
-            ? 'Skipped · your mark'
+            ? 'Skipped'
             : meeting.marked === 'moved'
-              ? 'Moved · your mark'
+              ? 'Moved'
               : meeting.marked === 'unrelated'
-                ? 'Unrelated · your mark'
-                : 'Scheduled · no observed activity'
+                ? 'Unrelated'
+                : 'Scheduled'
         return (
           <div
             key={`scheduled:${meeting.startMs}:${meeting.title}`}
@@ -582,20 +601,30 @@ function CalendarDayTrack({
               top,
               height: ghostHeight,
               ...laneGeometry(laneKeyForMeeting(meeting)),
-              borderRadius: 10,
-              border: confirmed ? '1.5px solid var(--color-border)' : '1.5px dashed var(--color-border)',
-              padding: '3px 10px',
+              borderRadius: 5,
+              border: confirmed ? '1px solid var(--color-border)' : '1px dashed var(--color-border)',
+              background: confirmed ? 'rgba(127, 127, 127, 0.10)' : 'rgba(127, 127, 127, 0.05)',
+              padding: '3px 9px',
               overflow: 'hidden',
               cursor: onScheduledMeetingClick ? 'pointer' : 'default',
+              opacity: declined ? 0.55 : 1,
               zIndex: 1,
             }}
           >
-            <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            <div style={{
+              fontSize: 11,
+              fontWeight: 600,
+              color: 'var(--color-text-secondary)',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              textDecoration: declined ? 'line-through' : 'none',
+            }}>
               {meeting.title}
             </div>
-            {ghostHeight >= 40 && (
-              <div style={{ fontSize: 10.5, color: 'var(--color-text-tertiary)' }}>
-                {stateLine}
+            {ghostHeight >= 36 && (
+              <div style={{ fontSize: 10.5, color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontVariantNumeric: 'tabular-nums' }}>
+                {formatClockTime(meeting.startMs)} – {formatClockTime(meeting.endMs)} · {stateLine}
               </div>
             )}
           </div>
@@ -2173,9 +2202,11 @@ function WeekEventPopover({
   }, [onClose])
 
   const accent = activityColorForCategory(block.dominantCategory)
-  const width = 300
-  const left = Math.max(12, Math.min(x + 12, window.innerWidth - width - 12))
-  const top = Math.max(12, Math.min(y, window.innerHeight - 200))
+  // Responsive: a comfortable card on a wide window, never wider than the
+  // window allows. Positioned beside the click, clamped inside the viewport.
+  const width = Math.min(340, window.innerWidth - 32)
+  const left = Math.max(16, Math.min(x + 12, window.innerWidth - width - 16))
+  const top = Math.max(16, Math.min(y - 12, window.innerHeight - 220))
   const summary = blockNarrative(block) ?? blockShortSummary(block)
 
   return (
@@ -2194,17 +2225,18 @@ function WeekEventPopover({
           left,
           top,
           width,
-          maxWidth: 'calc(100vw - 24px)',
-          borderRadius: 12,
+          borderRadius: 10,
           border: '1px solid var(--color-border-ghost)',
-          borderLeft: `3px solid ${accent}`,
           background: 'var(--color-surface)',
-          boxShadow: '0 18px 48px rgba(0,0,0,0.32)',
-          padding: '13px 15px',
+          boxShadow: '0 18px 48px rgba(0,0,0,0.28)',
+          padding: '14px 16px',
         }}
       >
         <div style={{ display: 'flex', alignItems: 'start', gap: 8 }}>
-          <span style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 700, color: 'var(--color-text-primary)', lineHeight: 1.3 }}>
+          {/* The category reads as a small square chip, not a stripe that
+              rounds into pill caps on the card's corners. */}
+          <span aria-hidden style={{ flexShrink: 0, width: 10, height: 10, borderRadius: 3, background: accent, marginTop: 4 }} />
+          <span style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 650, color: 'var(--color-text-primary)', lineHeight: 1.35 }}>
             {userVisibleBlockLabel(block)}
           </span>
           <button
@@ -2216,14 +2248,15 @@ function WeekEventPopover({
             ×
           </button>
         </div>
-        <div style={{ fontSize: 11.5, color: 'var(--color-text-secondary)', marginTop: 3, fontVariantNumeric: 'tabular-nums' }}>
+        {/* One quiet metadata line: when, how long, what kind. */}
+        <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 5, paddingLeft: 18, fontVariantNumeric: 'tabular-nums' }}>
           {formatFullDate(date)} · {formatClockTime(block.startTime)} – {formatClockTime(block.endTime)} · {formatDuration(blockActiveSeconds(block))}
         </div>
-        <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
+        <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 2, paddingLeft: 18 }}>
           {activityCategoryLabel(block.dominantCategory)}
         </div>
         {summary && (
-          <p style={{ fontSize: 12, lineHeight: 1.5, color: 'var(--color-text-secondary)', margin: '9px 0 0', display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 4, overflow: 'hidden' }}>
+          <p style={{ fontSize: 12.5, lineHeight: 1.55, color: 'var(--color-text-secondary)', margin: '10px 0 0', paddingLeft: 18, display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 3, overflow: 'hidden' }}>
             {summary}
           </p>
         )}
@@ -2231,7 +2264,7 @@ function WeekEventPopover({
           <button
             type="button"
             onClick={() => { onOpenDay(); onClose() }}
-            style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: 12, fontWeight: 650, cursor: 'pointer', padding: '6px 12px', borderRadius: 8 }}
+            style={{ border: 'none', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: 12, fontWeight: 650, cursor: 'pointer', padding: '5px 8px', borderRadius: 7 }}
           >
             Open in day view
           </button>
@@ -2711,14 +2744,21 @@ export default function Timeline() {
   // Clock tick for the current-time line and the live block's growing bottom
   // edge — 30s keeps the active session visibly moving between data refreshes.
   const [nowMs, setNowMs] = useState(() => Date.now())
-  // Day/week calendar density (DEV-235), persisted so it sticks across sessions.
-  const [zoom, setZoom] = useState<number>(loadTimelineZoom)
+  // Day/week calendar density (DEV-235): each view keeps its own zoom,
+  // persisted so it sticks across sessions. Changed only by shortcut/gesture.
+  const [zoomByView, setZoomByView] = useState<Record<ZoomableView, number>>(loadTimelineZoom)
+  // The transient zoom readout: shows the new percentage for a moment while
+  // zooming, then fades — the only zoom UI on screen (DEV-235).
+  const [zoomFlash, setZoomFlash] = useState<number | null>(null)
+  const zoomFlashTimerRef = useRef<number | null>(null)
   useEffect(() => {
-    if (typeof localStorage !== 'undefined') localStorage.setItem(TIMELINE_ZOOM_KEY, String(zoom))
-  }, [zoom])
-  const adjustZoom = (delta: number) => setZoom((current) =>
-    Math.round(Math.min(TIMELINE_ZOOM_MAX, Math.max(TIMELINE_ZOOM_MIN, current + delta)) * 100) / 100)
-  const dayHourHeight = Math.round(DAY_HOUR_HEIGHT * zoom)
+    if (typeof localStorage === 'undefined') return
+    localStorage.setItem(TIMELINE_ZOOM_KEYS.day, String(zoomByView.day))
+    localStorage.setItem(TIMELINE_ZOOM_KEYS.week, String(zoomByView.week))
+  }, [zoomByView])
+  useEffect(() => () => {
+    if (zoomFlashTimerRef.current != null) window.clearTimeout(zoomFlashTimerRef.current)
+  }, [])
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const lastTimelineOpenKeyRef = useRef<string | null>(null)
   const lastViewOpenedKeyRef = useRef<string | null>(null)
@@ -2731,6 +2771,66 @@ export default function Timeline() {
   const view = navState.view
   const date = navState.date
   const isToday = date === todayString()
+
+  const dayHourHeight = Math.round(DAY_HOUR_HEIGHT * zoomByView.day)
+  const adjustZoom = useCallback((delta: number) => {
+    if (view === 'month') return
+    const target: ZoomableView = view === 'week' ? 'week' : 'day'
+    setZoomByView((current) => {
+      const next = Math.round(Math.min(TIMELINE_ZOOM_MAX, Math.max(TIMELINE_ZOOM_MIN, current[target] + delta)) * 100) / 100
+      if (next === current[target]) return current
+      setZoomFlash(next)
+      if (zoomFlashTimerRef.current != null) window.clearTimeout(zoomFlashTimerRef.current)
+      zoomFlashTimerRef.current = window.setTimeout(() => setZoomFlash(null), 900)
+      return { ...current, [target]: next }
+    })
+  }, [view])
+
+  // ⌘+ / ⌘− step the zoom; ⌘0 resets. Skipped while typing in a field.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return
+      const target = event.target as HTMLElement | null
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
+      if (event.key === '=' || event.key === '+') {
+        event.preventDefault()
+        adjustZoom(TIMELINE_ZOOM_STEP)
+      } else if (event.key === '-') {
+        event.preventDefault()
+        adjustZoom(-TIMELINE_ZOOM_STEP)
+      } else if (event.key === '0') {
+        event.preventDefault()
+        if (view === 'month') return
+        const targetView: ZoomableView = view === 'week' ? 'week' : 'day'
+        setZoomByView((current) => (current[targetView] === 1 ? current : { ...current, [targetView]: 1 }))
+        setZoomFlash(1)
+        if (zoomFlashTimerRef.current != null) window.clearTimeout(zoomFlashTimerRef.current)
+        zoomFlashTimerRef.current = window.setTimeout(() => setZoomFlash(null), 900)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [adjustZoom, view])
+
+  // Trackpad pinch (delivered as ctrl+wheel) and ⌘-scroll zoom the grid in
+  // place. Non-passive so the page doesn't also scroll/zoom underneath.
+  useEffect(() => {
+    const scroller = scrollRef.current
+    if (!scroller) return
+    let accumulated = 0
+    const onWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.metaKey) return
+      event.preventDefault()
+      accumulated += -event.deltaY
+      // A pinch streams many small deltas; a step lands once enough gathers.
+      if (Math.abs(accumulated) >= 24) {
+        adjustZoom(accumulated > 0 ? TIMELINE_ZOOM_STEP : -TIMELINE_ZOOM_STEP)
+        accumulated = 0
+      }
+    }
+    scroller.addEventListener('wheel', onWheel, { passive: false })
+    return () => scroller.removeEventListener('wheel', onWheel)
+  }, [adjustZoom])
   // Dev preview (?panelVariants=1): render both height caps side by side to
   // compare the short vs. tall detail panel before settling on one.
   const panelVariantsPreview = searchParams.get('panelVariants') === '1'
@@ -3188,40 +3288,18 @@ export default function Timeline() {
             onToday={onCurrentPeriod ? undefined : () => setDate(todayString())}
           />
         </div>
-        {view !== 'month' && (
-          // Zoom / density control (DEV-235): scales the calendar hour height.
-          // Clicking the percentage resets to 100%.
-          <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0, border: '1px solid var(--color-border-ghost)', borderRadius: 9, padding: 2 }}>
-            <button
-              type="button"
-              aria-label="Zoom out"
-              disabled={zoom <= TIMELINE_ZOOM_MIN}
-              onClick={() => adjustZoom(-TIMELINE_ZOOM_STEP)}
-              style={{ width: 26, height: 24, border: 'none', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: 16, lineHeight: 1, cursor: zoom <= TIMELINE_ZOOM_MIN ? 'default' : 'pointer', opacity: zoom <= TIMELINE_ZOOM_MIN ? 0.4 : 1, borderRadius: 7 }}
-            >
-              −
-            </button>
-            <button
-              type="button"
-              aria-label="Reset zoom"
-              onClick={() => setZoom(1)}
-              title="Reset density"
-              style={{ minWidth: 42, height: 24, border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', fontSize: 11, fontWeight: 700, fontVariantNumeric: 'tabular-nums', cursor: 'pointer', borderRadius: 7 }}
-            >
-              {Math.round(zoom * 100)}%
-            </button>
-            <button
-              type="button"
-              aria-label="Zoom in"
-              disabled={zoom >= TIMELINE_ZOOM_MAX}
-              onClick={() => adjustZoom(TIMELINE_ZOOM_STEP)}
-              style={{ width: 26, height: 24, border: 'none', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: 16, lineHeight: 1, cursor: zoom >= TIMELINE_ZOOM_MAX ? 'default' : 'pointer', opacity: zoom >= TIMELINE_ZOOM_MAX ? 0.4 : 1, borderRadius: 7 }}
-            >
-              +
-            </button>
-          </div>
-        )}
       </div>
+
+      {/* Transient zoom readout (DEV-235): the only zoom UI — appears for a
+          moment while ⌘+/⌘−/pinch changes density, then fades. */}
+      {zoomFlash != null && view !== 'month' && (
+        <div
+          aria-live="polite"
+          style={{ position: 'fixed', top: 84, left: '50%', transform: 'translateX(-50%)', zIndex: 60, pointerEvents: 'none', borderRadius: 999, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', boxShadow: '0 8px 24px rgba(0,0,0,0.18)', padding: '5px 14px', fontSize: 12, fontWeight: 700, fontVariantNumeric: 'tabular-nums', color: 'var(--color-text-secondary)' }}
+        >
+          {Math.round(zoomFlash * 100)}%
+        </div>
+      )}
 
       {/* The timeline scrolls without showing a scrollbar — the grid is the
           chrome; the hidden thumb lives in globals.css under .timeline-scroller. */}
@@ -3231,7 +3309,7 @@ export default function Timeline() {
             <CalendarWeekView
               selectedDate={date}
               nowMs={nowMs}
-              hourHeight={Math.round(WEEK_HOUR_HEIGHT * zoom)}
+              hourHeight={Math.round(WEEK_HOUR_HEIGHT * zoomByView.week)}
               scrollerRef={scrollRef}
               onSelectDate={(nextDate) => {
                 updateNavState({ view: 'day', date: nextDate })
