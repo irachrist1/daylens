@@ -133,6 +133,8 @@ import { registerCommandPaletteShortcut, unregisterCommandPaletteShortcut } from
 import { registerDistractionAlerterHandlers, resetDistractionStateOnResume, setDistractionAlertWindow, startDistractionAlerter } from './services/distractionAlerter'
 import { setSpendAlertWindow } from './services/aiSpendGuardrails'
 import { stopRangeWorker } from './services/rangeWorker'
+import { installEmbedWorkerTransport, stopEmbedWorker } from './services/embedWorkerHost'
+import { startStallWatchdog, stopStallWatchdog } from './services/stallWatchdog'
 import { setPermissionWatcherWindow, startPermissionWatcher, stopPermissionWatcher } from './services/permissionWatcher'
 import { startExternalSignalCollection, stopExternalSignalCollection } from './services/externalSignals'
 import { startConnectorSyncSchedule, stopConnectorSyncSchedule } from './connectors/service'
@@ -569,6 +571,7 @@ function startCaptureServices(): void {
   // DEV-229: verify from launch that the Accessibility grant actually works
   // (real reads, not just the flag) and keep verifying while the app runs.
   if (!SMOKE_TEST) startPermissionWatcher()
+  if (!SMOKE_TEST) startStallWatchdog()
   if (process.platform === 'win32') startWindowsFocusCapture()
   if (!SMOKE_TEST && (process.platform === 'win32' || process.platform === 'linux')) ensureProcessMonitor()
   if (!SMOKE_TEST) startExternalSignalCollection()
@@ -641,6 +644,8 @@ function startBackgroundServices(): void {
 
       // DEV-180: embed memory records for by-meaning search in bounded
       // background batches (local model; honest no-op when it is absent).
+      // Inference runs in the embed-worker subprocess — never on this thread.
+      installEmbedWorkerTransport()
       setTimeout(() => startSemanticIndexBackfill(getDb), 30_000)
     }
   }
@@ -862,10 +867,12 @@ async function shutdownApp(options?: { awaitFinalSync?: boolean; backupBeforeExi
   stopMcpServer()
   stopRangeWorker()
   stopPermissionWatcher()
+  stopStallWatchdog()
   stopCaptureServices()
   stopSync()
   stopMemoryIndexBackfill()
   stopSemanticIndexBackfill()
+  stopEmbedWorker()
   stopAIUsageRetentionSchedule()
   unregisterCommandPaletteShortcut()
 
