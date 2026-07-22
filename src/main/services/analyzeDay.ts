@@ -16,7 +16,7 @@ import type Database from 'better-sqlite3'
 import type { LiveSession, WorkContextBlock, WorkContextInsight, DayTimelinePayload } from '@shared/types'
 import { materializeTimelineDayProjection } from '../core/query/projections'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
-import { mergeTimelineEpisodes, shouldReanalyzeBlockWithAI, writeTimelineBlockReview } from './workBlocks'
+import { dayBoundaryCorrectionAnchors, mergeTimelineEpisodes, shouldReanalyzeBlockWithAI, writeTimelineBlockReview } from './workBlocks'
 import { getBlockLabelOverride, setBlockLabelOverride, writeAIBlockLabel } from '../db/queries'
 import { generateWorkBlockInsight, generateDayRegroupPlan } from './ai'
 import { absenceSpannedBy, formatAbsenceRange, partitionAtRealAbsences } from '../lib/absenceGuard'
@@ -96,6 +96,49 @@ function applyAIInsightToTimelineBlock(
   return true
 }
 
+// Runs of consecutive blocks that carry the same label and belong together:
+// non-live, non-provisional, not renamed by the person, separated by no real
+// absence and no explicit cut. Adjacency is judged over the day's full block
+// sequence — a differently-labeled or ineligible block between two matches
+// breaks the run.
+export function sameLabelFragmentRuns(
+  blocks: readonly WorkContextBlock[],
+  cuts: readonly number[],
+): WorkContextBlock[][] {
+  const labelKey = (block: WorkContextBlock): string => block.label.current.trim().toLowerCase()
+  // A block with no hydrated sessions can neither anchor a durable correction
+  // nor be checked for a spanned absence — it never joins a run.
+  const eligible = (block: WorkContextBlock): boolean =>
+    !block.isLive && !block.provisional && !block.label.override?.trim()
+    && labelKey(block).length > 0 && block.sessions.length > 0
+  const ordered = [...blocks].sort((a, b) => a.startTime - b.startTime)
+  const runs: WorkContextBlock[][] = []
+  let run: WorkContextBlock[] = []
+  const closeRun = () => {
+    if (run.length >= 2) runs.push(run)
+    run = []
+  }
+  for (const block of ordered) {
+    if (!eligible(block)) {
+      closeRun()
+      continue
+    }
+    const previous = run[run.length - 1]
+    const joinable = previous
+      && labelKey(previous) === labelKey(block)
+      && !cuts.some((cut) => cut >= previous.endTime && cut <= block.startTime)
+      && !absenceSpannedBy([...run.flatMap((member) => member.sessions), ...block.sessions])
+    if (joinable) {
+      run.push(block)
+    } else {
+      closeRun()
+      run = [block]
+    }
+  }
+  closeRun()
+  return runs
+}
+
 export async function analyzeTimelineDay(
   db: Database.Database,
   dateStr: string,
@@ -144,11 +187,16 @@ export async function analyzeTimelineDay(
   // stores. This runs in the normal re-analyze flow (the Analyze button /
   // REBUILD_TIMELINE_DAY), so repairing a bad day is one click, never a
   // direct edit of anyone's database.
-  const spanningAbsence = payload.blocks.filter((block) =>
-    !block.isLive
-    && !block.provisional
-    && block.sessions.length > 1
-    && absenceSpannedBy(block.sessions) !== null)
+  const anchors = dayBoundaryCorrectionAnchors(db, dateStr)
+  // A gap the person explicitly fused (a merge-anyway across time away) is not
+  // a bad block to repair — their correction outranks the absence cut.
+  const gapFusedByUser = (gap: { startMs: number; endMs: number }): boolean =>
+    anchors.mergedSpans.some((span) => gap.startMs >= span.startMs && gap.endMs <= span.endMs)
+  const spanningAbsence = payload.blocks.filter((block) => {
+    if (block.isLive || block.provisional || block.sessions.length < 2) return false
+    const gap = absenceSpannedBy(block.sessions)
+    return gap !== null && !gapFusedByUser(gap)
+  })
   if (spanningAbsence.length > 0) {
     const splitCorrections = spanningAbsence
       .filter((block) => block.review.state === 'corrected')
@@ -201,6 +249,35 @@ export async function analyzeTimelineDay(
     changed = true
   }
 
+  // Deterministic fragment repair (DEV-232): consecutive blocks carrying the
+  // same label with no real absence between them are one continued activity
+  // chopped by the old duration ceiling — four back-to-back "Working on Cursor
+  // Agents" blocks are a segmentation artifact, not four activities. Joining
+  // them never waits on an AI opinion. A person's cut is never re-joined, a
+  // renamed block is never merged away, and a real absence still splits.
+  const fragmentRuns = sameLabelFragmentRuns(payload.blocks, anchors.cuts)
+  if (fragmentRuns.length > 0) {
+    const blocksBeforeFragmentMerge = payload.blocks.length
+    let fragmentsMerged = false
+    for (const run of fragmentRuns) {
+      try {
+        mergeTimelineEpisodes(db, dateStr, run, { initiator: 'auto' })
+        fragmentsMerged = true
+      } catch (error) {
+        console.warn('[timeline] same-label fragment merge skipped:', error)
+      }
+    }
+    if (fragmentsMerged) {
+      invalidateProjectionScope('timeline', 'fragment-merge')
+      invalidateProjectionScope('apps', 'fragment-merge')
+      invalidateProjectionScope('insights', 'fragment-merge')
+      payload = materialize()
+      changed = true
+      merged = true
+      mergedCount += Math.max(0, blocksBeforeFragmentMerge - payload.blocks.length)
+    }
+  }
+
   // AI-driven regroup (timeline.md §3.3 / §5): decide which adjacent heuristic
   // blocks are the same continued intent and should become one. The AI decides
   // only the grouping; the merge rides the durable boundary-correction path so
@@ -230,7 +307,7 @@ export async function analyzeTimelineDay(
         for (const run of partitionAtRealAbsences(members, (member) => member.sessions)) {
           if (run.length < 2) continue
           try {
-            mergeTimelineEpisodes(db, dateStr, run)
+            mergeTimelineEpisodes(db, dateStr, run, { initiator: 'auto' })
             mergedAny = true
           } catch (error) {
             console.warn('[timeline] AI merge skipped for a group:', error)
@@ -244,7 +321,7 @@ export async function analyzeTimelineDay(
         payload = materialize()
         changed = true
         merged = true
-        mergedCount = Math.max(0, blocksBeforeMerge - payload.blocks.length)
+        mergedCount += Math.max(0, blocksBeforeMerge - payload.blocks.length)
       }
     } catch (error) {
       console.warn('[timeline] AI day regroup failed:', error)

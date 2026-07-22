@@ -2065,22 +2065,25 @@ export function mergeTimelineEpisodes(
   db: Database.Database,
   dateStr: string,
   blocks: WorkContextBlock[],
+  options: { initiator?: 'user' | 'auto' } = {},
 ): void {
   const ordered = [...blocks].sort((a, b) => a.startTime - b.startTime)
   if (ordered.length < 2) {
     throw new Error('Pick at least two blocks to merge.')
   }
-  // The absence guard (lib/absenceGuard.ts): a merge may never join work
-  // across a real absence of 15+ minutes — a block is genuine engagement, and
-  // the fused span would silently count time away as work. This is the single
-  // write path every merge uses (manual Merge, AI merge actions, the day
-  // regroup), so the veto here covers them all.
-  const spannedAbsence = absenceSpannedBy(ordered.flatMap((block) => block.sessions))
-  if (spannedAbsence) {
-    throw new Error(
-      `These blocks are separated by a real absence (${formatAbsenceRange(spannedAbsence)}). `
-      + 'Daylens never joins work across time away.',
-    )
+  // A merge the person asks for always succeeds — including across time away
+  // (DEV-233, decided). The absence veto applies only to automatic merges
+  // (the day regroup and the deterministic fragment repair), which may never
+  // invent continuity the person didn't claim. Active duration still counts
+  // only captured activity, so a fused span never books time away as work.
+  if (options.initiator === 'auto') {
+    const spannedAbsence = absenceSpannedBy(ordered.flatMap((block) => block.sessions))
+    if (spannedAbsence) {
+      throw new Error(
+        `These blocks are separated by a real absence (${formatAbsenceRange(spannedAbsence)}). `
+        + 'Daylens never joins work across time away on its own.',
+      )
+    }
   }
   for (let i = 0; i < ordered.length - 1; i += 1) {
     const earlier = ordered[i]
@@ -3553,6 +3556,18 @@ function boundaryCorrectionsTableExists(db: Database.Database): boolean {
   return Boolean(row)
 }
 
+// The day's stored merge spans and user cuts, for callers outside the rebuild
+// (the analyze pipeline's repair and fragment-merge passes): a repair must not
+// split inside a span a person fused, and no automatic merge may re-join a
+// junction the person explicitly cut.
+export function dayBoundaryCorrectionAnchors(
+  db: Database.Database,
+  dateStr: string,
+): { mergedSpans: MergedSpan[]; cuts: number[] } {
+  const corrections = loadBoundaryCorrections(db, dateStr)
+  return { mergedSpans: corrections.mergedSpans, cuts: corrections.cuts }
+}
+
 function loadBoundaryCorrections(db: Database.Database, dateStr?: string): BoundaryCorrections {
   if (!dateStr || !boundaryCorrectionsTableExists(db)) return EMPTY_BOUNDARY_CORRECTIONS
   const rows = db.prepare(`
@@ -3655,20 +3670,17 @@ function scoreBoundary(
   corrections: BoundaryCorrections,
 ): { score: number; reasons: BoundaryReason[] } {
   const reasons: BoundaryReason[] = []
-  // The absence guard outranks EVERY stored correction (lib/absenceGuard.ts):
-  // a real absence of 15+ minutes is a hard boundary no merge may erase — not
-  // an AI regroup's, not a cleanup's, not even a user's. This is what lets a
-  // re-analyze REPAIR a day whose stored corrections were written before the
-  // guard existed (the July 10 block that fused 3:49 PM work to 10:05 PM work
-  // across a 8:01–9:39 PM absence): the poisoned merge span simply loses at
-  // the gap and the day splits there on rebuild.
+  // A stored merge correction erases this boundary and overrides every cut
+  // below it — including a real absence (DEV-233, decided: a merge the person
+  // asks for always succeeds and survives every rebuild). Automatic merges can
+  // never produce a correction that spans an absence (mergeTimelineEpisodes
+  // vetoes them at the write), so the only merges that bridge a gap here are
+  // ones a person explicitly asked for.
+  if (corrections.lookup(left, right) === 'merge') return { score: -BOUNDARY_HARD_SCORE, reasons: [] }
   const gapMs = gapBetweenCandidates(left, right)
   if ((left.boundedAfterGap && right.boundedBeforeGap) || isRealAbsenceGap(gapMs)) {
     return { score: BOUNDARY_HARD_SCORE, reasons: ['idle-gap'] }
   }
-  // A user merge erases this boundary and overrides every heuristic below it,
-  // including a kind change — the user's intent always wins over segmentation.
-  if (corrections.lookup(left, right) === 'merge') return { score: -BOUNDARY_HARD_SCORE, reasons: [] }
   if (right.forcedBoundaryBefore) {
     return { score: BOUNDARY_HARD_SCORE, reasons: ['subject-change'] }
   }
@@ -5307,8 +5319,8 @@ export function buildTimelineBlocksForDay(
   // carries forward AI labels by evidence key BEFORE invalidating the old
   // rows, so curated names re-attach to every block whose session set is
   // unchanged, and user corrections replay from their durable stores
-  // (invariant 8) — except a merge across a real absence, which the guard in
-  // scoreBoundary now refuses to honor.
+  // (invariant 8) — including a user merge across a real absence, which
+  // outranks the absence cut in scoreBoundary.
   const forceRebuild = (options.forceRebuild ?? false) && shouldMaterialize
   const todayStr = localDateString()
   let forceMaterialize = forceRebuild

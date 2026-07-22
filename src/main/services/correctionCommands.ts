@@ -34,6 +34,7 @@ import type {
   WorkContextBlock,
 } from '@shared/types'
 import { localDayBounds } from '../lib/localDate'
+import { absenceSpannedBy, formatAbsenceRange } from '../lib/absenceGuard'
 import { materializeTimelineDayProjection } from '../core/query/projections'
 import { getCorrectedAppSummariesForRange } from './activityFacts'
 import { applyTimelineBlockEdit } from './timelineBlockEdits'
@@ -177,8 +178,14 @@ function describeCommand(
       }
       return parts.length > 0 ? parts.join(', ') : `Edit "${label(blocks[0])}"`
     }
-    case 'merge':
-      return `Merge ${blocks.length} blocks into one`
+    case 'merge': {
+      // A merge across time away is allowed (DEV-233, decided) but never
+      // silent: the preview names the gap so the person merges knowingly.
+      const gap = absenceSpannedBy(blocks.flatMap((block) => block.sessions))
+      return gap
+        ? `Merge ${blocks.length} blocks into one. They're separated by time away (${formatAbsenceRange(gap)}) — that time stays untracked`
+        : `Merge ${blocks.length} blocks into one`
+    }
     case 'split': {
       const at = new Date(command.cutMs).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
       return `Split "${label(blocks[0])}" at ${at}`

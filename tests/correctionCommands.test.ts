@@ -401,20 +401,28 @@ test('assigning a client with no overlapping work sessions throws and leaves the
   db.close()
 })
 
-test('a conflicting merge fails atomically and leaves the ledger untouched', () => {
+test('a user merge across a real absence applies, names the gap in its preview, and undoes cleanly', () => {
   const db = createProductionTestDatabase()
-  // 25 minutes of real absence between the blocks — the absence guard vetoes.
+  // 25 minutes of real absence between the blocks. DEV-233 (decided): the
+  // merge the person asks for succeeds anyway — the preview names the gap so
+  // they fuse knowingly, and undo restores the split.
   insertSession(db, { title: 'Camera comparison research - DPReview - Google Chrome', startMinute: 0, durationMinutes: 20 })
   insertSession(db, { title: 'City council election results - Local News - Google Chrome', startMinute: 45, durationMinutes: 20 })
   const blocks = getTimelineDayPayload(db, TEST_DATE).blocks
   assert.equal(blocks.length, 2)
-  const before = correctionLedgerCounts(db)
 
-  assert.throws(() => applyCorrection(db, {
+  const preview = previewCorrection(db, {
     kind: 'merge', date: TEST_DATE, blockIds: [blocks[0].id, blocks[1].id],
-  }, null), /absence/i)
+  }, null)
+  assert.match(preview.description, /time away/i, 'the preview must name the gap being bridged')
 
-  assert.deepEqual(correctionLedgerCounts(db), before, 'nothing applied partially')
+  const applied = applyCorrection(db, {
+    kind: 'merge', date: TEST_DATE, blockIds: [blocks[0].id, blocks[1].id],
+  }, null)
+  assert.equal(getTimelineDayPayload(db, TEST_DATE).blocks.length, 1, 'the merge fuses across the gap')
+
+  undoCorrection(db, applied.correctionId)
+  assert.equal(getTimelineDayPayload(db, TEST_DATE).blocks.length, 2, 'undo restores the split day')
   db.close()
 })
 
