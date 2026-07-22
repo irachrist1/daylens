@@ -373,12 +373,21 @@ export function startSemanticIndexBackfill(
         return
       }
       const loaded = await loadSemanticEmbedder()
-      if (!loaded.ok) return // honest absence — status explains why
+      if (!loaded.ok) {
+        // Honest absence — status explains why. Absence can be transient (a
+        // crashed embed worker, a model restored while running), so keep the
+        // loop alive at the idle cadence instead of stopping until restart.
+        indexTimer = setTimeout(() => void step(), idleDelayMs)
+        return
+      }
       progress = await semanticIndexStep(getDatabase(), loaded.embedder, {
         batchSize: options.batchSize,
       })
     } catch (error) {
       console.error('[semanticIndex] background step failed', error)
+      if (!indexTimer) {
+        indexTimer = setTimeout(() => void step(), idleDelayMs)
+      }
       return
     }
     if (!indexTimer) {

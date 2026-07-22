@@ -121,6 +121,7 @@ export function projectSessionsFromFocusEvents(
 function foldSessions(events: readonly StoredFocusEvent[], dayEnd: number): DerivedSessionRow[] {
   const out: DerivedSessionRow[] = []
   let open: OpenSession | null = null
+  let lastEventTs: number | null = null
 
   const close = (atMs: number) => {
     if (!open) return
@@ -135,6 +136,21 @@ function foldSessions(events: readonly StoredFocusEvent[], dayEnd: number): Deri
 
   for (const ev of events) {
     switch (ev.event_type) {
+      case 'capture_stopped': {
+        // Capture is down from here: whatever was focused stops accruing.
+        close(ev.ts_ms)
+        break
+      }
+      case 'capture_started': {
+        // A session still open at a capture start means the previous run died
+        // without a capture_stopped (crash, kill, wedged shutdown). Its
+        // evidence truly ends at the last event that run managed to record —
+        // extending it across the dead stretch would count downtime as
+        // activity (observed: an overnight crash loop rendered as a night of
+        // continuous app use).
+        if (open) close(lastEventTs ?? ev.ts_ms)
+        break
+      }
       case 'app_activated': {
         close(ev.ts_ms)
         open = {
@@ -179,6 +195,7 @@ function foldSessions(events: readonly StoredFocusEvent[], dayEnd: number): Deri
       default:
         break
     }
+    lastEventTs = ev.ts_ms
   }
 
   // Open session at end of window — close at day end. (For past days this is

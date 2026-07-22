@@ -210,6 +210,20 @@ function projectGapsFromFocusEvents(
         if (open?.kind === 'capture_unavailable') close(event.ts_ms)
         else open = null
         break
+      case 'capture_stopped':
+        // Nothing is observed between a clean stop and the next start; the
+        // stretch is honestly "capture unavailable", not activity.
+        close(event.ts_ms)
+        open = { startMs: event.ts_ms, kind: 'capture_unavailable' }
+        break
+      case 'capture_started':
+        // Close whatever observational state was open — after a crash there
+        // is no capture_stopped, and a machine-state gap (idle, locked) may
+        // still be dangling from the dead run. The first poll after start
+        // re-opens an idle gap backdated by the true no-input time, so a
+        // still-away user is covered without double counting.
+        close(event.ts_ms)
+        break
       default:
         break
     }

@@ -1803,6 +1803,17 @@ async function poll(): Promise<void> {
           flushCurrent(idleStartMs, 'away')
           flushActiveBrowserContext(getDb(), idleStartMs)
           console.log(`[tracking] user away ${Math.round(idleSec)}s — session flushed`)
+        } else if (idleState !== 'away') {
+          // Tracking started (or restarted after a crash) while the user was
+          // already away: there is no session to flush, but the projection
+          // still needs the boundary — the capture helper keeps emitting
+          // focus events (app restarts steal focus, background windows change
+          // titles), and without an away_start those read as presence. This
+          // is how an unattended overnight machine was once counted as a
+          // night without sleep.
+          const idleStartMs = provisionalIdleStart ?? (nowMs() - Math.round(idleSec) * 1_000)
+          recordActivityEvent('away_start', { idleSeconds: Math.round(idleSec), inferredFrom: 'startup_idle' }, idleStartMs)
+          console.log(`[tracking] started while user away ${Math.round(idleSec)}s — away boundary recorded`)
         }
         idleState = 'away'
         provisionalIdleStart = null
