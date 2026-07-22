@@ -1842,8 +1842,10 @@ function DaySummaryInspector({ payload, analysis }: { payload: DayTimelinePayloa
               {/* Nothing fails silently: when the AI recap couldn't run, the
                   factual fallback says so plainly rather than posing as prose. */}
               {recap.degraded && (
-                <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>
-                  AI recap unavailable — showing the day's facts. Try again in a moment.
+                <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', lineHeight: 1.5 }}>
+                  {recap.degradedReason
+                    ? `The full recap couldn't be generated — ${recap.degradedReason} Showing the day's facts; Generate recap retries.`
+                    : "The full recap couldn't be generated. Showing the day's facts; Generate recap retries."}
                 </div>
               )}
               <div style={{ fontSize: 14, lineHeight: 1.7, color: 'var(--color-text-primary)' }}>
@@ -3683,7 +3685,10 @@ export default function Timeline() {
                         block shows its detail; no selection shows the day
                         summary. Nothing floats over the timeline. */}
                     {selectedBlock ? (
-                      <>
+                      // One grid item: a fragment here would hand the grid two
+                      // right-column children and wrap the detail panel to a
+                      // full-width second row (DEV-283).
+                      <div style={{ position: 'sticky', top: 24, alignSelf: 'start' }}>
                         {/* Analyze feedback follows you into a block's detail view
                             so the run never looks like it silently stopped (DEV-270). */}
                         {(dayAnalysis.analyzing || dayAnalysis.status) && (
@@ -3697,13 +3702,14 @@ export default function Timeline() {
                         <BlockDetailInspector
                           block={selectedBlock}
                           payload={payload}
+                          sticky={false}
                           onCorrection={correction.request}
                           onClose={() => {
                             setSelectedBlockId(null)
                             setMergeRangeEndId(null)
                           }}
                         />
-                      </>
+                      </div>
                     ) : (
                       <DaySummaryInspector payload={payload} analysis={dayAnalysis} />
                     )}

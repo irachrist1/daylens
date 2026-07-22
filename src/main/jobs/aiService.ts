@@ -2043,10 +2043,15 @@ export async function generateDaySummary(dateStr: string): Promise<AIDaySummaryR
     }
     // The model answered but its output was unusable. Surface the factual
     // fallback marked degraded, and do NOT cache it, so a later open retries AI.
-    return { ...fallback, degraded: true }
+    return { ...fallback, degraded: true, degradedReason: 'The model replied in a shape Daylens could not read.' }
   } catch (error) {
+    // The orchestration layer already shapes provider failures into messages a
+    // person can act on ("AI access is paused…", "…timed out"); pass that
+    // reason through instead of burying it in the log (DEV-279).
     console.warn(`[ai] day_summary failed for ${dateStr}:`, error)
-    return { ...fallback, degraded: true }
+    const message = error instanceof Error ? error.message.trim() : ''
+    const reason = message ? (/[.!?]$/.test(message) ? message : `${message}.`) : undefined
+    return { ...fallback, degraded: true, degradedReason: reason }
   }
 }
 

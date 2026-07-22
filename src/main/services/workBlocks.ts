@@ -4557,29 +4557,42 @@ export function invalidateTimelineDayBlocks(db: Database.Database, dateStr: stri
   deleteWrappedNarrativesForDate(db, dateStr, 'evidence-change')
 }
 
-type CarriedAiLabel = { label: string; narrative: string | null; confidence: number }
+type CarriedAiLabel = {
+  label: string
+  narrative: string | null
+  confidence: number
+  startMs: number
+  endMs: number
+}
 
 // Re-attach AI block names across a re-segmentation. A block's id is derived from
 // its exact session set + boundaries (`blockIdFor`), so a day that grows or
 // re-segments on the next open mints brand-new ids and strands the AI labels
 // keyed to the old ones — the rebuilt block silently drops back to a raw artifact
-// title ("Jamie Duffy", "Labrinth"). That is the "timeline didn't save after a
-// restart" bug. Snapshot the day's current AI labels by the same stable,
-// session-set evidence key the review layer uses (`reviewEvidenceKeyForBlock`)
-// so a freshly rebuilt block whose evidence is unchanged inherits the name it
-// already earned, and re-persists it under its new id (stopping the orphan churn).
+// title ("Jamie Duffy", "Labrinth") or, once every labeled block is superseded,
+// the whole analyzed day reads as un-analyzed again (DEV-277). Snapshot the
+// day's current AI labels under two keys: the session-set evidence key the
+// review layer uses (`reviewEvidenceKeyForBlock`), and the block's exact
+// wall-clock span. The span key matters because a past day's rebuild feeds
+// *derived* sessions whose ids live in a different namespace than the ids the
+// day was analyzed with — the session-set key can never match across that
+// boundary, but the same stretch of work re-derives the same span.
 export function snapshotCarryForwardAiLabels(
   db: Database.Database,
   dateStr: string,
 ): Map<string, CarriedAiLabel> {
   const out = new Map<string, CarriedAiLabel>()
   const rows = db.prepare(`
-    SELECT l.block_id AS blockId, l.label AS label, l.narrative AS narrative, l.confidence AS confidence
+    SELECT l.block_id AS blockId, l.label AS label, l.narrative AS narrative, l.confidence AS confidence,
+           tb.start_time AS startMs, tb.end_time AS endMs
     FROM timeline_block_labels l
     JOIN timeline_blocks tb ON tb.id = l.block_id
     WHERE tb.date = ? AND tb.invalidated_at IS NULL AND tb.is_live = 0 AND l.source = 'ai'
     ORDER BY l.created_at DESC
-  `).all(dateStr) as Array<{ blockId: string; label: string; narrative: string | null; confidence: number }>
+  `).all(dateStr) as Array<{
+    blockId: string; label: string; narrative: string | null; confidence: number
+    startMs: number; endMs: number
+  }>
   if (rows.length === 0) return out
 
   const memberStmt = db.prepare(`
@@ -4587,26 +4600,47 @@ export function snapshotCarryForwardAiLabels(
     FROM timeline_block_members
     WHERE block_id = ? AND member_type = 'app_session'
   `)
+  const ambiguous = new Set<string>()
+  const put = (key: string, entry: CarriedAiLabel): void => {
+    if (ambiguous.has(key)) return
+    const existing = out.get(key)
+    if (!existing) {
+      out.set(key, entry)
+    } else if (existing.label !== entry.label) {
+      // Two differently-named blocks claim the same key (only possible with
+      // corrupt data): re-attaching either would be a guess, so neither wins.
+      out.delete(key)
+      ambiguous.add(key)
+    }
+  }
   for (const row of rows) {
     const label = row.label?.trim()
     if (!label) continue
+    const entry: CarriedAiLabel = {
+      label,
+      narrative: row.narrative ?? null,
+      confidence: row.confidence,
+      startMs: row.startMs,
+      endMs: row.endMs,
+    }
     const ids = (memberStmt.all(row.blockId) as Array<{ memberId: string }>)
       .map((m) => Number(m.memberId))
       .filter((id) => Number.isFinite(id) && id >= 0)
       .sort((a, b) => a - b)
-    if (ids.length === 0) continue
-    const key = `sessions:${ids.join(',')}`
     // created_at DESC — the first row seen for a key is the freshest; keep it.
-    if (!out.has(key)) out.set(key, { label, narrative: row.narrative ?? null, confidence: row.confidence })
+    if (ids.length > 0) put(`sessions:${ids.join(',')}`, entry)
+    if (row.endMs > row.startMs) put(`span:${row.startMs}:${row.endMs}`, entry)
   }
   return out
 }
 
 // A freshly rebuilt block with no AI label and no user override inherits a
-// carried-forward AI name when its evidence (the exact session set) is identical
-// to a block that already had one. Strict equality means we only re-attach to the
-// same stretch of work — a merge/split that changes the evidence gets re-named by
-// AI on the next pass instead, never mislabeled.
+// carried-forward AI name when it is the same stretch of work: an identical
+// session set, an identical wall-clock span, or — when session ids changed
+// namespace and boundaries drifted — an unambiguous mutual-midpoint match
+// (each span contains the other's midpoint, so they overlap by more than half
+// of both). A merge/split that genuinely changes the evidence matches nothing
+// and gets re-named by AI on the next pass instead — never mislabeled.
 function inheritCarriedAiLabel(
   db: Database.Database,
   block: WorkContextBlock,
@@ -4615,6 +4649,8 @@ function inheritCarriedAiLabel(
   if (!carried || carried.size === 0) return block
   if (block.aiLabel?.trim() || block.label.override?.trim()) return block
   const match = carried.get(reviewEvidenceKeyForBlock(block))
+    ?? carried.get(`span:${block.startTime}:${block.endTime}`)
+    ?? mutualMidpointMatch(block, carried)
   if (!match) return block
   if (getBlockLabelOverride(db, block.id)?.label?.trim()) return block
   const nextLabel = block.label.narrative?.trim()
@@ -4623,16 +4659,29 @@ function inheritCarriedAiLabel(
   return { ...block, aiLabel: match.label, label: nextLabel }
 }
 
+function mutualMidpointMatch(
+  block: WorkContextBlock,
+  carried: Map<string, CarriedAiLabel>,
+): CarriedAiLabel | null {
+  const blockMid = block.startTime + (block.endTime - block.startTime) / 2
+  const candidates = new Set<CarriedAiLabel>()
+  for (const entry of carried.values()) {
+    const entryMid = entry.startMs + (entry.endMs - entry.startMs) / 2
+    if (entryMid >= block.startTime && entryMid < block.endTime
+      && blockMid >= entry.startMs && blockMid < entry.endMs) {
+      candidates.add(entry)
+    }
+  }
+  if (candidates.size !== 1) return null
+  return candidates.values().next().value ?? null
+}
+
 function persistTimelineDay(
   db: Database.Database,
   dateStr: string,
   blocks: WorkContextBlock[],
-  options: { finalized?: boolean } = {},
 ): void {
   const validIds = blocks.filter((block) => !block.isLive).map((block) => block.id)
-  // Carry forward AI names from the day's current blocks before the invalidation
-  // below strands them. Skipped when finalized — those labels are already final.
-  const carriedAiLabels = options.finalized ? null : snapshotCarryForwardAiLabels(db, dateStr)
   const persist = db.transaction(() => {
     if (validIds.length > 0) {
       const placeholders = validIds.map(() => '?').join(', ')
@@ -4671,11 +4720,8 @@ function persistTimelineDay(
       `).run(dayFromMs, dayToMs)
     }
 
-    for (const rawBlock of blocks) {
-      if (rawBlock.isLive) continue
-      const block = options.finalized
-        ? rawBlock
-        : finalizedLabelForBlock(db, inheritCarriedAiLabel(db, rawBlock, carriedAiLabels), dateStr)
+    for (const block of blocks) {
+      if (block.isLive) continue
       db.prepare(`
         INSERT INTO timeline_blocks (
           id,
@@ -4922,7 +4968,7 @@ function persistTimelineDayIfChanged(
     return
   }
 
-  persistTimelineDay(db, dateStr, blocks, { finalized: true })
+  persistTimelineDay(db, dateStr, blocks)
   timelineMaterializationFingerprints.set(cacheKey, fingerprint)
 }
 
@@ -5379,15 +5425,29 @@ export function buildTimelineBlocksForDay(
     if (persisted && persisted.length > 0
       && (persistedDayWasProcessed(db, dateStr) || persistedDayHasCorrections(db, dateStr))) {
       if (persistedDayUnderCovers(persisted, sessions)) {
-        // DEV-267: a day sealed with most of its blocks missing. Drop the
-        // partial seal so the day rebuilds from its sessions — the same repair
-        // the user's own block-invalidation performs by hand. Never fails
-        // silently: the seal/rebuild is logged.
+        // DEV-267: a day sealed with most of its blocks missing (an analyze
+        // that ran mid-day, or a finalize that died between steps). Rebuild
+        // the day from its sessions — but the analysis is work the person
+        // already has: the rebuilt blocks re-inherit the day's AI names for
+        // every unchanged stretch, and only the newly uncovered time comes
+        // back unnamed (DEV-277: an analyzed day must never revert to coarse
+        // sittings). Never fails silently: the seal/rebuild is logged.
         console.warn(
           `[timeline] ${dateStr} was sealed under-covered — its ${persisted.length} `
           + `stored block${persisted.length === 1 ? '' : 's'} leave over `
-          + `${Math.round(PARTIAL_SEAL_MAX_UNCOVERED_MS / 60_000)}m of the day's tracked time uncovered; rebuilding from sessions`,
+          + `${Math.round(PARTIAL_SEAL_MAX_UNCOVERED_MS / 60_000)}m of the day's tracked time uncovered; `
+          + 'rebuilding from sessions and carrying the AI labels forward',
         )
+        const repaired = rebuildDayBlocksWithCarriedLabels(db, dateStr, sessions)
+        const analysisSurvived = repaired.some((block) => !block.isLive
+          && (block.label.source === 'ai' || block.label.source === 'workflow' || block.label.source === 'user'))
+        if (analysisSurvived || persistedDayHasCorrections(db, dateStr)) {
+          persistTimelineDayIfChanged(db, dateStr, sessions, repaired, true)
+          flagSuspiciousUnbrokenBlocks(dateStr, repaired)
+          return repaired
+        }
+        // No label or correction survived the rebuild — the day is effectively
+        // un-analyzed again and falls through to the coarse read (DEV-268).
         invalidateTimelineDay(db, dateStr)
         forceMaterialize = true
       } else {
@@ -5413,12 +5473,28 @@ export function buildTimelineBlocksForDay(
     forceMaterialize = true
   }
 
-  const computed = buildBlocksForSessions(db, sessions, dateStr).map((block) => finalizedLabelForBlock(db, block, dateStr))
+  const computed = rebuildDayBlocksWithCarriedLabels(db, dateStr, sessions)
   flagSuspiciousUnbrokenBlocks(dateStr, computed)
   if (shouldMaterialize) {
     persistTimelineDayIfChanged(db, dateStr, sessions, computed, forceMaterialize)
   }
   return computed
+}
+
+// Every full rebuild goes through here so the day's existing AI labels are
+// snapshotted BEFORE the rebuild supersedes their blocks, and re-attached to
+// the rebuilt blocks that are the same stretch of work. Without this, any
+// rebuild that re-keys block ids (re-segmentation, a heuristic bump, the
+// derived-session id namespace on a past day) strands the labels and the
+// analyzed day silently reverts (DEV-277).
+function rebuildDayBlocksWithCarriedLabels(
+  db: Database.Database,
+  dateStr: string,
+  sessions: AppSession[],
+): WorkContextBlock[] {
+  const carried = snapshotCarryForwardAiLabels(db, dateStr)
+  return buildBlocksForSessions(db, sessions, dateStr)
+    .map((block) => finalizedLabelForBlock(db, inheritCarriedAiLabel(db, block, carried), dateStr))
 }
 
 // A gap becomes visible blank space on the grid at the same threshold that

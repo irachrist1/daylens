@@ -128,7 +128,23 @@ export function parseDaySummaryResultText(
       ),
     }
   } catch {
-    if (/^\s*[{[]/.test(normalized) || /"summary"\s*:/.test(normalized)) return null
+    if (/^\s*[{[]/.test(normalized) || /"summary"\s*:/.test(normalized)) {
+      // Truncated or malformed JSON. A complete "summary" string field is
+      // still a usable recap — salvage it rather than degrading to facts.
+      const summaryField = normalized.match(/"summary"\s*:\s*"((?:[^"\\]|\\.)*)"/)
+      if (summaryField) {
+        try {
+          const summary = (JSON.parse(`"${summaryField[1]}"`) as string).trim()
+          if (summary) {
+            return {
+              summary,
+              questionSuggestions: fillDaySummaryQuestionSuggestions([], fallbackQuestions),
+            }
+          }
+        } catch { /* fall through to null */ }
+      }
+      return null
+    }
     return {
       summary: normalized,
       questionSuggestions: fillDaySummaryQuestionSuggestions([], fallbackQuestions),

@@ -666,6 +666,9 @@ export interface AIDaySummaryResult {
    *  (DEV-270/275: nothing fails silently). Absent on a real AI recap and on the
    *  empty-day line. */
   degraded?: boolean
+  /** Why the AI recap could not be generated, in words the person can act on
+   *  (provider error, timeout, unreadable reply). Only set when degraded. */
+  degradedReason?: string
 }
 
 export type AIAnswerKind =
