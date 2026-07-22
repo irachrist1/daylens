@@ -32,7 +32,7 @@ import { formatDisplayAppName } from '../lib/apps'
 import { formatDuration, formatFullDate, shiftDateString, todayString, weekStartString } from '../lib/format'
 import { openArtifact } from '../lib/openTarget'
 import { activityCategoryLabel, EDITABLE_BLOCK_CATEGORY_OPTIONS } from '@shared/activityCategories'
-import { blockShortSummary, safeTimelineText, shortDomainLabel } from '../lib/timelineText'
+import { blockShortSummary, cleanTitleForDisplay, safeTimelineText, shortDomainLabel } from '../lib/timelineText'
 
 // The types a user can assign a block in Edit → Type. Category drives the
 // block's color everywhere, so this doubles as the recolor control. The
@@ -1996,7 +1996,7 @@ function BlockDetailInspector({
   // seconds. Off-task evidence is split out below as side trips (§6). The
   // nesting itself (which rows are children of which app) is pure logic,
   // extracted to blockDetailRowTree.ts so it's unit-testable without a DOM.
-  const { evidence, detours, detourSeconds } = buildDetailRowTree(block)
+  const { evidence, detours, detourSeconds, briefCount, briefSeconds } = buildDetailRowTree(block)
 
   // DEV-189: the calendar event this block's captured meeting-app evidence
   // supports, when one matched. The block's own time stays observed activity;
@@ -2008,10 +2008,20 @@ function BlockDetailInspector({
   // The block's type tag + how the time inside splits by category. Real facts,
   // compactly: "Focused work" · Development 2h 10m · AI tools 40m.
   const typeTag = blockTypeTag(block)
-  const categorySplit = Object.entries(block.categoryDistribution ?? {})
+  // The category appears once (DEV-272). A duration chip that merely restates
+  // the type tag ("Browsing" under a "Browsing" tag) is dropped; only a genuine
+  // split across two-plus categories earns its own chips.
+  const categorySplitAll = Object.entries(block.categoryDistribution ?? {})
     .filter((entry): entry is [AppCategory, number] => typeof entry[1] === 'number' && entry[1] >= 60)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 3)
+  const categorySplit = categorySplitAll.length <= 1
+    ? categorySplitAll.filter(([category]) => activityCategoryLabel(category) !== typeTag)
+    : categorySplitAll
+  // The type tag is dropped when it only echoes the block's own title (a
+  // "Browsing" block titled "Browsing"), so the category is stated once, not
+  // three times (DEV-272).
+  const showTypeTag = typeTag.trim().toLowerCase() !== userVisibleBlockLabel(block).trim().toLowerCase()
 
   // Presentation (name/detail/icon/onOpen) for a row tree node, built from
   // whichever raw source object it carries. Kept separate from the pure
@@ -2028,8 +2038,8 @@ function BlockDetailInspector({
     if (row.kind === 'artifact' && row.artifact) {
       const artifact = row.artifact
       return {
-        name: safeTimelineText(artifact.displayTitle.trim()),
-        detail: artifact.subtitle || artifact.host || artifact.path || null,
+        name: cleanTitleForDisplay(artifact.displayTitle.trim()),
+        detail: artifact.subtitle ? formatDisplayAppName(artifact.subtitle) : (artifact.host || artifact.path || null),
         icon: (
           <EntityIcon
             artifactType={artifact.artifactType}
@@ -2196,19 +2206,21 @@ function BlockDetailInspector({
           padding: '16px 22px 20px',
         }}>
           {/* What kind of block this was, and how the time inside splits. */}
-          {(typeTag || categorySplit.length > 0) && (
+          {((showTypeTag && typeTag) || categorySplit.length > 0) && (
             <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginBottom: 14 }}>
-              <span style={{
-                padding: '3px 9px',
-                borderRadius: 999,
-                fontSize: 11,
-                fontWeight: 700,
-                color: accent,
-                background: `${accent}1c`,
-                border: `1px solid ${accent}40`,
-              }}>
-                {typeTag}
-              </span>
+              {showTypeTag && typeTag && (
+                <span style={{
+                  padding: '3px 9px',
+                  borderRadius: 999,
+                  fontSize: 11,
+                  fontWeight: 700,
+                  color: accent,
+                  background: `${accent}1c`,
+                  border: `1px solid ${accent}40`,
+                }}>
+                  {typeTag}
+                </span>
+              )}
               {categorySplit.map(([category, seconds]) => (
                 <span key={category} style={{
                   padding: '3px 9px',
@@ -2295,6 +2307,13 @@ function BlockDetailInspector({
                 <div style={{ display: 'grid', gap: 10 }}>
                   {evidence.map((row) => renderEvidenceRow(row, false))}
                 </div>
+                {briefCount > 0 && (
+                  // Sub-minute apps and pages folded into one quiet line instead
+                  // of standing as their own 2-second rows (DEV-272).
+                  <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 8 }}>
+                    + {briefCount} brief {briefCount === 1 ? 'glimpse' : 'glimpses'} under a minute{briefSeconds >= 60 ? ` · ${formatDuration(briefSeconds)}` : ''}
+                  </div>
+                )}
               </section>
             )}
 

@@ -1193,6 +1193,10 @@ const DAYLENS_SELF_BUNDLE_IDS = new Set([
   'com.daylens.app.dev',
   'daylens',
   'daylens.desktop',
+  // Dev builds run under the raw Electron runner's identity, not Daylens's —
+  // this is still Daylens watching itself and must be excluded, not shown as
+  // "Electron · Development" evidence about the user.
+  'com.github.electron',
 ])
 
 const DAYLENS_SELF_PROCESS_NAMES = new Set([
@@ -1200,6 +1204,9 @@ const DAYLENS_SELF_PROCESS_NAMES = new Set([
   'daylens desktop',
   'daylens windows',
   'daylenswindows',
+  // The dev runner reports its product name as "Electron"; a real Electron app
+  // (VS Code, Slack, Figma) reports its own product name, never bare "electron".
+  'electron',
 ])
 
 function normalizedSelfIdentity(value: string | null | undefined): string {
