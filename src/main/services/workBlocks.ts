@@ -5130,6 +5130,23 @@ export function persistedDayWasProcessed(db: Database.Database, dateStr: string)
   return Boolean(row)
 }
 
+// A day the person has corrected — a category/label/exclusion review, or a
+// merge/split boundary correction. Like a processed day, its persisted blocks
+// carry work that a coarse rebuild would silently discard, so it is served as
+// its stored self rather than dropped back to neutral sittings (DEV-268 must not
+// erase a correction on an otherwise un-analyzed day).
+function persistedDayHasCorrections(db: Database.Database, dateStr: string): boolean {
+  const review = db.prepare(`
+    SELECT 1 FROM timeline_block_reviews
+    WHERE date = ? AND review_state IN ('corrected', 'ignored') LIMIT 1
+  `).get(dateStr)
+  if (review) return true
+  const boundary = db.prepare(`
+    SELECT 1 FROM timeline_boundary_corrections WHERE date = ? LIMIT 1
+  `).get(dateStr)
+  return Boolean(boundary)
+}
+
 // A neutral, non-app label for a finished sitting on a day that has not been
 // analyzed (DEV-268). The live day's finished sittings read "Earlier today"; a
 // past un-analyzed or rebuilt day names each sitting only by the part of the day
@@ -5353,12 +5370,14 @@ export function buildTimelineBlocksForDay(
 
   if (dateStr < todayStr && !forceRebuild) {
     const persisted = loadPersistedTimelineBlocksForDay(db, dateStr, sessions)
-    // Only a day that was actually analyzed (an AI / workflow / user label
-    // exists) is returned as its sealed, fine-grained self. A day whose
-    // persisted blocks carry only deterministic rule labels was never analyzed —
-    // or its analysis failed after the fine build persisted — and must not
-    // surface as app fragments (DEV-268).
-    if (persisted && persisted.length > 0 && persistedDayWasProcessed(db, dateStr)) {
+    // A day that was actually analyzed (an AI / workflow / user label exists) OR
+    // that the person has corrected is returned as its sealed, fine-grained self
+    // — the correction and labels are work a coarse rebuild would discard. A day
+    // whose persisted blocks carry only deterministic rule labels and no
+    // corrections was never analyzed (or its analysis failed after the fine
+    // build persisted) and must not surface as app fragments (DEV-268).
+    if (persisted && persisted.length > 0
+      && (persistedDayWasProcessed(db, dateStr) || persistedDayHasCorrections(db, dateStr))) {
       if (persistedDayUnderCovers(persisted, sessions)) {
         // DEV-267: a day sealed with most of its blocks missing. Drop the
         // partial seal so the day rebuilds from its sessions — the same repair
