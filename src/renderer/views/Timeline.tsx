@@ -599,10 +599,16 @@ function CalendarDayTrack({
             style={{
               position: 'absolute',
               top,
-              height: ghostHeight,
+              // The seam: every event card stops 2px short of its slot, so
+              // back-to-back events read as two cards with daylight between
+              // them (the Apple/Google convention) — imperceptible on a lone
+              // event, decisive in a stack.
+              height: Math.max(18, ghostHeight - 2),
               ...laneGeometry(laneKeyForMeeting(meeting)),
               borderRadius: 5,
-              border: confirmed ? '1px solid var(--color-border)' : '1px dashed var(--color-border)',
+              // --color-border is transparent by design; events need a real
+              // (still hairline) edge to exist against their faint fill.
+              border: confirmed ? '1px solid rgba(127, 127, 127, 0.35)' : '1px dashed rgba(127, 127, 127, 0.35)',
               // Attended reads as "consumed": the Apple-Calendar diagonal
               // hatch, unmistakable at a glance without adding any words.
               background: confirmed
