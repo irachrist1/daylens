@@ -5130,32 +5130,32 @@ export function persistedDayWasProcessed(db: Database.Database, dateStr: string)
   return Boolean(row)
 }
 
-// True when the persisted blocks for a day were built by a superseded timeline
-// heuristic, so a fresh reconstruction would group them more accurately.
-function persistedDayHeuristicIsStale(db: Database.Database, dateStr: string): boolean {
-  const row = db.prepare(`
-    SELECT heuristic_version
-    FROM timeline_blocks
-    WHERE date = ? AND invalidated_at IS NULL AND is_live = 0
-    ORDER BY computed_at ASC
-    LIMIT 1
-  `).get(dateStr) as { heuristic_version: string } | undefined
-  if (!row) return false
-  return row.heuristic_version !== TIMELINE_HEURISTIC_VERSION
+// A neutral, non-app label for a finished sitting on a day that has not been
+// analyzed (DEV-268). The live day's finished sittings read "Earlier today"; a
+// past un-analyzed or rebuilt day names each sitting only by the part of the day
+// it falls in — never by whatever app happened to be in focus.
+function neutralSittingLabel(startMs: number): string {
+  const hour = new Date(startMs).getHours()
+  if (hour < 5) return 'Late night'
+  if (hour < 12) return 'Morning'
+  if (hour < 17) return 'Afternoon'
+  if (hour < 21) return 'Evening'
+  return 'Night'
 }
 
-// The live day, before it is analyzed, is provisional — never
-// split into speculative intent-named blocks (naming live is how a
-// transcription session got stamped "Software Development Block"). But the raw
-// unit is still honest: each continuous
-// sitting is its own provisional block, ended by any real activity gap of 15+
-// minutes. The gap between sittings is blank space, never absorbed — one card
-// spanning 12:00 AM to 10:54 AM across a night of sleep is a lie. The stretch
-// being lived in right now is "Active now"; finished stretches wait neutrally
-// as "Earlier today" until Analyze Day names them. Each block still carries
-// full evidence so the detail panel works.
-function buildProvisionalLiveBlocks(
+// A day before it is analyzed is provisional — never split into speculative
+// intent-named blocks (naming live is how a transcription session got stamped
+// "Software Development Block"). But the raw unit is still honest: each
+// continuous sitting is its own provisional block, ended by any real activity
+// gap of 15+ minutes. The gap between sittings is blank space, never absorbed —
+// one card spanning 12:00 AM to 10:54 AM across a night of sleep is a lie. The
+// stretch being lived in right now is "Active now"; a finished stretch on the
+// live day waits neutrally as "Earlier today", and on a past un-analyzed or
+// rebuilt day (DEV-268) as the part of the day it falls in, until Analyze names
+// it. Each block still carries full evidence so the detail panel works.
+function buildProvisionalBlocksForDay(
   db: Database.Database,
+  dateStr: string,
   sessions: AppSession[],
 ): WorkContextBlock[] {
   if (sessions.length === 0) return []
@@ -5184,13 +5184,19 @@ function buildProvisionalLiveBlocks(
     }
     const block = buildBlockFromCandidate(candidate, db, context)
     const containsLiveSession = seg.sessions.some((session) => session.id === -1)
+    const isLiveDay = dateStr === localDateString()
+    const neutralLabel = containsLiveSession
+      ? 'Active now'
+      : isLiveDay
+        ? 'Earlier today'
+        : neutralSittingLabel(seg.sessions[0].startTime)
     return {
       ...block,
       provisional: true,
       isLive: containsLiveSession,
       label: {
         ...block.label,
-        current: containsLiveSession ? 'Active now' : 'Earlier today',
+        current: neutralLabel,
         source: 'rule' as const,
         confidence: 0,
         override: null,
@@ -5306,48 +5312,83 @@ function flagSuspiciousUnbrokenBlocks(dateStr: string, blocks: WorkContextBlock[
   }
 }
 
+// A processed day's persisted blocks must still account for the day's tracked
+// time. A finalize that ran on a partial session read (or died between its
+// separate steps) can seal a day whose blocks cover only a fraction of what was
+// actually tracked, and persistedDayWasProcessed then freezes that fraction
+// forever (DEV-267). When the stored blocks leave more than this much of the
+// day's tracked time uncovered, the seal is not trustworthy and the day must
+// rebuild from its sessions. Compared like-for-like — active seconds of the
+// blocks against active seconds of the sessions (both exclude deleted spans,
+// which are already filtered out of `sessions` before this runs).
+const PARTIAL_SEAL_MAX_UNCOVERED_MS = 30 * 60_000
+function persistedDayUnderCovers(blocks: WorkContextBlock[], sessions: AppSession[]): boolean {
+  const sessionActiveMs = sessions.reduce((sum, session) => sum + Math.max(0, session.durationSeconds * 1000), 0)
+  if (sessionActiveMs === 0) return false
+  const coveredMs = blocks.reduce((sum, block) => sum + blockActiveSeconds(block) * 1000, 0)
+  return sessionActiveMs - coveredMs > PARTIAL_SEAL_MAX_UNCOVERED_MS
+}
+
 export function buildTimelineBlocksForDay(
   db: Database.Database,
   dateStr: string,
   sessions: AppSession[],
-  options: { materialize?: boolean; forceRebuild?: boolean } = {},
+  options: { materialize?: boolean; forceRebuild?: boolean; analysis?: boolean } = {},
 ): WorkContextBlock[] {
   const shouldMaterialize = options.materialize ?? true
   // forceRebuild (the absence-repair path in analyzeDay.ts): reconstruct the
-  // day from its sessions through the full pipeline even when it is
-  // "processed". The rebuild rides persistTimelineDay, which snapshots and
-  // carries forward AI labels by evidence key BEFORE invalidating the old
-  // rows, so curated names re-attach to every block whose session set is
-  // unchanged, and user corrections replay from their durable stores
-  // (invariant 8) — including a user merge across a real absence, which
-  // outranks the absence cut in scoreBoundary.
+  // day from its sessions through the full pipeline even when it is "processed".
   const forceRebuild = (options.forceRebuild ?? false) && shouldMaterialize
+  // analysis: build the day's fine, deterministic blocks (Analyze, re-analyze,
+  // correction, day-rollover, and every internal/eval read that scores
+  // segmentation). Defaults to true so the deterministic build is the norm. Only
+  // a consumer that renders the day AS THE USER SEES IT before analysis — the
+  // renderer's own timeline read — opts out with analysis:false, and then an
+  // un-analyzed or rebuilt past day comes back as coarse, neutral, sitting-level
+  // blocks (DEV-268), never fine app-named fragments, exactly like the live day.
+  const analysis = options.analysis ?? true
   const todayStr = localDateString()
   let forceMaterialize = forceRebuild
   sessions = withoutIgnoredSpans(sessions, loadIgnoredBlockSpans(db, dateStr))
 
   if (dateStr < todayStr && !forceRebuild) {
     const persisted = loadPersistedTimelineBlocksForDay(db, dateStr, sessions)
-    if (persisted && persisted.length > 0) {
-      // Keep nightly/user-processed days exactly as they were summarized, and
-      // keep any day already on the current heuristic (no churn). Only an older
-      // day the nightly job never reached AND built under a superseded
-      // heuristic is reconstructed more accurately on revisit, then
-      // re-persisted so the improvement sticks.
-      if (persistedDayWasProcessed(db, dateStr) || !persistedDayHeuristicIsStale(db, dateStr)) {
-        // A processed day keeps its boundaries and labels forever, but its
-        // CATEGORY facts were computed by whatever heuristic was current at the
-        // time — and category is what colors every surface (timeline.md §3.4:
-        // color coding is universal). Refresh just those deterministic facts in
-        // place so old days converge on today's categorization without an AI
-        // call and without touching a single label (invariant 8).
+    // Only a day that was actually analyzed (an AI / workflow / user label
+    // exists) is returned as its sealed, fine-grained self. A day whose
+    // persisted blocks carry only deterministic rule labels was never analyzed —
+    // or its analysis failed after the fine build persisted — and must not
+    // surface as app fragments (DEV-268).
+    if (persisted && persisted.length > 0 && persistedDayWasProcessed(db, dateStr)) {
+      if (persistedDayUnderCovers(persisted, sessions)) {
+        // DEV-267: a day sealed with most of its blocks missing. Drop the
+        // partial seal so the day rebuilds from its sessions — the same repair
+        // the user's own block-invalidation performs by hand. Never fails
+        // silently: the seal/rebuild is logged.
+        console.warn(
+          `[timeline] ${dateStr} was sealed under-covered — its ${persisted.length} `
+          + `stored block${persisted.length === 1 ? '' : 's'} leave over `
+          + `${Math.round(PARTIAL_SEAL_MAX_UNCOVERED_MS / 60_000)}m of the day's tracked time uncovered; rebuilding from sessions`,
+        )
+        invalidateTimelineDay(db, dateStr)
+        forceMaterialize = true
+      } else {
+        // A processed, well-covered day keeps its boundaries and labels forever,
+        // but its CATEGORY facts were computed by whatever heuristic was current
+        // at the time — and category colors every surface (timeline.md §3.4).
+        // Refresh just those deterministic facts in place so old days converge
+        // on today's categorization without an AI call or touching a label.
         refreshStaleBlockCategoryFacts(db, persisted)
         flagSuspiciousUnbrokenBlocks(dateStr, persisted)
         return persisted
       }
-      forceMaterialize = true
     } else {
       forceMaterialize = true
+    }
+
+    // A past day with no trustworthy analyzed seal shows coarse neutral
+    // sittings unless this is an explicit analysis run (DEV-268).
+    if (!analysis) {
+      return buildProvisionalBlocksForDay(db, dateStr, sessions)
     }
   } else if (validPersistedTimelineBlockCount(db, dateStr) === 0) {
     forceMaterialize = true
@@ -5735,7 +5776,7 @@ export function getTimelineDayPayload(
   db: Database.Database,
   dateStr: string,
   liveSession?: LiveSession | null,
-  options: { materialize?: boolean; forceRebuild?: boolean } = {},
+  options: { materialize?: boolean; forceRebuild?: boolean; analysis?: boolean } = {},
 ): DayTimelinePayload {
   // Today stays provisional — one neutral block
   // per continuous sitting, split only at real 15+ minute activity gaps —
@@ -5778,7 +5819,7 @@ export function getTimelineDayPayload(
   )
   const websites = getCorrectedWebsiteSummariesForRange(db, fromMs, toMs)
   const builtBlocks = isLiveProvisionalDay
-    ? buildProvisionalLiveBlocks(db, sessions)
+    ? buildProvisionalBlocksForDay(db, dateStr, sessions)
     : buildTimelineBlocksForDay(db, dateStr, sessions, options)
   if (isLiveProvisionalDay) flagSuspiciousUnbrokenBlocks(dateStr, builtBlocks)
   // A deleted block (review state 'ignored') is gone from every surface that
@@ -5884,7 +5925,7 @@ export function getHistoryDayPayload(
   db: Database.Database,
   dateStr: string,
   liveSession?: LiveSession | null,
-  options: { materialize?: boolean; forceRebuild?: boolean } = {},
+  options: { materialize?: boolean; forceRebuild?: boolean; analysis?: boolean } = {},
 ): HistoryDayPayload {
   return getTimelineDayPayload(db, dateStr, liveSession, options)
 }
