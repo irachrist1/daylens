@@ -56,6 +56,8 @@ import type {
   DayTimelinePayload,
   RebuildTimelineDayResult,
   TimelineAnalyzeProgress,
+  TimelineClarification,
+  TimelineClarificationAnswer,
   DistractionCostPayload,
   FocusReflectionSavePayload,
   FocusSession,
@@ -229,6 +231,10 @@ const api = {
       ipcRenderer.on(IPC.DB.ANALYZE_PROGRESS, handler)
       return () => { ipcRenderer.removeListener(IPC.DB.ANALYZE_PROGRESS, handler) }
     },
+    // The day-analysis agent's answer-or-skip questions, and the channel to
+    // resolve one (DEV-247/270 clarification).
+    getDayClarifications: (date: string): Promise<TimelineClarification[]> => ipcRenderer.invoke(IPC.DB.GET_DAY_CLARIFICATIONS, date),
+    resolveDayClarification: (date: string, answer: TimelineClarificationAnswer): Promise<{ ok: boolean }> => ipcRenderer.invoke(IPC.DB.RESOLVE_DAY_CLARIFICATION, date, answer),
     getRecapRange: (dates: string[]): Promise<DayTimelinePayload[]> => ipcRenderer.invoke(IPC.DB.GET_RECAP_RANGE, dates),
     getTimelineRangeBlocks: (fromDate: string, toDate: string): Promise<CalendarRangeDay[]> =>
       ipcRenderer.invoke(IPC.DB.GET_TIMELINE_RANGE_BLOCKS, fromDate, toDate),

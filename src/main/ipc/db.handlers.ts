@@ -94,6 +94,7 @@ import { applyCorrection, previewCorrection, undoCorrection } from '../services/
 import { getTimelineRangeBlocks } from '../services/timelineCalendarRange'
 import { computeAppActivityDigest } from '../services/appActivityDigest'
 import { analyzeTimelineDay } from '../services/analyzeDay'
+import { detectDayClarifications, applyClarificationAnswer } from '../services/dayClarifications'
 import { resolveIcon } from '../services/iconResolver'
 import { getLinuxDesktopDiagnostics } from '../services/linuxDesktop'
 import { applyTimelineBlockEdit } from '../services/timelineBlockEdits'
@@ -126,6 +127,7 @@ import type {
   PurgeTrackedEvidencePayload,
   WorkMemorySettingsSummary,
   TimelineAnalyzeProgress,
+  TimelineClarificationAnswer,
 } from '@shared/types'
 import { FOCUSED_CATEGORIES, ALL_TIME_DAYS } from '@shared/types'
 import { isRealDayHarness } from '../lib/realDayHarness'
@@ -454,6 +456,19 @@ export function registerDbHandlers(): void {
       attempted: result.attempted,
       failed: result.failures.length,
     }
+  })
+
+  // The material questions the day-analysis agent has for this day — detected
+  // over the same projection the timeline shows, so it never asks about a block
+  // the person can't see (DEV-247/270 clarification).
+  ipcMain.handle(IPC.DB.GET_DAY_CLARIFICATIONS, (_e, dateStr: string) => {
+    const payload = getTimelineDayProjection(getDb(), dateStr, getLiveSessionForDate(dateStr), { materialize: false, analysis: false })
+    return detectDayClarifications(getDb(), payload)
+  })
+
+  ipcMain.handle(IPC.DB.RESOLVE_DAY_CLARIFICATION, (_e, dateStr: string, answer: TimelineClarificationAnswer) => {
+    applyClarificationAnswer(getDb(), dateStr, answer)
+    return { ok: true }
   })
 
   ipcMain.handle(IPC.DB.GET_RECAP_RANGE, (_e, dates: string[]) => {

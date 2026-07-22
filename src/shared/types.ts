@@ -450,6 +450,48 @@ export interface TimelineScheduledMeeting {
   matchedBlockId: string | null
 }
 
+// One thing the day-analysis agent could not settle from evidence and that
+// would materially change the account — surfaced to the person as an
+// answer-or-skip question (the interpretation agent's clarification contract).
+// Answering writes a durable correction (a block label, an attendance mark);
+// skipping is remembered so the same question is not re-asked.
+export interface TimelineClarificationOption {
+  id: string
+  label: string
+}
+
+export interface TimelineClarification {
+  /** Stable across reads (date + kind + block/event identity) so a skip or
+   *  answer de-duplicates the same question. */
+  id: string
+  kind: 'unnamed-block' | 'unconfirmed-meeting'
+  date: string
+  /** The whole span the question is about, for display. */
+  timeRange: string
+  question: string
+  /** Candidate answers drawn from the block's own evidence; the UI always adds
+   *  a free-text option and a Skip. */
+  options: TimelineClarificationOption[]
+  /** Present for 'unnamed-block'. */
+  blockId?: string
+  /** Present for 'unconfirmed-meeting' — the attendance-mark identity. */
+  eventKey?: string
+  meetingTitle?: string
+}
+
+export interface TimelineClarificationAnswer {
+  id: string
+  kind: 'unnamed-block' | 'unconfirmed-meeting'
+  /** 'skip' remembers the dismissal; 'answer' applies the durable correction. */
+  action: 'answer' | 'skip'
+  blockId?: string
+  /** For an answered 'unnamed-block': the chosen or typed activity label. */
+  label?: string
+  eventKey?: string
+  /** For an answered 'unconfirmed-meeting'. */
+  attendance?: 'attended' | 'skipped' | 'moved' | 'unrelated'
+}
+
 export type HistoryDayPayload = DayTimelinePayload
 
 // One block as the calendar month grid reads it: the same persisted
@@ -2908,6 +2950,10 @@ export const IPC = {
     // Progress ticks streamed while REBUILD_TIMELINE_DAY runs (DEV-270), so the
     // Analyze button shows what the system is actually doing, not a blank spinner.
     ANALYZE_PROGRESS: 'db:analyze-progress',
+    // The material answer-or-skip questions the day-analysis agent has for a day,
+    // and the channel to answer or dismiss them (DEV-247/270 clarification).
+    GET_DAY_CLARIFICATIONS: 'db:get-day-clarifications',
+    RESOLVE_DAY_CLARIFICATION: 'db:resolve-day-clarification',
     GET_APP_SUMMARIES: 'db:get-app-summaries',
     GET_APP_SUMMARIES_FOR_DATE: 'db:get-app-summaries-for-date',
     GET_ALL_APPS_FOR_LABELING: 'db:get-all-apps-for-labeling',

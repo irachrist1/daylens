@@ -3200,6 +3200,23 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 66,
+    description:
+      'Day-analysis clarification skips (DEV-247/DEV-270 agentic recap). When the interpretation agent asks the person a clarifying question about the day (an unnamed block, an unconfirmed meeting) and they dismiss it, the dismissal is remembered here so the same question is not re-asked on every open. An ANSWERED question needs no row — it resolves through its durable correction (a block label override, an attendance mark). LOCAL-ONLY: no sync-allowlist key, never exported.',
+    up: () => {
+      getDb().exec(`
+        CREATE TABLE IF NOT EXISTS timeline_clarification_skips (
+          date TEXT NOT NULL,
+          clarification_id TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          PRIMARY KEY (date, clarification_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_timeline_clarification_skips_date
+          ON timeline_clarification_skips (date);
+      `)
+    },
+  },
 ]
 
 export const LATEST_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0

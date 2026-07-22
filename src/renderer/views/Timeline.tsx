@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSPr
 import { useSearchParams } from 'react-router-dom'
 import { EyeOff, Trash2, X } from 'lucide-react'
 import { ANALYTICS_EVENT, blockCountBucket, trackedTimeBucket } from '@shared/analytics'
-import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, AttributionProject, CalendarRangeBlock, CalendarRangeDay, ClientRecord, CorrectionCommand, DayTimelinePayload, RebuildTimelineDayResult, TimelineAnalyzeProgress, TimelineGapSegment, TimelineScheduledMeeting, WorkContextBlock } from '@shared/types'
+import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, AttributionProject, CalendarRangeBlock, CalendarRangeDay, ClientRecord, CorrectionCommand, DayTimelinePayload, RebuildTimelineDayResult, TimelineAnalyzeProgress, TimelineClarification, TimelineClarificationAnswer, TimelineGapSegment, TimelineScheduledMeeting, WorkContextBlock } from '@shared/types'
 import { activityColorForCategory, leisureBlocksDimmed } from '@shared/activityColors'
 import { assignLanes, calendarCardHeights } from '../lib/timelineBlockLayout'
 import { blockActiveSeconds, blockDisplayedSpanSeconds } from '@shared/blockDuration'
@@ -1676,10 +1676,72 @@ function useDayAnalysis(dateStr: string, provisional: boolean, onRefresh?: () =>
   return { analyzing, status, progress, run }
 }
 
+// One answer-or-skip question the day-analysis agent has for the person — the
+// same pattern Cursor / Claude Code / Codex use. Answering writes a durable
+// correction; Skip dismisses it for good. Never blocks the recap.
+function ClarificationCard({ clarification, onResolve }: {
+  clarification: TimelineClarification
+  onResolve: (answer: TimelineClarificationAnswer) => void
+}) {
+  const [customText, setCustomText] = useState('')
+  const isMeeting = clarification.kind === 'unconfirmed-meeting'
+
+  const chooseOption = (option: { id: string; label: string }) => {
+    if (isMeeting) {
+      onResolve({ id: clarification.id, kind: 'unconfirmed-meeting', action: 'answer', eventKey: clarification.eventKey, attendance: option.id as TimelineClarificationAnswer['attendance'] })
+    } else {
+      onResolve({ id: clarification.id, kind: 'unnamed-block', action: 'answer', blockId: clarification.blockId, label: option.label })
+    }
+  }
+  const submitCustom = () => {
+    const label = customText.trim()
+    if (!label) return
+    onResolve({ id: clarification.id, kind: 'unnamed-block', action: 'answer', blockId: clarification.blockId, label })
+  }
+
+  return (
+    <div style={{ display: 'grid', gap: 8, padding: 12, borderRadius: 12, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)' }}>
+      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-text-primary)', lineHeight: 1.5 }}>{clarification.question}</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {clarification.options.map((option) => (
+          <button
+            key={option.id}
+            type="button"
+            onClick={() => chooseOption(option)}
+            style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', borderRadius: 8, padding: '5px 10px', fontSize: 12.5, cursor: 'pointer' }}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+      {!isMeeting && (
+        <div style={{ display: 'flex', gap: 6 }}>
+          <input
+            value={customText}
+            onChange={(event) => setCustomText(event.target.value)}
+            onKeyDown={(event) => { if (event.key === 'Enter') submitCustom() }}
+            placeholder="Or describe it in your own words…"
+            style={{ flex: 1, minWidth: 0, border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-primary)', borderRadius: 8, padding: '5px 8px', fontSize: 12.5 }}
+          />
+          <button type="button" onClick={submitCustom} disabled={!customText.trim()} style={{ border: 'none', background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)', borderRadius: 8, padding: '5px 10px', fontSize: 12.5, fontWeight: 600, cursor: customText.trim() ? 'pointer' : 'default', opacity: customText.trim() ? 1 : 0.5 }}>Save</button>
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={() => onResolve({ id: clarification.id, kind: clarification.kind, action: 'skip' })}
+        style={{ justifySelf: 'start', border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', fontSize: 11.5, cursor: 'pointer', padding: 0 }}
+      >
+        Skip
+      </button>
+    </div>
+  )
+}
+
 function DaySummaryInspector({ payload, analysis }: { payload: DayTimelinePayload; analysis: DayAnalysisController; onSelectBlock?: (blockId: string) => void }) {
   const [recap, setRecap] = useState<AIDaySummaryResult | null>(null)
   const [recapLoading, setRecapLoading] = useState(false)
   const [recapError, setRecapError] = useState<string | null>(null)
+  const [clarifications, setClarifications] = useState<TimelineClarification[]>([])
   const { analyzing, status: analyzeStatus, progress: analyzeProgress, run: runAnalyze } = analysis
   // The optional-note step of Analyze day: a one-line hint grounds the AI.
   const [wrapOpen, setWrapOpen] = useState(false)
@@ -1689,6 +1751,10 @@ function DaySummaryInspector({ payload, analysis }: { payload: DayTimelinePayloa
   // Daylens makes no claim about the day until it has enough to work with.
   const enoughToAnalyze = trackedSecondsFor(payload) >= ANALYZE_MIN_SECONDS
 
+  const loadClarifications = useCallback(() => {
+    void ipc.db.getDayClarifications(payload.date).then(setClarifications).catch(() => setClarifications([]))
+  }, [payload.date])
+
   useEffect(() => {
     setRecapError(null)
     setWrapOpen(false)
@@ -1696,14 +1762,24 @@ function DaySummaryInspector({ payload, analysis }: { payload: DayTimelinePayloa
     const cached = daySummaryRecapCache.get(payload.date)
     setRecap(cached ?? null)
     setRecapLoading(false)
-  }, [payload.date])
+    loadClarifications()
+  }, [payload.date, loadClarifications])
 
   useEffect(() => ipc.projections.onInvalidated((event) => {
     if (event.scope !== 'timeline' && event.scope !== 'all') return
     if (event.date && event.date !== payload.date) return
     daySummaryRecapCache.delete(payload.date)
     setRecap(null)
-  }), [payload.date])
+    loadClarifications()
+  }), [payload.date, loadClarifications])
+
+  // Answer or skip one question. An answer writes a durable correction in the
+  // main process (which invalidates the day, refreshing the timeline and recap);
+  // either way the card leaves the list immediately.
+  const resolveClarification = (answer: TimelineClarificationAnswer) => {
+    setClarifications((current) => current.filter((item) => item.id !== answer.id))
+    void ipc.db.resolveDayClarification(payload.date, answer).catch(() => loadClarifications())
+  }
 
   // Analyze Day (today) / Re-analyze (a past day): finalize the provisional day
   // into named blocks and refresh deterministic-floor / low-confidence labels.
@@ -1778,6 +1854,19 @@ function DaySummaryInspector({ payload, analysis }: { payload: DayTimelinePayloa
 
           {recapError && (
             <div style={{ fontSize: 11.5, lineHeight: 1.5, color: '#f87171' }}>{recapError}</div>
+          )}
+
+          {/* The agent's answer-or-skip questions — only when it genuinely has
+              a material one. Answering refines the day; skipping dismisses it. */}
+          {clarifications.length > 0 && (
+            <div style={{ display: 'grid', gap: 8 }}>
+              <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}>
+                A couple of quick checks to get today right — answer or skip.
+              </div>
+              {clarifications.map((clarification) => (
+                <ClarificationCard key={clarification.id} clarification={clarification} onResolve={resolveClarification} />
+              ))}
+            </div>
           )}
 
           {(
