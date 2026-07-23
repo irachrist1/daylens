@@ -72,7 +72,9 @@ test('asks about a substantial unnamed block and an unconfirmed meeting, most-ma
       block({ id: 'blk_short', label: 'Development', startMin: 200, durationMin: 10 }),
     ],
     [
-      { title: 'Standup', startMs: base, endMs: base + 30 * 60_000, attendeeCount: 3, participants: [], attendance: 'calendar_only', marked: null, matchedBlockId: null },
+      // Over empty time — nothing tracked proves or disproves it, so it is a
+      // real question. A meeting inside tracked hours is gated (DEV-284).
+      { title: 'Standup', startMs: base + 7 * 3_600_000, endMs: base + 7.5 * 3_600_000, attendeeCount: 3, participants: [], attendance: 'calendar_only', marked: null, matchedBlockId: null },
       { title: 'Already tracked', startMs: base + 3 * 3_600_000, endMs: base + 3.5 * 3_600_000, attendeeCount: 2, participants: [], attendance: 'matched', marked: null, matchedBlockId: 'x' },
     ],
   )
@@ -88,6 +90,25 @@ test('asks about a substantial unnamed block and an unconfirmed meeting, most-ma
   const meeting = clarifications.find((c) => c.kind === 'unconfirmed-meeting')!
   assert.match(meeting.question, /Standup/)
   assert.ok(meeting.eventKey, 'meeting clarification carries the attendance event key')
+  db.close()
+})
+
+test('DEV-284: a meeting during hours the person clearly worked through is never asked about', () => {
+  const db = createProductionTestDatabase()
+  // The July 22 shape: "Deep work (1:00–2:30)" scheduled inside a tracked
+  // block running 12:34–2:42. The activity already tells the story.
+  const payload = payloadWith(
+    [block({ id: 'blk_work', label: 'Shipping the recap agent', startMin: 0, durationMin: 240 })],
+    [
+      { title: 'Deep work', startMs: base + 30 * 60_000, endMs: base + 120 * 60_000, attendeeCount: null, participants: [], attendance: 'calendar_only', marked: null, matchedBlockId: null },
+      // Only a sliver overlaps tracked time — still a genuine open question.
+      { title: 'Evening sync', startMs: base + 230 * 60_000, endMs: base + 290 * 60_000, attendeeCount: 2, participants: [], attendance: 'calendar_only', marked: null, matchedBlockId: null },
+    ],
+  )
+  const clarifications = detectDayClarifications(db, payload)
+  const questions = clarifications.map((c) => c.question)
+  assert.ok(!questions.some((q) => /Deep work/.test(q)), `must not ask about a worked-through window: ${questions.join(' | ')}`)
+  assert.ok(questions.some((q) => /Evening sync/.test(q)), 'a mostly-uncovered meeting still gets its question')
   db.close()
 })
 
