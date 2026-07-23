@@ -377,14 +377,31 @@ function CalendarBlockCard({
           }} />
         )}
       </div>
-      {/* Title + time only — the narrative lives in the detail panel (day
-          view) or the popover (week view), shown on click. Cards stay calm. */}
+      {/* Title + time on every card — the narrative lives in the detail panel
+          (day view) or the popover (week view), shown on click. A TALL card
+          additionally carries its one-line account, so hours of the day are
+          never a large empty rectangle (DEV-286); short cards stay calm. */}
       {showTime && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: compact ? 10 : 11, color: 'var(--color-text-tertiary)', marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           <ClockGlyph size={compact ? 9 : 10} />
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {timeRange} · {formatDuration(blockDisplayedSpanSeconds(block))}
           </span>
+        </div>
+      )}
+      {!compact && !dimmed && height >= 110 && (
+        <div style={{
+          marginTop: 6,
+          fontSize: 11.5,
+          lineHeight: 1.5,
+          color: 'var(--color-text-secondary)',
+          display: '-webkit-box',
+          WebkitBoxOrient: 'vertical',
+          WebkitLineClamp: 3,
+          overflow: 'hidden',
+          overflowWrap: 'break-word',
+        }}>
+          {blockNarrative(block) ?? blockShortSummary(block)}
         </div>
       )}
       </div>
@@ -490,30 +507,40 @@ function CalendarDayTrack({
   const showNowLine = nowMinutes != null && nowMinutes >= trackStartMin && nowMinutes <= trackEndMin
   const hourCount = Math.max(0, bounds.endHour - bounds.startHour + 1)
 
-  // Google-Calendar lane layout: a block and an overlapping calendar event (or
-  // two overlapping blocks) share the track in side-by-side columns instead of
-  // stacking on top of each other. Lanes are assigned across blocks AND the
-  // unmatched scheduled-meeting outlines together so an event never buries a
-  // block. Edge insets: 4px outer margin, and a 6px gutter between columns.
+  // The columns have ONE meaning (calendar-and-blocks spec, DEV-286): blocks
+  // are the spine and always start at the left; scheduled events are quieter
+  // context in their own column on the right, only where they overlap tracked
+  // time. Blocks are a partition of the day and never overlap each other, so
+  // they never split among themselves; events may overlap other events and
+  // lane only against each other. Edge insets: 4px outer margin, 6px gutter.
   const unmatchedMeetings = compact ? [] : scheduledMeetings.filter((m) => m.matchedBlockId == null)
   const laneKeyForMeeting = (m: TimelineScheduledMeeting) => `m:${m.startMs}:${m.title}`
-  const laneInputs: { key: string; start: number; end: number }[] = [
-    ...unmatchedMeetings.map((m) => ({ key: laneKeyForMeeting(m), start: m.startMs, end: m.endMs })),
-    ...blocks.map((block) => ({
-      key: `b:${block.id}`,
-      start: block.startTime,
-      end: block.isLive && nowMs != null ? Math.max(block.endTime, nowMs) : block.endTime,
-    })),
-  ]
-  const lanePlacements = assignLanes(laneInputs)
-  const laneByKey = new Map(laneInputs.map((input, i) => [input.key, lanePlacements[i]]))
-  const laneGeometry = (key: string): { left: string; width: string } => {
-    const placement = laneByKey.get(key) ?? { lane: 0, lanes: 1 }
-    const columnPct = 100 / placement.lanes
-    const gutter = placement.lanes > 1 ? 6 : 8
+  const blockLayoutEnd = (block: WorkContextBlock): number =>
+    block.isLive && nowMs != null ? Math.max(block.endTime, nowMs) : block.endTime
+  const spansOverlap = (aStart: number, aEnd: number, bStart: number, bEnd: number): boolean =>
+    Math.min(aEnd, bEnd) - Math.max(aStart, bStart) > 0
+  // The event column's share of the track where an event sits beside a block.
+  const EVENT_COLUMN_PCT = 38
+  const eventLaneInputs = unmatchedMeetings.map((m) => ({ key: laneKeyForMeeting(m), start: m.startMs, end: m.endMs }))
+  const eventPlacements = assignLanes(eventLaneInputs)
+  const eventLaneByKey = new Map(eventLaneInputs.map((input, i) => [input.key, eventPlacements[i]]))
+  const blockGeometry = (block: WorkContextBlock): { left: string; width: string } => {
+    const besideEvent = unmatchedMeetings.some((m) =>
+      spansOverlap(block.startTime, blockLayoutEnd(block), m.startMs, m.endMs))
+    return besideEvent
+      ? { left: '4px', width: `calc(${100 - EVENT_COLUMN_PCT}% - 10px)` }
+      : { left: '4px', width: 'calc(100% - 8px)' }
+  }
+  const meetingGeometry = (meeting: TimelineScheduledMeeting): { left: string; width: string } => {
+    const placement = eventLaneByKey.get(laneKeyForMeeting(meeting)) ?? { lane: 0, lanes: 1 }
+    const besideBlock = blocks.some((block) =>
+      spansOverlap(block.startTime, blockLayoutEnd(block), meeting.startMs, meeting.endMs))
+    const regionLeftPct = besideBlock ? 100 - EVENT_COLUMN_PCT : 0
+    const regionWidthPct = besideBlock ? EVENT_COLUMN_PCT : 100
+    const columnPct = regionWidthPct / placement.lanes
     return {
-      left: `calc(${placement.lane * columnPct}% + 4px)`,
-      width: `calc(${columnPct}% - ${gutter}px)`,
+      left: `calc(${regionLeftPct + placement.lane * columnPct}% + ${besideBlock ? 0 : 4}px)`,
+      width: `calc(${columnPct}% - ${besideBlock || placement.lanes > 1 ? 6 : 8}px)`,
     }
   }
 
@@ -542,6 +569,12 @@ function CalendarDayTrack({
         const top = topFor(gap.startTime)
         const gapHeight = topFor(gap.endTime) - top
         if (gapHeight < 26) return null
+        // A scheduled event can span the same empty stretch ("Wind down for
+        // bed" over an idle evening). The caption keeps its own readable
+        // backdrop and sits above the event outline so the two never render
+        // as colliding text (DEV-286).
+        const overlapsEvent = unmatchedMeetings.some((m) =>
+          spansOverlap(gap.startTime, gap.endTime, m.startMs, m.endMs))
         return (
           <div
             key={`gap:${gap.startTime}`}
@@ -555,9 +588,20 @@ function CalendarDayTrack({
               alignItems: 'center',
               justifyContent: 'center',
               pointerEvents: 'none',
+              zIndex: 2,
             }}
           >
-            <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap' }}>
+            <span style={{
+              fontSize: 11,
+              color: 'var(--color-text-tertiary)',
+              whiteSpace: 'nowrap',
+              ...(overlapsEvent ? {
+                background: 'var(--color-surface)',
+                border: '1px solid var(--color-border-ghost)',
+                borderRadius: 999,
+                padding: '2px 8px',
+              } : {}),
+            }}>
               {gap.label} · {formatDuration(Math.max(60, Math.round((gap.endTime - gap.startTime) / 1000)))}
             </span>
           </div>
@@ -613,7 +657,7 @@ function CalendarDayTrack({
               // them (the Apple/Google convention) — imperceptible on a lone
               // event, decisive in a stack.
               height: Math.max(18, ghostHeight - 2),
-              ...laneGeometry(laneKeyForMeeting(meeting)),
+              ...meetingGeometry(meeting),
               borderRadius: 5,
               // --color-border is transparent by design; events need a real
               // (still hairline) edge to exist against their faint fill.
@@ -677,7 +721,7 @@ function CalendarDayTrack({
             block={block}
             top={top}
             height={height}
-            {...laneGeometry(`b:${block.id}`)}
+            {...blockGeometry(block)}
             compact={compact}
             isSelected={selectedBlockId === block.id}
             inMergeRange={selectedBlockId !== block.id && (selectedSpanIds?.has(block.id) ?? false)}

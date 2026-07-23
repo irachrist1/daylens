@@ -114,6 +114,13 @@ export function detectDayClarifications(
     if (meeting.marked || meeting.attendance === 'matched') continue
     const minutes = (meeting.endMs - meeting.startMs) / 60_000
     if (minutes < MIN_MEETING_MINUTES) continue
+    // Never interrogate a window the person clearly worked through (DEV-284).
+    // Tracked blocks covering most of the scheduled span already tell the
+    // day's story; the answer would not materially change the account
+    // (day-recap-and-analysis spec §The clarification contract).
+    const coveredMs = payload.blocks.reduce((sum, block) => sum
+      + Math.max(0, Math.min(block.endTime, meeting.endMs) - Math.max(block.startTime, meeting.startMs)), 0)
+    if (coveredMs > (meeting.endMs - meeting.startMs) / 2) continue
     const eventKey = scheduledEventKey(Math.round((meeting.startMs - dayStartMs) / 60_000), meeting.title)
     const id = `${payload.date}:meeting:${eventKey}`
     if (skipped.has(id)) continue
