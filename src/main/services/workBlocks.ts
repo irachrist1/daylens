@@ -4582,18 +4582,25 @@ export function snapshotCarryForwardAiLabels(
   dateStr: string,
 ): Map<string, CarriedAiLabel> {
   const out = new Map<string, CarriedAiLabel>()
+  // Only blocks whose CURRENT label is the AI's (a user rename must never be
+  // shadowed by a stale ai row), and only the freshest ai row per block — a
+  // block re-labeled twice keeps both rows in timeline_block_labels (the
+  // insert key hashes the label text), and treating the superseded row as a
+  // second claimant would falsely trip the ambiguity guard below.
   const rows = db.prepare(`
     SELECT l.block_id AS blockId, l.label AS label, l.narrative AS narrative, l.confidence AS confidence,
            tb.start_time AS startMs, tb.end_time AS endMs
     FROM timeline_block_labels l
     JOIN timeline_blocks tb ON tb.id = l.block_id
-    WHERE tb.date = ? AND tb.invalidated_at IS NULL AND tb.is_live = 0 AND l.source = 'ai'
+    WHERE tb.date = ? AND tb.invalidated_at IS NULL AND tb.is_live = 0
+      AND l.source = 'ai' AND tb.label_source = 'ai'
     ORDER BY l.created_at DESC
   `).all(dateStr) as Array<{
     blockId: string; label: string; narrative: string | null; confidence: number
     startMs: number; endMs: number
   }>
   if (rows.length === 0) return out
+  const seenBlocks = new Set<string>()
 
   const memberStmt = db.prepare(`
     SELECT member_id AS memberId
@@ -4614,6 +4621,9 @@ export function snapshotCarryForwardAiLabels(
     }
   }
   for (const row of rows) {
+    // created_at DESC — the first row seen for a block is its freshest label.
+    if (seenBlocks.has(row.blockId)) continue
+    seenBlocks.add(row.blockId)
     const label = row.label?.trim()
     if (!label) continue
     const entry: CarriedAiLabel = {
@@ -4627,7 +4637,6 @@ export function snapshotCarryForwardAiLabels(
       .map((m) => Number(m.memberId))
       .filter((id) => Number.isFinite(id) && id >= 0)
       .sort((a, b) => a - b)
-    // created_at DESC — the first row seen for a key is the freshest; keep it.
     if (ids.length > 0) put(`sessions:${ids.join(',')}`, entry)
     if (row.endMs > row.startMs) put(`span:${row.startMs}:${row.endMs}`, entry)
   }

@@ -25,12 +25,17 @@ function sessionActiveSeconds(session: AppSession): number {
 export function blockActiveSeconds(block: Pick<WorkContextBlock, 'startTime' | 'endTime' | 'sessions'>): number {
   const span = Math.max(0, Math.round((block.endTime - block.startTime) / 1000))
   const sessions = block.sessions ?? []
+  // No hydrated sessions at all (a provisional or calendar-shaped block):
+  // the span is the only measure that exists. Such blocks never take part in
+  // a merge (merges anchor on sessions), so this exception cannot break the
+  // additivity below.
   if (sessions.length === 0) return Math.max(1, span)
   const summed = sessions.reduce(
     (sum, session: AppSession) => sum + sessionActiveSeconds(session),
     0,
   )
-  if (summed <= 0) return Math.max(1, span)
+  // Sessions exist but carry no time: the additive answer is (almost) zero,
+  // and falling back to the span here would let a merge change the total.
   return Math.max(1, summed)
 }
 
