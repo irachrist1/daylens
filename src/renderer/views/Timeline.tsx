@@ -1632,7 +1632,7 @@ function analyzeOutcomeMessage(result: RebuildTimelineDayResult, provisional: bo
   if (result.failed > 0) {
     // Never a bare failure count (DEV-278): say why and how to finish the job.
     const rawReason = result.failureReason?.trim()
-    const reason = rawReason ? (/[.!?]$/.test(rawReason) ? rawReason : `${rawReason}.`) : null
+    const reason = rawReason ? (/[.!?…]$/.test(rawReason) ? rawReason : `${rawReason}.`) : null
     message += reason
       ? ` · ${result.failed} couldn’t be named — ${reason} Re-analyze retries them.`
       : ` · ${result.failed} couldn’t be named — Re-analyze retries them.`
