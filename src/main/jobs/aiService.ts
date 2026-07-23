@@ -36,7 +36,7 @@ import { transformInstruction } from '@shared/answerTransforms'
 import { userVisibleBlockLabel } from '@shared/blockLabel'
 import { evaluateLabelVoice, labelVoiceContextForBlock, rawLabelForm } from '@shared/labelVoice'
 import { activityCategoryLabel } from '@shared/activityCategories'
-import { partitionDomainsWorkFirst } from '@shared/workKind'
+import { effectiveBlockKind, partitionDomainsWorkFirst } from '@shared/workKind'
 import { appNarrativeScopeKey, THIN_APP_NARRATIVE_SUMMARY } from '@shared/appNarrativeContract'
 import { userProfileDirective } from '@shared/userProfile'
 import { parseDaySummaryResultText } from '../lib/daySummarySuggestions'
@@ -3050,7 +3050,9 @@ export async function generateWorkBlockInsight(
   // never a label. A rejected label gets exactly one corrective retry with the
   // violation named; if that also fails, the deterministic evidence name (voice
   // gated itself) stands and the block stays a re-analysis target.
-  const voiceContext = labelVoiceContextForBlock(block)
+  // The block kind matters: without it the leisure-shape rule is inert here
+  // and a bare video title would only be caught later by the label chooser.
+  const voiceContext = labelVoiceContextForBlock(block, effectiveBlockKind(block))
   const labelRejection = (candidate: string | null | undefined): string | null => {
     const label = candidate?.trim()
     if (!label) return 'the label was empty'

@@ -78,6 +78,7 @@ test('no-raw-artifact-forms names the machine form it rejects', () => {
   assert.equal(rawLabelForm('Wants to run AskUserQuestion: {"questions":[…'), 'JSON fragment')
   assert.equal(rawLabelForm('[Week 1]'), 'bracketed title fragment')
   assert.equal(rawLabelForm('Sprint planning: retro notes'), null)
+  assert.equal(rawLabelForm('Reviewed the "Q3 Roadmap": key priorities'), null)
   assert.equal(rawLabelForm('Version 1.0.45 release notes'), null)
   assert.equal(rawLabelForm('Reviewed the quarterly report'), null)
   assert.ok(failedRules('(3) Inbox').includes('no-raw-artifact-forms'))
