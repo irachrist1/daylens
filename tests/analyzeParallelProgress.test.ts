@@ -101,6 +101,29 @@ test('a transient naming failure is retried and recovers (DEV-278)', async () =>
   db.close()
 })
 
+test('DEV-278: a day with a single relabel target still gets its retry', async () => {
+  const db = createProductionTestDatabase()
+  // One sitting → one relabel target. Its lone first-pass failure must not be
+  // mistaken for a provider outage.
+  insertSession(db, 'daylens tracker work', 8, 40, 'development', { bundleId: 'com.mitchellh.ghostty', name: 'Ghostty' })
+  materializeTimelineDayProjection(db, TEST_DATE, null)
+
+  let call = 0
+  const result = await analyzeTimelineDay(db, TEST_DATE, {
+    regroupPlan: async () => [],
+    blockInsight: async (block) => {
+      call++
+      if (call === 1) throw new Error('provider hiccup')
+      return { label: `Named ${block.startTime}`, narrative: '' }
+    },
+    onProgress: () => {},
+  })
+
+  assert.equal(result.failures.length, 0, 'the lone transient failure is retried, not reported')
+  assert.ok(result.relabeled >= 1, 'the block ends up named')
+  db.close()
+})
+
 test('a persistent naming failure is surfaced with its reason, not swallowed', async () => {
   const db = createProductionTestDatabase()
   seedFourBlocks(db)

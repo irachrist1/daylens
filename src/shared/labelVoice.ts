@@ -229,9 +229,10 @@ function wordCount(value: string): number {
 // version number ("1.0.45") or trailing ellipsis never matches.
 const BARE_FILENAME_RE = /^[\w()[\]#@~+-]+\.[a-z][a-z0-9]{0,5}$/i
 // Structural JSON: an opening brace, an array of objects/strings, or a quoted
-// key with a colon anywhere. A colon in prose ("Sprint planning: retro") and a
-// bracketed title fragment ("[Week 1]") never match.
-const JSON_FRAGMENT_RE = /^\{|^\[\s*[{["]|"[^"]*"\s*:/
+// key whose colon is followed by a JSON value opener. A colon in prose
+// ("Sprint planning: retro", 'Reviewed the "Q3 Roadmap": key priorities') and
+// a bracketed title fragment ("[Week 1]") never match.
+const JSON_FRAGMENT_RE = /^\{|^\[\s*[{["]|"[^"]*"\s*:\s*[{[\d"]/
 // A label that is nothing but a bracketed fragment is tab-title cruft
 // ("[Week 1]"), never an activity.
 const BRACKETED_FRAGMENT_RE = /^\[[^\]]*\]$/
