@@ -411,7 +411,11 @@ export async function analyzeTimelineDay(
     // one attempt (DEV-278): retry the failed ones once, serially, before
     // reporting anything as un-nameable.
     const firstPassFailed = insights.filter((result): result is { block: WorkContextBlock; error: string } => 'error' in result)
-    if (firstPassFailed.length > 0 && firstPassFailed.length < relabelTargets.length) {
+    // "Everything failed" only signals an outage when there was more than one
+    // call to corroborate it — a day with a single relabel target must still
+    // get its retry (DEV-278).
+    const looksLikeOutage = firstPassFailed.length === relabelTargets.length && relabelTargets.length > 1
+    if (firstPassFailed.length > 0 && !looksLikeOutage) {
       named -= firstPassFailed.length
       const retried = await mapWithConcurrency(firstPassFailed.map((entry) => entry.block), 1, nameBlock)
       const retriedByBlock = new Map(retried.map((result) => [result.block.id, result]))
