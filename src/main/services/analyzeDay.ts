@@ -123,7 +123,23 @@ function applyAIInsightToTimelineBlock(
   return true
 }
 
-// Runs of consecutive blocks that carry the same label and belong together:
+// Two labels name the same work when they are equal, or when one is the
+// leading phrase of the other — "Preparing handoff" beside "Preparing handoff
+// documentation and reviewing tasks" is one activity split by the engine
+// (DEV-281). The WHOLE shorter label must be the prefix, at least two words
+// long, so "Reviewing tasks" never joins "Reviewing email".
+export function labelsNameSameWork(left: string, right: string): boolean {
+  const tokens = (value: string): string[] =>
+    value.toLowerCase().replace(/[^a-z0-9\s]+/g, ' ').split(/\s+/).filter(Boolean)
+  const a = tokens(left)
+  const b = tokens(right)
+  if (a.length === 0 || b.length === 0) return false
+  const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a]
+  if (shorter.length < 2 && shorter.length !== longer.length) return false
+  return shorter.every((token, index) => longer[index] === token)
+}
+
+// Runs of consecutive blocks that name the same work and belong together:
 // non-live, non-provisional, not renamed by the person, separated by no real
 // absence and no explicit cut. Adjacency is judged over the day's full block
 // sequence — a differently-labeled or ineligible block between two matches
@@ -152,7 +168,7 @@ export function sameLabelFragmentRuns(
     }
     const previous = run[run.length - 1]
     const joinable = previous
-      && labelKey(previous) === labelKey(block)
+      && (labelKey(previous) === labelKey(block) || labelsNameSameWork(previous.label.current, block.label.current))
       && !cuts.some((cut) => cut >= previous.endTime && cut <= block.startTime)
       && !absenceSpannedBy([...run.flatMap((member) => member.sessions), ...block.sessions])
     if (joinable) {

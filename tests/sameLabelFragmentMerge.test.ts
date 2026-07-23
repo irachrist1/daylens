@@ -160,6 +160,21 @@ test('runs break at different labels, renames, provisional blocks, and user cuts
   ], []).length, 0)
 })
 
+test('DEV-281: adjacent blocks naming the same work join even when one label is longer', () => {
+  const runs = sameLabelFragmentRuns([
+    fakeBlock({ id: 'a', startH: 16, endH: 17, label: 'Preparing handoff documentation and reviewing tasks' }),
+    fakeBlock({ id: 'b', startH: 17, endH: 18, label: 'Preparing handoff' }),
+  ], [])
+  assert.equal(runs.length, 1)
+  assert.equal(runs[0].length, 2)
+
+  // A shared first word alone is NOT the same work.
+  assert.equal(sameLabelFragmentRuns([
+    fakeBlock({ id: 'a', startH: 9, endH: 10, label: 'Reviewing tasks' }),
+    fakeBlock({ id: 'b', startH: 10, endH: 11, label: 'Reviewing email' }),
+  ], []).length, 0)
+})
+
 test('a real absence between same-label blocks breaks the run', () => {
   const a = fakeBlock({ id: 'a', startH: 9, endH: 10, label: 'Working on Cursor Agents' })
   // Sessions end at 10:00; the next block's sessions start at 11:00 — a real

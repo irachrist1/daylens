@@ -8,6 +8,10 @@ test('mac-specific app aliases resolve to the right canonical app identities', (
   assert.equal(resolveCanonicalApp('com.TickTick.task.mac', 'TickTick').displayName, 'TickTick')
   assert.equal(resolveCanonicalApp('com.openai.atlas', 'ChatGPT Atlas').displayName, 'ChatGPT')
   assert.equal(resolveCanonicalApp('ai.perplexity.comet', 'Comet').displayName, 'Comet')
+  // Windsurf's rebranded bundle reports "Devin" as its OS name (DEV-280): the
+  // bundle id is the truth and must win over the process name.
+  assert.equal(resolveCanonicalApp('com.exafunction.windsurf', 'Devin').displayName, 'Windsurf')
+  assert.equal(resolveCanonicalApp('com.exafunction.windsurf', '').displayName, 'Windsurf')
   assert.equal(resolveCanonicalApp('com.apple.systempreferences', 'System Settings').displayName, 'System Settings')
   assert.equal(resolveCanonicalApp('com.daylens.app.dev', 'Daylens').displayName, 'Daylens')
 })
