@@ -57,6 +57,7 @@ import { isHostFilteredFromArtifacts, isHostBlockedForLabel, isHostBlockedForApp
 import { categoryForDomain } from '@shared/domainCategories'
 import { blockActiveSeconds } from '@shared/blockDuration'
 import { looksLikeRawArtifactLabel } from '@shared/blockLabel'
+import { evaluateLabelVoice, labelVoiceContextForBlock, rawLabelForm } from '@shared/labelVoice'
 import { activityCategoryLabel } from '@shared/activityCategories'
 import { DEFAULT_TIMELINE_BLOCK_REVIEW, isTimelineBlockReviewState, isTrustedTimelineBlock } from '@shared/timelineReview'
 import { inferWorkIntent } from '@shared/workIntent'
@@ -4327,6 +4328,35 @@ function preferredArtifactLabel(block: WorkContextBlock): string | null {
   return usefulDerivedLabel(domainLabel)
 }
 
+// Deterministic project name from editor-style window titles ("checkout.ts —
+// acme-portal", "insightsQueryRouter.ts - daylens - Cursor"). A filename is
+// never a label (DEV-276), but the project segment beside it names the work
+// honestly until the AI produces a real activity phrase.
+function editorProjectLabel(block: WorkContextBlock): string | null {
+  if (block.dominantCategory !== 'development') return null
+  const titles = [...(block.evidenceSummary.windowTitles ?? [])]
+    .sort((left, right) => (right.totalSeconds ?? 0) - (left.totalSeconds ?? 0))
+  for (const entry of titles) {
+    const title = entry.title?.trim()
+    if (!title) continue
+    const segments = title.split(/\s+[—–-]\s+/).map((segment) => segment.trim()).filter(Boolean)
+    if (segments.length < 2) continue
+    const appName = entry.appName?.trim().toLowerCase()
+    const last = segments[segments.length - 1].toLowerCase()
+    const withoutApp = appName && (last === appName || appName.includes(last) || last.includes(appName))
+      ? segments.slice(0, -1)
+      : segments
+    if (withoutApp.length < 2) continue
+    // Only the "<file> … <project>" shape: the first segment must be file-ish,
+    // and the project segment must itself be a clean, short token.
+    if (!rawLabelForm(withoutApp[0])) continue
+    const project = withoutApp[withoutApp.length - 1]
+    if (!project || project.length > 40 || rawLabelForm(project)) continue
+    return `Working on ${project}`
+  }
+  return null
+}
+
 function hasLegacyWeakAiLabel(block: WorkContextBlock): boolean {
   const aiLabel = block.aiLabel?.trim()
   return Boolean(aiLabel) && !usefulBlockLabel(block, aiLabel)
@@ -4382,10 +4412,37 @@ function finalizedLabelForBlock(
   const projectHint = concurrentEvidence
     ? extractProjectHintFromEvidence(block, concurrentEvidence)
     : null
-  const artifactLabel = preferredArtifactLabel(block)
-  const workflowLabel = usefulBlockLabel(block, block.workflowRefs[0]?.label)
-  const ruleLabel = usefulBlockLabel(block, block.ruleBasedLabel)
-  const rawAiLabel = usefulBlockLabel(block, block.aiLabel)
+  // Label-voice enforcement (label-voice.md, DEV-276): every candidate except
+  // the person's own override must clear the invariant rules — no raw window
+  // titles, filenames, ticket text, JSON, telemetry vocabulary, or judgment.
+  // Interpreted candidates (AI, artifact) additionally must not reproduce a
+  // captured title verbatim or be a bare app name: titles are evidence inside
+  // the block; the label interprets them. A rejected candidate falls to the
+  // next in priority; the floors stay honest category/evidence names.
+  // 'invariants' rejects the machine forms every label must avoid; 'floor'
+  // additionally rejects a verbatim captured title (a window title is never a
+  // label, DEV-276 — not even as a fallback); 'interpreted' also rejects a
+  // bare app name, since an AI or artifact candidate must name the activity.
+  const voiceContext = labelVoiceContextForBlock(block, blockKindFor(block))
+  const clearsLabelVoice = (
+    candidate: string | null | undefined,
+    tier: 'invariants' | 'floor' | 'interpreted' = 'invariants',
+  ): string | null => {
+    const label = candidate?.trim()
+    if (!label) return null
+    for (const finding of evaluateLabelVoice(label, voiceContext)) {
+      if (finding.passed) continue
+      if (finding.tier === 'invariant') return null
+      if (tier !== 'invariants' && finding.rule === 'no-verbatim-window-title') return null
+      if (tier === 'interpreted' && finding.rule === 'activity-not-software') return null
+    }
+    return label
+  }
+
+  const artifactLabel = clearsLabelVoice(preferredArtifactLabel(block), 'interpreted')
+  const workflowLabel = clearsLabelVoice(usefulBlockLabel(block, block.workflowRefs[0]?.label))
+  const ruleLabel = clearsLabelVoice(usefulBlockLabel(block, block.ruleBasedLabel))
+  const rawAiLabel = clearsLabelVoice(usefulBlockLabel(block, block.aiLabel), 'interpreted')
   // F1: the AI labeler can also lift a YouTube tab title verbatim into the
   // block headline when it sees that page in the evidence. Reject any
   // suggested label that matches an entertainment/social/adult page title
@@ -4398,14 +4455,30 @@ function finalizedLabelForBlock(
   // floors. The project hint ("<project> development") is a FLOOR, not an
   // override: it must never beat a real AI label like "Refactoring the timeline
   // coalescer" (the §6 quality bar). It sits just above the bare rule label.
+  // A verbatim captured title never stands as a label (DEV-276), but a
+  // descriptive multi-word title still names the block's subject — wrap it as
+  // an activity phrase so the subject survives when no interpreted name
+  // exists. Short fragments ("Cursor Agents") stay rejected: the category
+  // floor is more honest than a dressed-up tool fragment.
+  const floorLabel = userVisibleLabelForBlock(block)
+  const wrappedVerbatimFloor = (): string | null => {
+    if (!FOCUSED_CATEGORIES.includes(block.dominantCategory)) return null
+    if (!clearsLabelVoice(floorLabel)) return null
+    if (floorLabel.split(/\s+/).filter(Boolean).length < 3) return null
+    return clearsLabelVoice(`Working on ${floorLabel}`, 'floor')
+  }
+
   const chosen = override?.label?.trim()
-    || memoryPattern?.label
+    || clearsLabelVoice(memoryPattern?.label)
     || aiLabel
     || artifactLabel
+    || clearsLabelVoice(editorProjectLabel(block))
     || workflowLabel
-    || projectHint?.label
+    || clearsLabelVoice(projectHint?.label)
     || ruleLabel
-    || userVisibleLabelForBlock(block)
+    || clearsLabelVoice(floorLabel, 'floor')
+    || wrappedVerbatimFloor()
+    || prettyCategory(block.dominantCategory)
 
   const source = override?.label?.trim()
     ? 'user'

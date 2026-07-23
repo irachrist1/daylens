@@ -420,6 +420,9 @@ export interface RebuildTimelineDayResult {
   relabeled: number
   attempted: number
   failed: number
+  /** Why the failed blocks could not be named (first distinct reason), in words
+   *  the person can act on — so the UI never reports a bare count (DEV-278). */
+  failureReason?: string | null
 }
 
 /** A progress tick streamed while a day is analyzed (DEV-270). `stage` names

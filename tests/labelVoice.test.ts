@@ -68,10 +68,18 @@ test('no-raw-artifact-forms names the machine form it rejects', () => {
   assert.equal(rawLabelForm('Reviewed the FY2026 report'), null)
   assert.equal(rawLabelForm('W2 Reading | Intro to ML | Perusall'), 'browser-tab soup')
   assert.equal(rawLabelForm('Quarterly plan - Google Chrome'), 'trailing browser name')
-  // Ordinary code filenames stay allowed: rejecting those is the AI naming
-  // path's job, scored by the target tier instead.
+  // DEV-276: a filename of any kind is never a label — including ordinary
+  // code/text filenames an earlier design allowed. Repo paths stay allowed.
+  assert.equal(rawLabelForm('handoff.md'), 'filename')
+  assert.equal(rawLabelForm('run.ts'), 'filename')
   assert.equal(rawLabelForm('timeline-eval/run.ts'), null)
-  assert.equal(rawLabelForm('run.ts'), null)
+  // DEV-276: JSON and bracketed tab-title fragments are machine forms.
+  assert.equal(rawLabelForm('{"questions":[{"header":"Scope"}]}'), 'JSON fragment')
+  assert.equal(rawLabelForm('Wants to run AskUserQuestion: {"questions":[…'), 'JSON fragment')
+  assert.equal(rawLabelForm('[Week 1]'), 'bracketed title fragment')
+  assert.equal(rawLabelForm('Sprint planning: retro notes'), null)
+  assert.equal(rawLabelForm('Reviewed the "Q3 Roadmap": key priorities'), null)
+  assert.equal(rawLabelForm('Version 1.0.45 release notes'), null)
   assert.equal(rawLabelForm('Reviewed the quarterly report'), null)
   assert.ok(failedRules('(3) Inbox').includes('no-raw-artifact-forms'))
 })

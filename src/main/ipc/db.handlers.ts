@@ -455,6 +455,7 @@ export function registerDbHandlers(): void {
       relabeled: result.relabeled,
       attempted: result.attempted,
       failed: result.failures.length,
+      failureReason: result.failures[0] ?? null,
     }
   })
 

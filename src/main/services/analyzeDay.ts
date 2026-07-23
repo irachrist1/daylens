@@ -375,7 +375,7 @@ export async function analyzeTimelineDay(
     type RelabelOutcome =
       | { block: WorkContextBlock; insight: WorkContextInsight }
       | { block: WorkContextBlock; error: string }
-    const insights = await mapWithConcurrency(relabelTargets, RELABEL_CONCURRENCY, async (block): Promise<RelabelOutcome> => {
+    const nameBlock = async (block: WorkContextBlock): Promise<RelabelOutcome> => {
       try {
         const insight = await blockInsight(
           { ...block, label: { ...block.label, override: null } },
@@ -387,7 +387,26 @@ export async function analyzeTimelineDay(
       } finally {
         emitProgress({ stage: 'naming', done: ++named, total: relabelTargets.length })
       }
-    })
+    }
+    let insights = await mapWithConcurrency(relabelTargets, RELABEL_CONCURRENCY, nameBlock)
+
+    // Provider failures under concurrency are usually transient (a 429, one
+    // slow call hitting the timeout). A run must not give up on a block after
+    // one attempt (DEV-278): retry the failed ones once, serially, before
+    // reporting anything as un-nameable.
+    const firstPassFailed = insights.filter((result): result is { block: WorkContextBlock; error: string } => 'error' in result)
+    // "Everything failed" only signals an outage when there was more than one
+    // call to corroborate it — a day with a single relabel target must still
+    // get its retry (DEV-278).
+    const looksLikeOutage = firstPassFailed.length === relabelTargets.length && relabelTargets.length > 1
+    if (firstPassFailed.length > 0 && !looksLikeOutage) {
+      named -= firstPassFailed.length
+      const retried = await mapWithConcurrency(firstPassFailed.map((entry) => entry.block), 1, nameBlock)
+      const retriedByBlock = new Map(retried.map((result) => [result.block.id, result]))
+      insights = insights.map((result) =>
+        'error' in result ? retriedByBlock.get(result.block.id) ?? result : result)
+    }
+
     for (const result of insights) {
       if ('error' in result) {
         console.warn(`[timeline] AI re-analysis failed for block ${result.block.id}:`, result.error)

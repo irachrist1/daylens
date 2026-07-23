@@ -1629,7 +1629,14 @@ function analyzeOutcomeMessage(result: RebuildTimelineDayResult, provisional: bo
   if (result.relabeled > 0) parts.push(`Re-labeled ${result.relabeled} block${plural(result.relabeled)}`)
   if (result.mergedCount > 0) parts.push(`merged ${result.mergedCount} block${plural(result.mergedCount)}`)
   let message = parts.length > 0 ? parts.join(' · ') : 'Refreshed the day'
-  if (result.failed > 0) message += ` (${result.failed} couldn’t be re-labeled)`
+  if (result.failed > 0) {
+    // Never a bare failure count (DEV-278): say why and how to finish the job.
+    const rawReason = result.failureReason?.trim()
+    const reason = rawReason ? (/[.!?…]$/.test(rawReason) ? rawReason : `${rawReason}.`) : null
+    message += reason
+      ? ` · ${result.failed} couldn’t be named — ${reason} Re-analyze retries them.`
+      : ` · ${result.failed} couldn’t be named — Re-analyze retries them.`
+  }
   return message
 }
 
