@@ -17,6 +17,7 @@ function makeBlock(overrides: Partial<{
   category: AppCategory
   appName: string | null
   artifactTitle: string | null
+  artifactType: string
   domain: string | null
 }>): WorkContextBlock {
   const startTime = Date.UTC(2026, 3, 23, 9, 0, 0)
@@ -52,7 +53,7 @@ function makeBlock(overrides: Partial<{
     topArtifacts: overrides.artifactTitle
       ? [{
           displayTitle: overrides.artifactTitle,
-          artifactType: 'page',
+          artifactType: overrides.artifactType ?? 'page',
           totalSeconds: 600,
           ownerBundleId: null,
         }]
@@ -82,7 +83,31 @@ test('no summary ever doubles its verb ("Spent Xm spent on…")', () => {
   }
 })
 
-test('the ChatGPT shape reads as one clean sentence', () => {
-  const summary = blockShortSummary(makeBlock({ category: 'aiTools', appName: 'ChatGPT', artifactTitle: 'ChatGPT' }))
-  assert.equal(summary, 'Spent 37m working with ChatGPT, mostly in ChatGPT.')
+test('the summary describes the activity, never the hosting tool (DEV-280)', () => {
+  // The July 22 failure: "Spent 7h 28m editing Cursor Agents, mostly in
+  // Cursor" — a window title as the object and the tool as the location.
+  for (const category of ALL_CATEGORIES) {
+    const summary = blockShortSummary(makeBlock({ category, appName: 'Cursor', artifactTitle: null }))
+    assert.doesNotMatch(summary, /mostly in|supporting context/i, `category "${category}" names the tool: "${summary}"`)
+    assert.doesNotMatch(summary, /\bCursor\b/, `category "${category}" names the app: "${summary}"`)
+  }
+})
+
+test('a clean subject is kept; a raw filename subject is dropped', () => {
+  const withSubject = blockShortSummary(makeBlock({ category: 'research', artifactTitle: 'Intro to Machine Learning' }))
+  assert.equal(withSubject, 'Spent 37m researching Intro to Machine Learning.')
+  const withRawSubject = blockShortSummary(makeBlock({ category: 'development', artifactTitle: 'handoff.md', artifactType: 'document' }))
+  assert.doesNotMatch(withRawSubject, /handoff\.md/, `raw filename must not surface: "${withRawSubject}"`)
+})
+
+test('a mixed block names the other activities alongside the dominant one', () => {
+  const block = makeBlock({ category: 'development' })
+  ;(block as { categoryDistribution: Partial<Record<AppCategory, number>> }).categoryDistribution = {
+    development: 5 * 3600,
+    research: 45 * 60,
+    writing: 35 * 60,
+  }
+  const summary = blockShortSummary(block)
+  assert.match(summary, /research/i)
+  assert.match(summary, /writing/i)
 })

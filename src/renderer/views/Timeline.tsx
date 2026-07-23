@@ -575,25 +575,34 @@ function CalendarDayTrack({
         const ghostHeight = Math.max(20, topFor(meeting.endMs) - top)
         const confirmed = meeting.attendance === 'matched'
         const declined = meeting.marked === 'skipped' || meeting.marked === 'unrelated'
+        // Calendar-and-blocks spec: when tracked activity overlaps the event,
+        // the blocks are the spine and the event is faint context beside them
+        // — never a filled slab competing with the real work (DEV-285). Only
+        // an event over genuinely empty time keeps the attended hatch, and it
+        // says plainly that nothing was captured.
+        const overlapsActivity = blocks.some((block) =>
+          Math.min(block.endTime, meeting.endMs) - Math.max(block.startTime, meeting.startMs) > 0)
         // Outlined ghost card (decided Jul 22, DEV-264): a real card spanning
         // the event's scheduled duration — hairline border, near-transparent
         // fill. Dashed = unconfirmed plan; solid + check = you attended;
         // struck title, fainter = you said you didn't. "Planned" next to the
         // solid "happened" blocks — never activity, never counted time.
         const stateLine = confirmed
-          ? '✓ Attended'
+          ? (overlapsActivity ? '✓ Attended' : '✓ Attended · nothing captured')
           : meeting.marked === 'skipped'
             ? 'Skipped'
             : meeting.marked === 'moved'
               ? 'Moved'
               : meeting.marked === 'unrelated'
                 ? 'Unrelated'
-                : 'Scheduled'
+                : (overlapsActivity ? 'Scheduled' : 'Scheduled · nothing captured')
         return (
           <div
             key={`scheduled:${meeting.startMs}:${meeting.title}`}
             title={confirmed
-              ? `${meeting.title} — you marked this attended`
+              ? (overlapsActivity
+                ? `${meeting.title} — you marked this attended; the tracked blocks beside it are the observed activity`
+                : `${meeting.title} — you marked this attended; no screen activity was captured in this window`)
               : `${meeting.title} — on your calendar; no observed activity supports that you attended`}
             onClick={onScheduledMeetingClick ? (event) => onScheduledMeetingClick(meeting, event) : undefined}
             style={{
@@ -610,8 +619,9 @@ function CalendarDayTrack({
               // (still hairline) edge to exist against their faint fill.
               border: confirmed ? '1px solid rgba(127, 127, 127, 0.35)' : '1px dashed rgba(127, 127, 127, 0.35)',
               // Attended reads as "consumed": the Apple-Calendar diagonal
-              // hatch, unmistakable at a glance without adding any words.
-              background: confirmed
+              // hatch — but only over empty time. Over tracked activity the
+              // blocks carry the story and the event stays a quiet outline.
+              background: confirmed && !overlapsActivity
                 ? 'repeating-linear-gradient(-45deg, rgba(127, 127, 127, 0.13) 0 3px, transparent 3px 8px)'
                 : 'rgba(127, 127, 127, 0.05)',
               padding: '3px 9px',
@@ -2020,12 +2030,18 @@ function BlockDetailInspector({
   // The category appears once (DEV-272). A duration chip that merely restates
   // the type tag ("Browsing" under a "Browsing" tag) is dropped; only a genuine
   // split across two-plus categories earns its own chips.
-  const categorySplitAll = Object.entries(block.categoryDistribution ?? {})
+  const categoryEntries = Object.entries(block.categoryDistribution ?? {})
     .filter((entry): entry is [AppCategory, number] => typeof entry[1] === 'number' && entry[1] >= 60)
     .sort((a, b) => b[1] - a[1])
+  const categorySplitAll: Array<[string, number]> = categoryEntries
     .slice(0, 3)
+    .map(([category, seconds]) => [activityCategoryLabel(category), seconds])
+  // The chips must reconcile with the block (DEV-280): what the top three
+  // don't cover is shown, not silently dropped.
+  const categoryResidual = categoryEntries.slice(3).reduce((sum, [, seconds]) => sum + seconds, 0)
+  if (categoryResidual >= 60) categorySplitAll.push(['Everything else', categoryResidual])
   const categorySplit = categorySplitAll.length <= 1
-    ? categorySplitAll.filter(([category]) => activityCategoryLabel(category) !== typeTag)
+    ? categorySplitAll.filter(([label]) => label !== typeTag)
     : categorySplitAll
   // The type tag is dropped when it only echoes the block's own title (a
   // "Browsing" block titled "Browsing"), so the category is stated once, not
@@ -2196,6 +2212,12 @@ function BlockDetailInspector({
             </div>
             <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', marginTop: 3 }}>
               {formatFullDate(payload.date)} ⋅ {formatClockTime(block.startTime)} – {formatClockTime(block.endTime)} · {formatDuration(blockDisplayedSpanSeconds(block))}
+              {/* When the block spans lulls, the active number the chips and
+                  summary reconcile against is stated, not left to arithmetic
+                  the person cannot do (DEV-280). */}
+              {blockDisplayedSpanSeconds(block) - blockActiveSeconds(block) >= 60 && (
+                <> · {formatDuration(blockActiveSeconds(block))} active</>
+              )}
             </div>
           </div>
           <button type="button" aria-label="Back to day summary" title="Back to day summary" onClick={onClose} style={{ ...iconButtonStyle(), flexShrink: 0, marginTop: -3, marginRight: -3 }} {...iconHover}>
@@ -2230,8 +2252,8 @@ function BlockDetailInspector({
                   {typeTag}
                 </span>
               )}
-              {categorySplit.map(([category, seconds]) => (
-                <span key={category} style={{
+              {categorySplit.map(([label, seconds]) => (
+                <span key={label} style={{
                   padding: '3px 9px',
                   borderRadius: 999,
                   fontSize: 11,
@@ -2239,7 +2261,7 @@ function BlockDetailInspector({
                   color: 'var(--color-text-tertiary)',
                   border: '1px solid var(--color-border-ghost)',
                 }}>
-                  {activityCategoryLabel(category)} · {formatDuration(seconds)}
+                  {label} · {formatDuration(seconds)}
                 </span>
               ))}
             </div>
