@@ -3695,7 +3695,7 @@ export default function Timeline() {
                       // One grid item: a fragment here would hand the grid two
                       // right-column children and wrap the detail panel to a
                       // full-width second row (DEV-283).
-                      <div style={{ position: 'sticky', top: 24, alignSelf: 'start' }}>
+                      <div data-timeline-inspector="true" style={{ position: 'sticky', top: 24, alignSelf: 'start' }}>
                         {/* Analyze feedback follows you into a block's detail view
                             so the run never looks like it silently stopped (DEV-270). */}
                         {(dayAnalysis.analyzing || dayAnalysis.status) && (

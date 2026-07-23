@@ -2051,7 +2051,7 @@ export async function generateDaySummary(dateStr: string): Promise<AIDaySummaryR
     // reason through instead of burying it in the log (DEV-279).
     console.warn(`[ai] day_summary failed for ${dateStr}:`, error)
     const message = error instanceof Error ? error.message.trim() : ''
-    const reason = message ? (/[.!?]$/.test(message) ? message : `${message}.`) : undefined
+    const reason = message ? (/[.!?…]$/.test(message) ? message : `${message}.`) : undefined
     return { ...fallback, degraded: true, degradedReason: reason }
   }
 }

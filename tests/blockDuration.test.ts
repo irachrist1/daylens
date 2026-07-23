@@ -69,6 +69,31 @@ test('an inflated session duration is clamped to its own span', () => {
   assert.equal(blockActiveSeconds(block), 20 * 60)
 })
 
+test('a block whose sessions carry no time reads as the 1-second floor, not its span', () => {
+  const block = {
+    startTime: minuteMs(9, 0),
+    endTime: minuteMs(11, 0),
+    sessions: [session(minuteMs(9, 0), minuteMs(9, 30), 0)],
+  }
+  assert.equal(blockActiveSeconds(block), 1)
+})
+
+test('merging never changes the total even when one side has zero-duration sessions', () => {
+  const zeroSide = [session(minuteMs(9, 0), minuteMs(9, 30), 0)]
+  const realSide = [session(minuteMs(10, 0), minuteMs(10, 45), 45 * 60)]
+  const separate =
+    blockActiveSeconds({ startTime: minuteMs(9, 0), endTime: minuteMs(9, 30), sessions: zeroSide }) +
+    blockActiveSeconds({ startTime: minuteMs(10, 0), endTime: minuteMs(10, 45), sessions: realSide })
+  const merged = blockActiveSeconds({
+    startTime: minuteMs(9, 0),
+    endTime: minuteMs(10, 45),
+    sessions: [...zeroSide, ...realSide],
+  })
+  // Both sides sum their sessions; the only drift allowed is the empty side's
+  // 1-second display floor.
+  assert.ok(Math.abs(merged - separate) <= 1, `merged ${merged} vs separate ${separate}`)
+})
+
 test('merging two blocks never changes the summed active seconds', () => {
   // Block A carries an inflated session duration; before the fix the per-block
   // span clamp hid that inflation, and the wider merged span let it back out.
