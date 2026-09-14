@@ -276,7 +276,7 @@ function factsFromScope(
           identity: `facts:day:${scopeId}:focus`,
           statement: scope.focusSeconds > 0
             ? `Focused time for ${label} totals ${renderDuration(scope.focusSeconds)} (${scope.focusSeconds} seconds): sustained single-app stretches of 25 minutes or more, not app-category time.`
-            : `No focused time was captured for ${label} (0 seconds). Focus is sustained single-app stretches of 25 minutes or more, not time in an editor or AI tool.`,
+            : `No focused time was captured for ${label} (0 seconds). Focus is sustained single-app stretches of 25 minutes or more, not app-category time. AI tools are not eligible.`,
         })
         break
       }

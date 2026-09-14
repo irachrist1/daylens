@@ -404,8 +404,8 @@ export const DAYLENS_READ_CAPABILITIES: readonly DaylensReadCapability[] = [
     executor: 'composed',
     description:
       'Return a complete time span as exact consecutive increments, including captured apps and pages and explicit '
-      + 'asleep, locked, idle, or possible tracking-failure gaps. Use for every request to break a day or span into '
-      + 'N-minute chunks.',
+      + 'asleep, locked, idle, window-capture-unavailable, or possible tracking-failure gaps. Use for every request '
+      + 'to break a day or span into N-minute chunks.',
     inputSchema: {
       type: 'object',
       properties: {

@@ -132,6 +132,7 @@ function captureStateForDay(db: Database.Database, date: string) {
     }
 
     return {
+      ok: true as const,
       machineStateSpans,
       untrackedGaps,
       gaps: facts.gaps.map((gap) => ({
@@ -149,8 +150,15 @@ function captureStateForDay(db: Database.Database, date: string) {
         lastEventMs: events.at(-1)?.ts_ms ?? null,
       },
     }
-  } catch {
-    return { machineStateSpans: [], untrackedGaps: [], gaps: [], captureCoverage: null }
+  } catch (error) {
+    return {
+      ok: false as const,
+      reason: error instanceof Error ? error.message : 'Failed to read capture state for this day.',
+      machineStateSpans: [],
+      untrackedGaps: [],
+      gaps: [],
+      captureCoverage: null,
+    }
   }
 }
 
@@ -196,6 +204,9 @@ function timeChunks(
   const spanStartMs = dayStart + startOffset * 60_000
   const spanEndMs = dayStart + endOffset * 60_000
   const state = captureStateForDay(db, date)
+  if (!state.ok) {
+    return { found: false, reason: state.reason }
+  }
   // Corrected facts: a deleted Timeline block's stretch is empty space in the
   // chunk view too, for sessions and page visits alike.
   const ignoredSpans = getIgnoredBlockSpansForRange(db, spanStartMs, spanEndMs)
@@ -283,6 +294,7 @@ export function buildDaylensTools(db: Database.Database) {
           ...summary,
           machineStateSpans: state.machineStateSpans,
           untrackedGaps: state.untrackedGaps,
+          ...(state.ok ? {} : { captureStateError: state.reason }),
         })
       },
     }),

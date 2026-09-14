@@ -312,21 +312,21 @@ function countWebsiteVisitsInRange(
   }
 }
 
-function uncoveredWebsiteVisitRange(
+function uncoveredWebsiteVisitRanges(
   db: Database.Database,
   fromMs: number,
   toMs: number,
   sessions: readonly AppSession[],
-): { startMs: number; endMs: number } | null {
+): Array<{ startMs: number; endMs: number }> {
   let rows: Array<{ visit_time: number; duration_sec: number | null }>
   try {
     rows = db.prepare(
       `SELECT visit_time, duration_sec FROM website_visits WHERE visit_time >= ? AND visit_time < ? ORDER BY visit_time ASC`,
     ).all(fromMs, toMs) as Array<{ visit_time: number; duration_sec: number | null }>
   } catch {
-    return null
+    return []
   }
-  if (rows.length === 0) return null
+  if (rows.length === 0) return []
 
   const covers = (ts: number): boolean => sessions.some((session) => {
     const start = session.startTime
@@ -336,15 +336,19 @@ function uncoveredWebsiteVisitRange(
     return ts >= start && ts < end
   })
 
-  const uncovered = rows.filter((row) => !covers(row.visit_time))
-  if (uncovered.length === 0) return null
-  const startMs = uncovered[0].visit_time
-  const last = uncovered[uncovered.length - 1]
-  const endMs = Math.max(
-    startMs + 1_000,
-    last.visit_time + Math.max(0, last.duration_sec ?? 0) * 1000,
-  )
-  return { startMs, endMs: Math.min(endMs, toMs) }
+  const ranges: Array<{ startMs: number; endMs: number }> = []
+  for (const row of rows) {
+    if (covers(row.visit_time)) continue
+    const startMs = row.visit_time
+    const endMs = Math.min(
+      toMs,
+      Math.max(startMs + 1_000, startMs + Math.max(0, row.duration_sec ?? 0) * 1000),
+    )
+    const previous = ranges[ranges.length - 1]
+    if (previous && startMs <= previous.endMs) previous.endMs = Math.max(previous.endMs, endMs)
+    else ranges.push({ startMs, endMs })
+  }
+  return ranges
 }
 
 function gapCoversRange(gaps: readonly ActivityGapFact[], startMs: number, endMs: number): boolean {
@@ -375,8 +379,8 @@ function inferMissingCaptureGaps(
     return inferred
   }
 
-  const uncovered = uncoveredWebsiteVisitRange(db, fromMs, projectionEndMs, sessions)
-  if (uncovered && !gapCoversRange(explicitGaps, uncovered.startMs, uncovered.endMs)) {
+  for (const uncovered of uncoveredWebsiteVisitRanges(db, fromMs, projectionEndMs, sessions)) {
+    if (gapCoversRange(explicitGaps, uncovered.startMs, uncovered.endMs)) continue
     inferred.push({
       startMs: uncovered.startMs,
       endMs: uncovered.endMs,
@@ -392,10 +396,14 @@ function captureCoverageFor(
   gaps: readonly ActivityGapFact[],
 ): ActivityCaptureCoverage {
   if (focusEventCount === 0 && sessionCount === 0) return 'none'
-  if (gaps.some((gap) => gap.kind === 'capture_unavailable' || gap.kind === 'unknown')) {
-    return sessionCount === 0 ? 'none' : 'partial'
-  }
-  return gaps.length === 0 ? 'full' : 'partial'
+  // Idle, locked, and asleep are healthy capture. Only capture-state gaps
+  // reduce coverage: the helper died, the day is unknown, or tracking was paused.
+  const captureLoss = gaps.some((gap) =>
+    gap.kind === 'capture_unavailable'
+    || gap.kind === 'unknown'
+    || gap.kind === 'paused')
+  if (captureLoss) return sessionCount === 0 ? 'none' : 'partial'
+  return 'full'
 }
 
 /**

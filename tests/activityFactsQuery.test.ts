@@ -314,3 +314,38 @@ test('same evidence + corrections + projection version is byte-stable across rep
   assert.equal(a.projectionVersion, b.projectionVersion)
   assert.equal(a.queryVersion, b.queryVersion)
 })
+
+test('idle lock and sleep gaps do not mark a captured day as partial coverage', () => {
+  const db = createProductionTestDatabase()
+  seedCanonicalMorning(db)
+  const facts = queryCorrectedActivityFactsForDay(db, DATE, { asOfMs: DAY_END, nowMs: DAY_END })
+  assert.ok(facts.gaps.some((gap) => gap.kind === 'idle'))
+  assert.ok(facts.sessions.length > 0)
+  assert.equal(facts.captureCoverage, 'full')
+})
+
+test('uncovered website visits become one capture gap per contiguous run', () => {
+  const db = createProductionTestDatabase()
+  insertFocusEvents(db, [
+    focusEvent(ms(9, 0), 'app_activated'),
+    focusEvent(ms(10, 0), 'app_deactivated'),
+  ])
+  const seedVisit = (hour: number) => {
+    const visitTime = ms(hour, 0)
+    db.prepare(`
+      INSERT INTO website_visits (
+        domain, page_title, url, visit_time, visit_time_us, duration_sec,
+        browser_bundle_id, canonical_browser_id, source
+      ) VALUES (?, ?, ?, ?, ?, ?, 'com.google.Chrome', 'chrome', 'history')
+    `).run('github.com', 'daylens', `https://github.com/example/${hour}`, visitTime, visitTime * 1000, 120)
+  }
+  seedVisit(8)
+  seedVisit(15)
+  const facts = queryCorrectedActivityFactsForDay(db, DATE, { asOfMs: DAY_END, nowMs: DAY_END })
+  const captureGaps = facts.gaps.filter((gap) => gap.kind === 'capture_unavailable')
+  assert.equal(captureGaps.length, 2, `expected two uncovered-visit islands, got ${JSON.stringify(captureGaps)}`)
+  assert.ok(captureGaps.some((gap) => gap.startMs === ms(8, 0)))
+  assert.ok(captureGaps.some((gap) => gap.startMs === ms(15, 0)))
+  assert.ok(!captureGaps.some((gap) => gap.startMs <= ms(9, 0) && gap.endMs >= ms(10, 0)))
+  assert.equal(facts.captureCoverage, 'partial')
+})

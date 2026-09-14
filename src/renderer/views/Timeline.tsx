@@ -155,7 +155,12 @@ interface TrackBounds {
 }
 
 function trackBoundsFor(
-  days: Array<{ date: string; blocks: WorkContextBlock[]; scheduledMeetings?: TimelineScheduledMeeting[] }>,
+  days: Array<{
+    date: string
+    blocks: WorkContextBlock[]
+    scheduledMeetings?: TimelineScheduledMeeting[]
+    gaps?: TimelineGapSegment[]
+  }>,
   nowMs: number | null,
 ): TrackBounds {
   let firstMin = Number.POSITIVE_INFINITY
@@ -171,6 +176,12 @@ function trackBoundsFor(
     for (const meeting of day.scheduledMeetings ?? []) {
       firstMin = Math.min(firstMin, minutesIntoDay(meeting.startMs, dayStart))
       lastMin = Math.max(lastMin, minutesIntoDay(meeting.endMs, dayStart))
+    }
+    // A gap-only day (window capture unavailable) must size the track from
+    // the gap, or a full-day blank sits outside the 08:00–18:00 fallback.
+    for (const gap of day.gaps ?? []) {
+      firstMin = Math.min(firstMin, minutesIntoDay(gap.startTime, dayStart))
+      lastMin = Math.max(lastMin, minutesIntoDay(gap.endTime, dayStart))
     }
     if (nowMs != null && nowMs >= dayStart && nowMs < dayStart + 24 * 60 * 60_000) {
       lastMin = Math.max(lastMin, minutesIntoDay(nowMs, dayStart))
@@ -2605,7 +2616,14 @@ function CalendarWeekView({
   // (first tracked event to last across all seven days), so there is no dead
   // space to scroll through — the grid starts where the week starts.
   const weekBounds = useMemo(
-    () => trackBoundsFor(days.map((payload) => ({ date: payload.date, blocks: payload.blocks })), includesToday ? nowMs : null),
+    () => trackBoundsFor(
+      days.map((payload) => ({
+        date: payload.date,
+        blocks: payload.blocks,
+        gaps: payload.segments.filter((segment): segment is TimelineGapSegment => segment.kind !== 'work_block'),
+      })),
+      includesToday ? nowMs : null,
+    ),
     [days, includesToday, nowMs],
   )
   useEffect(() => {
@@ -3142,7 +3160,17 @@ export default function Timeline() {
   // The day track runs from the first tracked event to the last (or "now" on
   // today) — hours with no activity are simply not part of the view.
   const dayBounds = useMemo(
-    () => trackBoundsFor(payload ? [{ date: payload.date, blocks: sortedBlocks, scheduledMeetings: payload.scheduledMeetings }] : [], isToday ? nowMs : null),
+    () => trackBoundsFor(
+      payload
+        ? [{
+          date: payload.date,
+          blocks: sortedBlocks,
+          scheduledMeetings: payload.scheduledMeetings,
+          gaps: payload.segments.filter((segment): segment is TimelineGapSegment => segment.kind !== 'work_block'),
+        }]
+        : [],
+      isToday ? nowMs : null,
+    ),
     [payload, sortedBlocks, isToday, nowMs],
   )
 
