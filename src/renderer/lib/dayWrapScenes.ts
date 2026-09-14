@@ -116,7 +116,7 @@ export type WrapQuality = 'empty' | 'tooEarly' | 'partial' | 'full'
 // say something true ("5:14pm to 9:24pm away from the computer") instead of
 // avoiding the topic — or worse, implying a continuous grind.
 
-export type DayWrapGapKind = 'asleep' | 'locked' | 'idle' | 'passive' | 'paused' | 'untracked' | 'away'
+export type DayWrapGapKind = 'asleep' | 'locked' | 'idle' | 'passive' | 'paused' | 'untracked' | 'away' | 'capture_unavailable'
 
 export interface DayWrapGap {
   fromMs: number
@@ -386,6 +386,7 @@ function gapKindFor(kind: TimelineGapSegment['kind']): DayWrapGapKind {
     case 'passive': return 'passive'
     case 'paused': return 'paused'
     case 'away': return 'away'
+    case 'capture_unavailable': return 'capture_unavailable'
     default: return 'untracked'
   }
 }
@@ -397,6 +398,7 @@ export function gapKindPhrase(kind: DayWrapGapKind): string {
   switch (kind) {
     case 'passive': return 'screen on, hands off the keyboard'
     case 'paused': return 'tracking was paused'
+    case 'capture_unavailable': return 'window capture was unavailable'
     default: return 'away from the computer'
   }
 }

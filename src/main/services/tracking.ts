@@ -199,6 +199,25 @@ function setPollHealth(error: string | null): void {
   }
 }
 
+function noteSuccessfulForegroundWindow(ts: number): void {
+  lastSuccessfulWindowMs = ts
+}
+
+function reportForegroundWindowSilence(ts: number): void {
+  // Lock and sleep already have their own evidence. An empty poll while the
+  // machine is away is not a dead helper.
+  if (machineAbsence !== null) return
+  if (firstPollMs == null) firstPollMs = ts
+  const anchor = lastSuccessfulWindowMs ?? firstPollMs
+  if (ts - anchor < FOREGROUND_WINDOW_SILENCE_MS) return
+  setPollHealth('no foreground window for 15 minutes')
+}
+
+function restartForegroundSilenceClock(ts: number): void {
+  lastSuccessfulWindowMs = ts
+  firstPollMs = ts
+}
+
 function formatError(err: unknown): string {
   if (err instanceof Error) return `${err.name}: ${err.message}`
   return String(err)
@@ -1310,6 +1329,13 @@ let lastFlushEndMs: number | null = null
 // Wall-clock time of the previous completed poll tick, for sleep-gap
 // detection. Null until the first poll after start/reset.
 let lastPollTickMs: number | null = null
+// Foreground-window liveness. The same 15-minute window as
+// recentMacFocusEventWindow: after that, a helper-dead poll that still
+// returns no window is capture failure, not a healthy empty tick.
+export const FOREGROUND_WINDOW_SILENCE_MS = 15 * 60_000
+let firstPollMs: number | null = null
+let lastSuccessfulWindowMs: number | null = null
+let machineAbsence: 'lock' | 'sleep' | null = null
 let powerMonitorListenersRegistered = false
 const trackingTickListeners = new Set<() => void>()
 const ATTRIBUTION_REFRESH_DEBOUNCE_MS = 3_000
@@ -1503,6 +1529,7 @@ function handleLockScreen(): void {
   recordActivityEvent('lock_screen')
   idleState = 'away'
   provisionalIdleStart = null
+  machineAbsence = 'lock'
 }
 
 function handleSuspend(): void {
@@ -1517,6 +1544,7 @@ function handleSuspend(): void {
   recordActivityEvent('suspend')
   idleState = 'away'
   provisionalIdleStart = null
+  machineAbsence = 'sleep'
 }
 
 // Wake-side belt-and-braces: lid-close sleep has been observed to skip the
@@ -1539,11 +1567,15 @@ function cutSessionAfterWake(reason: 'unlock_screen' | 'resume'): void {
 function handleUnlockScreen(): void {
   cutSessionAfterWake('unlock_screen')
   recordActivityEvent('unlock_screen')
+  machineAbsence = null
+  restartForegroundSilenceClock(nowMs())
 }
 
 function handleResume(): void {
   cutSessionAfterWake('resume')
   recordActivityEvent('resume')
+  machineAbsence = null
+  restartForegroundSilenceClock(nowMs())
 }
 
 // Legacy activity-state names → canonical focus-event kinds, emitted at the
@@ -1653,6 +1685,9 @@ export function stopTracking(): void {
   provisionalIdleStart = null
   returnFromIdleAtMs = null
   lastPollTickMs = null
+  firstPollMs = null
+  lastSuccessfulWindowMs = null
+  machineAbsence = null
   console.log('[tracking] stopped')
 }
 
@@ -1711,6 +1746,9 @@ export function __setTrackingFsmTestHarness(harness: TrackingFsmTestHarness | nu
   returnFromIdleAtMs = null
   lastFlushEndMs = null
   lastPollTickMs = null
+  firstPollMs = null
+  lastSuccessfulWindowMs = null
+  machineAbsence = null
   lastSnapshotPersistAt = 0
   if (attributionRefreshTimer) {
     clearTimeout(attributionRefreshTimer)
@@ -1754,6 +1792,7 @@ async function poll(): Promise<void> {
     // excludes it too. This is the primary sleep signal — the powerMonitor
     // suspend/lock events have been observed not to fire on lid-close.
     const tickMs = nowMs()
+    if (firstPollMs == null) firstPollMs = tickMs
     if (lastPollTickMs != null && tickMs - lastPollTickMs > GAP_FLUSH_MS) {
       const gapStartMs = currentSession && looksLikePassiveMediaSession(currentSession)
         ? lastPollTickMs
@@ -1768,6 +1807,7 @@ async function poll(): Promise<void> {
       recordActivityEvent('away_start', { inferredFrom: 'poll_gap', gapMs: tickMs - lastPollTickMs }, gapStartMs)
       idleState = 'away'
       provisionalIdleStart = null
+      restartForegroundSilenceClock(tickMs)
     }
     lastPollTickMs = tickMs
 
@@ -1937,6 +1977,9 @@ async function poll(): Promise<void> {
         if (!win) {
           flushActiveBrowserContext(getDb())
           if (currentSession) { currentSession.passivePresence = false; currentSession.passiveHold = null }
+          reportForegroundWindowSilence(nowMs())
+          trackingStatus.lastRawWindow = null
+          trackingStatus.lastResolvedWindow = null
           return
         }
       }
@@ -1979,7 +2022,7 @@ async function poll(): Promise<void> {
     if (!win) {
       flushActiveBrowserContext(getDb())
       if (currentSession) { currentSession.passivePresence = false; currentSession.passiveHold = null }
-      setPollHealth(null)
+      reportForegroundWindowSilence(nowMs())
       trackingStatus.lastRawWindow = null
       trackingStatus.lastResolvedWindow = null
       return
@@ -2000,6 +2043,7 @@ async function poll(): Promise<void> {
       }
     }
 
+    noteSuccessfulForegroundWindow(nowMs())
     setPollHealth(null)
     trackingStatus.lastRawWindow = {
       title: win.title,

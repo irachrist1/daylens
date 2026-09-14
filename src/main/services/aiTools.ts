@@ -32,7 +32,7 @@ import {
   browserPageCoverageNotes,
 } from './activityFacts'
 import { localDateString } from '../lib/localDate'
-import { computeFocusScoreV2 } from '../lib/focusScore'
+import { computeFocusScoreV2, FOCUS_DEFINITION } from '../lib/focusScore'
 import {
   findClientByName,
   findProjectByName,
@@ -41,6 +41,7 @@ import {
 } from '../core/query/attributionResolvers'
 import { searchFileMentions as execSearchFileMentions } from '../lib/windowTitleFilenames'
 import { getTimelineDayPayload, userVisibleLabelForBlock } from './workBlocks'
+import { queryCorrectedActivityFactsForDay } from '../core/query/activityFactsQuery'
 import { sanitizeToolResult } from '@shared/aiSanitize'
 import { filterTrackingExcludedEvidence } from '@shared/evidencePrivacy'
 import { trackingControlsStateFromSettings, type TrackingControlsState } from '@shared/trackingControls'
@@ -190,6 +191,12 @@ export interface DaySummaryResult {
    */
   totalTrackedSeconds: number
   focusSeconds: number
+  /** How `focusSeconds` is computed. Category time is not focus. */
+  focusDefinition: string
+  workCategorySeconds: number
+  captureCoverage: 'full' | 'partial' | 'none'
+  gaps: Array<{ startMs: number; endMs: number; kind: string }>
+  websiteVisitCount: number
   /**
    * Apps that participated in any block today. Secondary evidence — quote
    * an app total only when it adds clarity to a block-led answer, never
@@ -256,6 +263,11 @@ interface DailyBreakdownEntry {
   date: string       // YYYY-MM-DD
   totalSeconds: number
   focusSeconds: number
+  workCategorySeconds: number
+  captureCoverage: 'full' | 'partial' | 'none'
+  captureStatus: 'captured' | 'uncaptured'
+  websiteVisitCount: number
+  gaps: Array<{ startMs: number; endMs: number; kind: string }>
 }
 
 /**
@@ -282,6 +294,9 @@ interface GetWeekSummaryResult {
   totalTrackedSeconds: number
   totalFocusSeconds: number
   focusPct: number
+  /** How `totalFocusSeconds` / `focusPct` are computed. Category time is not focus. */
+  focusDefinition: string
+  captureCoverage: 'full' | 'partial' | 'none'
   /** Activity-shaped primary view: per-day top blocks for narrative grounding. */
   dailyBlockSummaries: WeeklyDayBlockSummary[]
   dailyBreakdown: DailyBreakdownEntry[]
@@ -877,6 +892,7 @@ function execGetDaySummary(params: GetDaySummaryParams, db: Database.Database): 
   // different day length than the Timeline for the same date.
   const totalTrackedSeconds = Math.round(livePayload.totalSeconds)
   const focusSeconds = Math.round(livePayload.focusSeconds)
+  const dayFacts = queryCorrectedActivityFactsForDay(db, params.date)
 
   // Per-app activity: which block did the app contribute most time to?
   // Lets D1-compliant answers lead with "Kiro — coding in the Building &
@@ -916,6 +932,15 @@ function execGetDaySummary(params: GetDaySummaryParams, db: Database.Database): 
     blocks,
     totalTrackedSeconds,
     focusSeconds,
+    focusDefinition: FOCUS_DEFINITION,
+    workCategorySeconds: Math.round(dayFacts.workCategorySeconds),
+    captureCoverage: dayFacts.captureCoverage,
+    gaps: dayFacts.gaps.map((gap) => ({
+      startMs: gap.startMs,
+      endMs: gap.endMs,
+      kind: gap.kind,
+    })),
+    websiteVisitCount: dayFacts.websiteVisitCount,
     _evidence: {
       topApps,
       topWebsiteDomains,
@@ -1077,16 +1102,30 @@ function execGetWeekSummary(params: GetWeekSummaryParams, db: Database.Database)
       date: dayStr,
       topBlocks: dayBlocks.sort((a, b) => b.durationSeconds - a.durationSeconds).slice(0, 6),
     })
-    // Each day's focus figure is the payload's own clamped focusSeconds.
+    const dayFacts = queryCorrectedActivityFactsForDay(db, dayStr)
     dailyBreakdown.push({
       date: dayStr,
       totalSeconds: dayTotalSeconds,
       focusSeconds: Math.round(livePayload.focusSeconds),
+      workCategorySeconds: Math.round(dayFacts.workCategorySeconds),
+      captureCoverage: dayFacts.captureCoverage,
+      captureStatus: dayFacts.captureCoverage === 'none' ? 'uncaptured' : 'captured',
+      websiteVisitCount: dayFacts.websiteVisitCount,
+      gaps: dayFacts.gaps.map((gap) => ({
+        startMs: gap.startMs,
+        endMs: gap.endMs,
+        kind: gap.kind,
+      })),
     })
   }
 
   const totalFocusSeconds = dailyBreakdown.reduce((acc, d) => acc + d.focusSeconds, 0)
   const focusPct = totalTrackedSeconds > 0 ? Math.round((totalFocusSeconds / totalTrackedSeconds) * 100) : 0
+  const weekCoverage = dailyBreakdown.every((d) => d.captureCoverage === 'none')
+    ? 'none' as const
+    : dailyBreakdown.some((d) => d.captureCoverage !== 'full')
+      ? 'partial' as const
+      : 'full' as const
   const bestDay = dailyBreakdown.reduce<{ date: string; focusPct: number } | null>((best, d) => {
     const pct = d.totalSeconds > 0 ? Math.round((d.focusSeconds / d.totalSeconds) * 100) : 0
     return !best || pct > best.focusPct ? { date: d.date, focusPct: pct } : best
@@ -1106,6 +1145,8 @@ function execGetWeekSummary(params: GetWeekSummaryParams, db: Database.Database)
     totalTrackedSeconds,
     totalFocusSeconds,
     focusPct,
+    focusDefinition: FOCUS_DEFINITION,
+    captureCoverage: weekCoverage,
     dailyBlockSummaries,
     dailyBreakdown,
     bestDay: bestDay?.focusPct === 0 ? null : bestDay,

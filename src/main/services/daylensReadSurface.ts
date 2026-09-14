@@ -121,7 +121,10 @@ export const DAYLENS_READ_CAPABILITIES: readonly DaylensReadCapability[] = [
     executor: 'activity',
     description:
       'Return a structured summary of all tracked activity for a given calendar day: '
-      + 'total time, top apps, top websites, timeline block labels, and focus metrics.',
+      + 'total time, timeline blocks, top apps, top websites, and real focus '
+      + '(sustained single-app stretches of 25+ minutes — see focusDefinition). '
+      + 'captureCoverage and gaps mark days or hours that were not captured; '
+      + '0 seconds with captureCoverage "none" is a gap, not a day of no activity.',
     inputSchema: {
       type: 'object',
       properties: { date: { ...DATE_PARAM, description: 'The calendar day to summarize.' } },
@@ -169,9 +172,11 @@ export const DAYLENS_READ_CAPABILITIES: readonly DaylensReadCapability[] = [
     id: 'getWeekSummary',
     executor: 'activity',
     description:
-      'Return a structured summary for a full calendar week (Mon–Sun): total time, focus percentage, top apps, '
-      + 'per-day breakdown, best day, and most active day. Use this for questions about "last week", "this week", '
-      + 'or week-over-week comparisons.',
+      'Return a structured summary for a full calendar week (Mon–Sun): total time, real focus '
+      + '(see focusDefinition — not app-category time), top apps, per-day breakdown with '
+      + 'captureCoverage/gaps, best day, and most active day. Days with captureCoverage '
+      + '"none" were not captured; do not describe them as zero-activity days. '
+      + 'Use this for questions about "last week", "this week", or week-over-week comparisons.',
     inputSchema: {
       type: 'object',
       properties: {

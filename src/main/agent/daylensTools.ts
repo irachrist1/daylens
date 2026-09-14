@@ -27,6 +27,7 @@ import {
   listFocusEventTimesInRange,
   listMachineStateEventsBefore,
 } from '../db/focusEventRepository'
+import { queryCorrectedActivityFactsForDay } from '../core/query/activityFactsQuery'
 import { sanitizeToolResult } from '@shared/aiSanitize'
 import { filterTrackingExcludedEvidence } from '@shared/evidencePrivacy'
 import { trackingControlsStateFromSettings } from '@shared/trackingControls'
@@ -53,6 +54,7 @@ function captureStateForDay(db: Database.Database, date: string) {
   const fromMs = dayStartMs(date)
   const toMs = fromMs + DAY_MS
   try {
+    const facts = queryCorrectedActivityFactsForDay(db, date)
     const prior = listMachineStateEventsBefore(db, fromMs)
     const events = listFocusEventTimesInRange(db, fromMs, toMs)
 
@@ -118,17 +120,37 @@ function captureStateForDay(db: Database.Database, date: string) {
       }
     }
 
+    if (events.length === 0) {
+      for (const gap of facts.gaps) {
+        untrackedGaps.push({
+          startMs: gap.startMs,
+          endMs: gap.endMs,
+          startTime: fmtClock(gap.startMs),
+          endTime: fmtClock(gap.endMs),
+        })
+      }
+    }
+
     return {
       machineStateSpans,
       untrackedGaps,
+      gaps: facts.gaps.map((gap) => ({
+        startMs: gap.startMs,
+        endMs: gap.endMs,
+        startTime: fmtClock(gap.startMs),
+        endTime: fmtClock(gap.endMs),
+        kind: gap.kind,
+      })),
       captureCoverage: {
+        status: facts.captureCoverage,
         eventCount: events.length,
+        websiteVisitCount: facts.websiteVisitCount,
         firstEventMs: events[0]?.ts_ms ?? null,
         lastEventMs: events.at(-1)?.ts_ms ?? null,
       },
     }
   } catch {
-    return { machineStateSpans: [], untrackedGaps: [], captureCoverage: null }
+    return { machineStateSpans: [], untrackedGaps: [], gaps: [], captureCoverage: null }
   }
 }
 
@@ -201,16 +223,19 @@ function timeChunks(
       .map((visit) => ({ pageTitle: visit.pageTitle, domain: visit.domain, url: visit.url }))
       .slice(0, 5)
     const machineState = state.machineStateSpans.find((span) => span.startMs < chunkEnd && span.endMs > chunkStart)
+    const captureGap = state.gaps.find((gap) => gap.startMs < chunkEnd && gap.endMs > chunkStart)
     const untracked = state.untrackedGaps.find((gap) => gap.startMs < chunkEnd && gap.endMs > chunkStart)
     const gap = activity.length > 0
       ? null
       : machineState
         ? { kind: machineState.state, label: machineState.state.includes('asleep') ? 'machine asleep/locked' : 'machine locked' }
-        : untracked
-          // These labels are printed verbatim into the chunk table, so they
-          // carry no em dash (the voice contract bans it in every surface).
-          ? { kind: 'untracked', label: 'no data captured, possibly a tracking failure' }
-          : { kind: 'idle', label: 'no activity captured, likely away or idle' }
+        : captureGap?.kind === 'capture_unavailable'
+          ? { kind: 'capture_unavailable', label: 'window capture unavailable' }
+          : untracked || captureGap?.kind === 'unknown'
+            // These labels are printed verbatim into the chunk table, so they
+            // carry no em dash (the voice contract bans it in every surface).
+            ? { kind: 'untracked', label: 'no data captured, possibly a tracking failure' }
+            : { kind: 'idle', label: 'no activity captured, likely away or idle' }
     const coveringBlock = dayBlocks
       .filter((block) => block.startTime < chunkEnd && block.endTime > chunkStart)
       .sort((left, right) =>
@@ -245,12 +270,21 @@ interface AggregatedPage {
 export function buildDaylensTools(db: Database.Database) {
   return {
     get_day_overview: tool({
-      description: 'The full story of one day: timeline blocks with labels and times, top apps, top sites, and totals. This is the same data the Timeline screen shows. Start here for "what did I do" questions.',
+      description:
+        'The full story of one day: timeline blocks with labels and times, top apps, top sites, totals, and capture gaps. '
+        + 'focusSeconds is sustained single-app time (see focusDefinition), not app-category time. '
+        + 'captureCoverage/gaps distinguish uncaptured time from a day where nothing happened. '
+        + 'This is the same data the Timeline screen shows. Start here for "what did I do" questions.',
       inputSchema: z.object({ date: DATE }),
-      execute: async ({ date }) => guarded({
-        ...(executeTool('getDaySummary', { date }, db) as Record<string, unknown>),
-        ...captureStateForDay(db, date),
-      }),
+      execute: async ({ date }) => {
+        const summary = executeTool('getDaySummary', { date }, db) as Record<string, unknown>
+        const state = captureStateForDay(db, date)
+        return guarded({
+          ...summary,
+          machineStateSpans: state.machineStateSpans,
+          untrackedGaps: state.untrackedGaps,
+        })
+      },
     }),
 
     get_moment: tool({
@@ -260,7 +294,7 @@ export function buildDaylensTools(db: Database.Database) {
     }),
 
     get_time_chunks: tool({
-      description: 'Return a complete time span as exact consecutive increments, including captured apps/pages and explicit asleep, locked, idle, or possible tracking-failure gaps. Use for every request to break a day or span into N-minute chunks.',
+      description: 'Return a complete time span as exact consecutive increments, including captured apps/pages and explicit asleep, locked, idle, window-capture-unavailable, or possible tracking-failure gaps. Use for every request to break a day or span into N-minute chunks.',
       inputSchema: z.object({
         date: DATE,
         startTime: TIME.optional().default('00:00'),
@@ -342,7 +376,10 @@ export function buildDaylensTools(db: Database.Database) {
     }),
 
     get_week_summary: tool({
-      description: 'Totals and per-day shape for one week. weekStartDate must be the Monday.',
+      description:
+        'Totals and per-day shape for one week. weekStartDate must be the Monday. '
+        + 'totalFocusSeconds is sustained single-app time (see focusDefinition), not app-category time. '
+        + 'Days with captureCoverage "none" were not captured; do not describe them as zero-activity days.',
       inputSchema: z.object({ weekStartDate: DATE }),
       execute: async (params) => guarded(executeTool('getWeekSummary', params, db)),
     }),

@@ -3643,7 +3643,7 @@ export default function Timeline() {
                   </div>
                 )}
 
-                {payload.blocks.length === 0 && (
+                {payload.blocks.length === 0 && gapSegments.length === 0 && (
                   <div style={{
                     borderRadius: 18,
                     border: '1px solid var(--color-border-ghost)',
@@ -3660,7 +3660,7 @@ export default function Timeline() {
                   </div>
                 )}
 
-                {payload.blocks.length > 0 && (
+                {(payload.blocks.length > 0 || gapSegments.length > 0) && (
                   <div style={{
                     display: 'grid',
                     gridTemplateColumns: isCompact ? 'minmax(0, 1fr)' : 'minmax(0, 1fr) 360px',

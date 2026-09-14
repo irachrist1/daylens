@@ -85,7 +85,11 @@ import {
 import { isBrowserApplication } from './browserRegistry'
 import { getBackgroundProcessEvidence } from './backgroundProcessEvidence'
 import { filterExcludedWebsiteSummaries, getCorrectedWebsiteSummariesForRange } from './activityFacts'
-import { queryCorrectedActivityFactsForRange } from '../core/query/activityFactsQuery'
+import {
+  queryCorrectedActivityFactsForRange,
+  type ActivityGapFact,
+  type ActivityGapKind,
+} from '../core/query/activityFactsQuery'
 import { getSecondaryDisplayVisibleSpansForRange } from '../core/projections/displayVisibility'
 import { getExternalSignal } from './externalSignals'
 import {
@@ -6313,12 +6317,21 @@ const GAP_KIND_LABELS: Record<string, string> = {
   passive: 'Passive',
   paused: 'Tracking paused',
   untracked: 'No data captured',
+  capture_unavailable: 'Window capture unavailable',
 }
 
 // When multiple causes covered parts of one gap, the strongest signal names
 // it: a real absence (machine asleep / screen locked) outranks a pause,
-// which outranks presence-without-input.
-const GAP_KIND_PRIORITY: Array<TimelineGapSegment['kind']> = ['asleep', 'locked', 'paused', 'passive', 'idle']
+// which outranks presence-without-input. A dead window-capture stream
+// outranks a generic "untracked" blank.
+const GAP_KIND_PRIORITY: Array<TimelineGapSegment['kind']> = [
+  'asleep',
+  'locked',
+  'paused',
+  'capture_unavailable',
+  'passive',
+  'idle',
+]
 
 // Turn the day's raw activity-state events into cause intervals. Each
 // start-type event opens a cause; the next end-type event closes it. An
@@ -6423,6 +6436,17 @@ function classifyGapRange(
   }
 }
 
+function timelineKindForActivityGap(kind: ActivityGapKind): TimelineGapSegment['kind'] {
+  switch (kind) {
+    case 'idle': return 'idle'
+    case 'locked': return 'locked'
+    case 'asleep': return 'asleep'
+    case 'paused': return 'paused'
+    case 'capture_unavailable': return 'capture_unavailable'
+    case 'unknown': return 'untracked'
+  }
+}
+
 function buildSegmentsForDay(
   db: Database.Database,
   dateStr: string,
@@ -6430,10 +6454,18 @@ function buildSegmentsForDay(
   // The day bounds the payload was built with — segments must cover the same
   // range the blocks were read from, or gaps and blocks drift apart.
   bounds?: [number, number],
+  activityGaps: readonly ActivityGapFact[] = [],
 ): TimelineSegment[] {
   const [fromMs, toMs] = bounds ?? ownedDayBounds(db, dateStr)
   const events = getActivityStateEventsForRange(db, fromMs, toMs)
-  const causes = gapCauseIntervals(events, toMs)
+  const causes = [
+    ...gapCauseIntervals(events, toMs),
+    ...activityGaps.map((gap) => ({
+      kind: timelineKindForActivityGap(gap.kind),
+      startTime: gap.startMs,
+      endTime: gap.endMs,
+    })),
+  ]
   const workSegments: TimelineSegment[] = blocks.map((block) => ({
     kind: 'work_block',
     startTime: block.startTime,
@@ -6721,7 +6753,7 @@ export function getTimelineDayPayload(
   // empty space it now is.
   const blocks = builtBlocks.filter(isTrustedTimelineBlock)
   const focusSessions = getFocusSessionsForDateRange(db, fromMs, toMs)
-  const segments = buildSegmentsForDay(db, dateStr, blocks, [fromMs, toMs])
+  const segments = buildSegmentsForDay(db, dateStr, blocks, [fromMs, toMs], facts.gaps)
   // What secondary displays showed while focus was elsewhere (full-screen
   // course on monitor 2 during Notion on monitor 1). Presence evidence with
   // its own honest label — deliberately NOT added to totalSeconds/blocks,
@@ -6747,13 +6779,9 @@ export function getTimelineDayPayload(
   // total (Timeline, Apps, AI, recap) reads this same partition instead of
   // independently summing raw sessions.
   const totalSeconds = blocks.reduce((sum, block) => sum + blockActiveSeconds(block), 0)
-  // Focused duration can never exceed tracked duration for the same scope.
-  const focusSeconds = Math.min(
-    totalSeconds,
-    sessions
-      .filter((session) => session.isFocused)
-      .reduce((sum, session) => sum + session.durationSeconds, 0),
-  )
+  // Focus is sustained single-app time from the shared query, never category
+  // membership. It cannot exceed tracked duration for the same scope.
+  const focusSeconds = Math.min(totalSeconds, facts.focusSeconds)
 
   return {
     date: dateStr,

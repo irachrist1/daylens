@@ -8,7 +8,7 @@ import type { AppCategory, AppSession } from '@shared/types'
 import { isSystemNoiseApp } from '@shared/systemNoise'
 import { ownedDayBounds } from '../../lib/dayOwnership'
 import { localDateString } from '../../lib/localDate'
-import { isAppFocused } from '../../lib/focusScore'
+import { computeSustainedFocus, isAppFocused } from '../../lib/focusScore'
 import { resolveCanonicalApp } from '../../lib/appIdentity'
 import { getSettings } from '../../services/settings'
 import { applyTimelineCorrectionsToSessions } from '../../services/activityFacts'
@@ -34,7 +34,7 @@ import {
   storeCachedRangeFacts,
 } from './rangeFactsCache'
 
-export const ACTIVITY_FACTS_QUERY_VERSION = 3
+export const ACTIVITY_FACTS_QUERY_VERSION = 4
 
 // Synthetic ids for canonically projected sessions. They must stay negative
 // (no app_sessions row backs them) but clear of the live-session sentinel
@@ -73,6 +73,8 @@ export interface ActivityGapFact {
   kind: ActivityGapKind
 }
 
+export type ActivityCaptureCoverage = 'full' | 'partial' | 'none'
+
 export interface CorrectedActivityDayFacts {
   date: string
   projectionVersion: number
@@ -81,8 +83,11 @@ export interface CorrectedActivityDayFacts {
   sessions: AppSession[]
   totalSeconds: number
   focusSeconds: number
+  workCategorySeconds: number
   gaps: ActivityGapFact[]
   focusEventCount: number
+  websiteVisitCount: number
+  captureCoverage: ActivityCaptureCoverage
   legacySessionCount: number
 }
 
@@ -104,8 +109,11 @@ export interface CorrectedActivityRangeFacts {
   sessions: AppSession[]
   totalSeconds: number
   focusSeconds: number
+  workCategorySeconds: number
   gaps: ActivityGapFact[]
   focusEventCount: number
+  websiteVisitCount: number
+  captureCoverage: ActivityCaptureCoverage
   legacySessionCount: number
 }
 
@@ -276,13 +284,118 @@ function legacySessionsBeforeCanonicalEra(
 function totalsFromSessions(sessions: readonly AppSession[]): {
   totalSeconds: number
   focusSeconds: number
+  workCategorySeconds: number
 } {
   const totalSeconds = sessions.reduce((sum, session) => sum + session.durationSeconds, 0)
-  const rawFocus = sessions
-    .filter((session) => session.isFocused)
-    .reduce((sum, session) => sum + session.durationSeconds, 0)
-  // Focused duration never exceeds tracked duration for the same scope.
-  return { totalSeconds, focusSeconds: Math.min(rawFocus, totalSeconds) }
+  const workCategorySeconds = Math.min(
+    totalSeconds,
+    sessions
+      .filter((session) => session.isFocused)
+      .reduce((sum, session) => sum + session.durationSeconds, 0),
+  )
+  const rawFocus = computeSustainedFocus(sessions).focusSeconds
+  return { totalSeconds, focusSeconds: Math.min(rawFocus, totalSeconds), workCategorySeconds }
+}
+
+function countWebsiteVisitsInRange(
+  db: Database.Database,
+  fromMs: number,
+  toMs: number,
+): number {
+  try {
+    const row = db.prepare(
+      `SELECT COUNT(*) AS c FROM website_visits WHERE visit_time >= ? AND visit_time < ?`,
+    ).get(fromMs, toMs) as { c: number } | undefined
+    return Number(row?.c ?? 0)
+  } catch {
+    return 0
+  }
+}
+
+function uncoveredWebsiteVisitRange(
+  db: Database.Database,
+  fromMs: number,
+  toMs: number,
+  sessions: readonly AppSession[],
+): { startMs: number; endMs: number } | null {
+  let rows: Array<{ visit_time: number; duration_sec: number | null }>
+  try {
+    rows = db.prepare(
+      `SELECT visit_time, duration_sec FROM website_visits WHERE visit_time >= ? AND visit_time < ? ORDER BY visit_time ASC`,
+    ).all(fromMs, toMs) as Array<{ visit_time: number; duration_sec: number | null }>
+  } catch {
+    return null
+  }
+  if (rows.length === 0) return null
+
+  const covers = (ts: number): boolean => sessions.some((session) => {
+    const start = session.startTime
+    const end = session.endTime != null && session.endTime > start
+      ? session.endTime
+      : start + Math.max(0, session.durationSeconds) * 1000
+    return ts >= start && ts < end
+  })
+
+  const uncovered = rows.filter((row) => !covers(row.visit_time))
+  if (uncovered.length === 0) return null
+  const startMs = uncovered[0].visit_time
+  const last = uncovered[uncovered.length - 1]
+  const endMs = Math.max(
+    startMs + 1_000,
+    last.visit_time + Math.max(0, last.duration_sec ?? 0) * 1000,
+  )
+  return { startMs, endMs: Math.min(endMs, toMs) }
+}
+
+function gapCoversRange(gaps: readonly ActivityGapFact[], startMs: number, endMs: number): boolean {
+  return gaps.some((gap) => gap.startMs <= startMs && gap.endMs >= endMs)
+}
+
+function inferMissingCaptureGaps(
+  db: Database.Database,
+  fromMs: number,
+  projectionEndMs: number,
+  focusEventCount: number,
+  sessions: readonly AppSession[],
+  explicitGaps: readonly ActivityGapFact[],
+): ActivityGapFact[] {
+  const eraStartMs = firstFocusEventTsMs(db)
+  if (eraStartMs == null || eraStartMs >= projectionEndMs) return []
+
+  const inferred: ActivityGapFact[] = []
+  if (focusEventCount === 0 && eraStartMs < fromMs && projectionEndMs > fromMs) {
+    if (!gapCoversRange(explicitGaps, fromMs, projectionEndMs)) {
+      const visitCount = countWebsiteVisitsInRange(db, fromMs, projectionEndMs)
+      inferred.push({
+        startMs: fromMs,
+        endMs: projectionEndMs,
+        kind: visitCount > 0 ? 'capture_unavailable' : 'unknown',
+      })
+    }
+    return inferred
+  }
+
+  const uncovered = uncoveredWebsiteVisitRange(db, fromMs, projectionEndMs, sessions)
+  if (uncovered && !gapCoversRange(explicitGaps, uncovered.startMs, uncovered.endMs)) {
+    inferred.push({
+      startMs: uncovered.startMs,
+      endMs: uncovered.endMs,
+      kind: 'capture_unavailable',
+    })
+  }
+  return inferred
+}
+
+function captureCoverageFor(
+  focusEventCount: number,
+  sessionCount: number,
+  gaps: readonly ActivityGapFact[],
+): ActivityCaptureCoverage {
+  if (focusEventCount === 0 && sessionCount === 0) return 'none'
+  if (gaps.some((gap) => gap.kind === 'capture_unavailable' || gap.kind === 'unknown')) {
+    return sessionCount === 0 ? 'none' : 'partial'
+  }
+  return gaps.length === 0 ? 'full' : 'partial'
 }
 
 /**
@@ -382,8 +495,19 @@ export function queryCorrectedActivityFactsForRange(
       sessions[sessions.length - 1] = { ...last, id: LIVE_SESSION_SENTINEL_ID }
     }
   }
-  const { totalSeconds, focusSeconds } = totalsFromSessions(sessions)
-  const gaps = projectGapsFromFocusEvents(events, projectionEndMs)
+  const { totalSeconds, focusSeconds, workCategorySeconds } = totalsFromSessions(sessions)
+  const explicitGaps = projectGapsFromFocusEvents(events, projectionEndMs)
+  const inferredGaps = inferMissingCaptureGaps(
+    db,
+    fromMs,
+    projectionEndMs,
+    focusEventCount,
+    sessions,
+    explicitGaps,
+  )
+  const gaps = [...explicitGaps, ...inferredGaps].sort((left, right) => left.startMs - right.startMs)
+  const websiteVisitCount = countWebsiteVisitsInRange(db, fromMs, projectionEndMs)
+  const captureCoverage = captureCoverageFor(focusEventCount, sessions.length, gaps)
 
   const facts: CorrectedActivityRangeFacts = {
     projectionVersion: PROJECTION_VERSION,
@@ -392,8 +516,11 @@ export function queryCorrectedActivityFactsForRange(
     sessions,
     totalSeconds,
     focusSeconds,
+    workCategorySeconds,
     gaps,
     focusEventCount,
+    websiteVisitCount,
+    captureCoverage,
     legacySessionCount,
   }
 
