@@ -12,7 +12,7 @@ import { queryCorrectedActivityFactsForDay } from '../src/main/core/query/activi
 import { executeTool } from '../src/main/services/aiTools.ts'
 import { getTimelineDayPayload } from '../src/main/services/workBlocks.ts'
 import { FOCUS_DEFINITION, computeSustainedFocus } from '../src/main/lib/focusScore.ts'
-import { primeWorkerSettingsOverride } from '../src/main/services/settings.ts'
+import { __resetSettings, __setSettings } from './support/settings-stub.mjs'
 
 const WEEK_START = '2026-09-07'
 
@@ -260,7 +260,7 @@ test('day facts count a 25 minute stretch in a configured uncategorized app as f
   assert.equal(unconfigured.focusSeconds, 0, 'uncategorized apps are not focus without focusApps')
   assert.ok(unconfigured.totalSeconds >= 25 * 60)
 
-  primeWorkerSettingsOverride({ focusApps: ['com.niche.cad'] })
+  __setSettings({ focusApps: ['com.niche.cad'] })
   try {
     const configured = queryCorrectedActivityFactsForDay(db, '2026-09-08', {
       nowMs: localMs('2026-09-14', 12),
@@ -269,7 +269,7 @@ test('day facts count a 25 minute stretch in a configured uncategorized app as f
     assert.equal(configured.focusSeconds, 25 * 60)
     assert.equal(configured.totalSeconds, unconfigured.totalSeconds)
   } finally {
-    primeWorkerSettingsOverride(null)
+    __resetSettings()
   }
 
   db.close()

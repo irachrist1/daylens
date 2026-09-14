@@ -107,7 +107,7 @@ function liveModelId(stored: string): string {
 // process.
 let _workerSettingsOverride: Partial<AppSettings> | null = null
 
-export function primeWorkerSettingsOverride(partial: Partial<AppSettings> | null): void {
+export function primeWorkerSettingsOverride(partial: Partial<AppSettings>): void {
   _workerSettingsOverride = partial
 }
 
