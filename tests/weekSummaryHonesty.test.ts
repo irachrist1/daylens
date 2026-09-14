@@ -12,6 +12,7 @@ import { queryCorrectedActivityFactsForDay } from '../src/main/core/query/activi
 import { executeTool } from '../src/main/services/aiTools.ts'
 import { getTimelineDayPayload } from '../src/main/services/workBlocks.ts'
 import { FOCUS_DEFINITION, computeSustainedFocus } from '../src/main/lib/focusScore.ts'
+import { primeWorkerSettingsOverride } from '../src/main/services/settings.ts'
 
 const WEEK_START = '2026-09-07'
 
@@ -120,6 +121,23 @@ test('computeSustainedFocus counts a 30 minute single-app development stretch', 
   assert.equal(breakdown.streakCount, 1)
 })
 
+test('computeSustainedFocus counts a configured uncategorized app as focus', () => {
+  const stretch = [session(0, 25, 'uncategorized', 'Niche CAD')]
+  assert.equal(computeSustainedFocus(stretch).focusSeconds, 0)
+  const breakdown = computeSustainedFocus(stretch, ['com.niche.cad', 'Niche CAD'])
+  assert.equal(breakdown.focusSeconds, 25 * 60)
+  assert.equal(breakdown.streakCount, 1)
+})
+
+test('computeSustainedFocus still excludes AI tools even when they are in focusApps', () => {
+  const breakdown = computeSustainedFocus(
+    [session(0, 30, 'aiTools', 'Claude')],
+    ['Claude'],
+  )
+  assert.equal(breakdown.focusSeconds, 0)
+  assert.equal(breakdown.streakCount, 0)
+})
+
 test('week and day summaries report real focus, expose the definition, and mark uncaptured days', () => {
   const db = createProductionTestDatabase()
 
@@ -226,6 +244,33 @@ test('week and day summaries report real focus, expose the definition, and mark 
     ),
     'an uncaptured day must render as a gap, not an empty zero-activity day',
   )
+
+  db.close()
+})
+
+test('day facts count a 25 minute stretch in a configured uncategorized app as focus', () => {
+  const db = createProductionTestDatabase()
+  seedAppStretch(db, '2026-09-06', 9, 0, 9, 30, 'com.mitchellh.ghostty', 'Ghostty')
+  seedAppStretch(db, '2026-09-08', 9, 0, 9, 25, 'com.niche.cad', 'Niche CAD')
+
+  const unconfigured = queryCorrectedActivityFactsForDay(db, '2026-09-08', {
+    nowMs: localMs('2026-09-14', 12),
+    asOfMs: localMs('2026-09-09', 0),
+  })
+  assert.equal(unconfigured.focusSeconds, 0, 'uncategorized apps are not focus without focusApps')
+  assert.ok(unconfigured.totalSeconds >= 25 * 60)
+
+  primeWorkerSettingsOverride({ focusApps: ['com.niche.cad'] })
+  try {
+    const configured = queryCorrectedActivityFactsForDay(db, '2026-09-08', {
+      nowMs: localMs('2026-09-14', 12),
+      asOfMs: localMs('2026-09-09', 0),
+    })
+    assert.equal(configured.focusSeconds, 25 * 60)
+    assert.equal(configured.totalSeconds, unconfigured.totalSeconds)
+  } finally {
+    primeWorkerSettingsOverride(null)
+  }
 
   db.close()
 })

@@ -15,9 +15,10 @@ export const FOCUS_GAP_TOLERANCE_MS = 60_000
  * an editor or AI tool being frontmost is not enough. A stretch counts only
  * when one eligible app holds the foreground for 25 minutes or more without
  * an app switch, allowing gaps of up to 60 seconds. AI tools are not eligible.
+ * Apps marked as real work in onboarding count even if uncategorized.
  */
 export const FOCUS_DEFINITION =
-  'Focus is time in one app for 25 minutes or more without switching apps, allowing gaps of up to 60 seconds. App category is not focus. AI tools are not eligible.'
+  'Focus is time in one app for 25 minutes or more without switching apps, allowing gaps of up to 60 seconds. App category is not focus. AI tools are not eligible. Apps marked as real work in onboarding are eligible even if uncategorized.'
 
 export function isFocusEligibleCategory(category: AppCategory | string): boolean {
   return category !== 'aiTools' && FOCUSED_CATEGORIES.includes(category as AppCategory)
@@ -33,9 +34,20 @@ export function isAppFocused(
   category: AppCategory | string,
   bundleId: string | null | undefined,
   appName: string | null | undefined,
-  focusApps: string[] | undefined,
+  focusApps: readonly string[] | undefined,
 ): boolean {
   return isCategoryFocused(category) || appMatchesFocusList(focusApps, bundleId, appName)
+}
+
+/** Sustained-focus eligibility: configured work apps count; AI tools never do. */
+export function isFocusEligibleApp(
+  category: AppCategory | string,
+  bundleId: string | null | undefined,
+  appName: string | null | undefined,
+  focusApps: readonly string[] | undefined,
+): boolean {
+  if (category === 'aiTools') return false
+  return isAppFocused(category, bundleId, appName, focusApps)
 }
 
 // ---------------------------------------------------------------------------
@@ -86,10 +98,12 @@ function sessionAppKey(session: SustainedFocusSession): string {
 /**
  * Focus as agents and summaries must report it: sustained single-app time,
  * not FOCUSED_CATEGORIES membership. Switching Codex → Grok → Claude ends
- * each stretch even though all three share the aiTools category.
+ * each stretch even though all three share the aiTools category. Apps the
+ * user marked as real work count even when uncategorized; AI tools never do.
  */
 export function computeSustainedFocus(
   sessions: readonly SustainedFocusSession[],
+  focusApps?: readonly string[],
 ): SustainedFocusResult {
   const ordered = [...sessions]
     .filter((session) => sessionDurationSeconds(session) > 0)
@@ -121,7 +135,12 @@ export function computeSustainedFocus(
       : startTime !== null
         ? startTime + durationSeconds * 1000
         : null
-    const eligible = isFocusEligibleCategory(session.category)
+    const eligible = isFocusEligibleApp(
+      session.category,
+      session.bundleId,
+      session.appName,
+      focusApps,
+    )
     const appKey = sessionAppKey(session)
     const gapBreaksStreak = startTime !== null && streakEndTime !== null
       ? startTime - streakEndTime > FOCUS_GAP_TOLERANCE_MS

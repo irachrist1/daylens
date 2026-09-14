@@ -134,6 +134,7 @@ function spawnRelay(): void {
   const paths = resolveRelayPaths()
   if (!paths) {
     console.warn('[focusCapture] capture relay not found — capture cannot start')
+    markHelperFailed()
     return
   }
 
@@ -186,6 +187,7 @@ function spawnRelay(): void {
   })
   proc.on('error', (err) => {
     console.warn('[focusCapture] relay process error:', err)
+    if (!stopping) markHelperFailed()
   })
   proc.on('exit', (code, signal) => {
     if (relay === proc) relay = null
@@ -198,6 +200,7 @@ function spawnRelay(): void {
       purgeFocusCaptureSpool()
     }
     if (stopping) return
+    markHelperFailed()
     if (Date.now() - spawnedAt >= STABLE_UPTIME_MS) restartDelay = 1000
     console.warn(`[focusCapture] relay exited (code=${code} signal=${signal}); restarting`)
     scheduleRestart()
