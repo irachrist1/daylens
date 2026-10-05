@@ -89,7 +89,7 @@
     "ai": "^6.0.224",
     "better-sqlite3": "^12.8.0",
     "electron-store": "^10.0.0",
-    "electron-updater": "^6.8.3",
+    "electron-updater": "^6.8.10",
     "exceljs": "^4.4.0",
     "keytar": "^7.9.0",
     "lucide-react": "^1.8.0",
@@ -132,7 +132,7 @@
   },
   "overrides": {
     "lodash": "4.18.1",
-    "protobufjs": "7.5.9"
+    "protobufjs": "7.6.6"
   },
   "allowScripts": {
     "electron@34.5.8": true,
@@ -143,7 +143,7 @@
     "@google/genai@1.52.0": true,
     "core-js@3.49.0": true,
     "onnxruntime-node@1.21.0": true,
-    "protobufjs@7.5.9": true,
+    "protobufjs@7.6.6": true,
     "better-sqlite3@12.8.0": true,
     "esbuild@0.25.12": true,
     "lzma-native@8.0.6": true
