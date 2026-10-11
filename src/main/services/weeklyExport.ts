@@ -63,6 +63,7 @@ const GAP_LABELS: Record<string, string> = {
   passive: 'passive',
   paused: 'paused',
   untracked: 'untracked',
+  capture_unavailable: 'window capture unavailable',
 }
 
 export function collectWeeklyExportData(db: Database.Database, weekStartDate: string): WeeklyExportData {

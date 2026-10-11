@@ -335,9 +335,11 @@ export interface WorkContextBlock {
 //               present, just not typing
 //   paused    — the user paused tracking (settings/tray)
 //   untracked — no signal at all: Daylens wasn't running
+//   capture_unavailable — window capture was dead while other evidence (or
+//               a later recovery) shows the machine was in use
 // The legacy kinds (idle_gap / away / machine_off) remain for older producers.
 export interface TimelineGapSegment {
-  kind: 'idle_gap' | 'away' | 'machine_off' | 'asleep' | 'locked' | 'idle' | 'passive' | 'paused' | 'untracked'
+  kind: 'idle_gap' | 'away' | 'machine_off' | 'asleep' | 'locked' | 'idle' | 'passive' | 'paused' | 'untracked' | 'capture_unavailable'
   startTime: number
   endTime: number
   label: string

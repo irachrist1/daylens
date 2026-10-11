@@ -261,7 +261,7 @@ function factsFromScope(
           identity: `facts:day:${scopeId}:total`,
           statement: scope.totalSeconds > 0
             ? `Tracked activity for ${label} totals ${renderDuration(scope.totalSeconds)} (${scope.totalSeconds} seconds), from the corrected activity facts the Timeline and Apps views read.`
-            : `No tracked activity was captured for ${label} (0 seconds), from the corrected activity facts the Timeline and Apps views read.`,
+            : `No tracked activity was captured for ${label} (0 seconds). That is a capture gap unless the day is marked captured — it is not proof that nothing happened.`,
         })
         break
       }
@@ -275,8 +275,8 @@ function factsFromScope(
           subject: `focused time on ${label}`,
           identity: `facts:day:${scopeId}:focus`,
           statement: scope.focusSeconds > 0
-            ? `Focused time for ${label} totals ${renderDuration(scope.focusSeconds)} (${scope.focusSeconds} seconds), from the corrected activity facts the Timeline and Apps views read.`
-            : `No focused time was captured for ${label} (0 seconds), from the corrected activity facts the Timeline and Apps views read.`,
+            ? `Focused time for ${label} totals ${renderDuration(scope.focusSeconds)} (${scope.focusSeconds} seconds): sustained single-app stretches of 25 minutes or more, not app-category time.`
+            : `No focused time was captured for ${label} (0 seconds). Focus is sustained single-app stretches of 25 minutes or more, not app-category time. AI tools are not eligible.`,
         })
         break
       }

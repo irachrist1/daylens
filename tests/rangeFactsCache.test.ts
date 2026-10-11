@@ -1,8 +1,8 @@
 // DEV-227: the range-facts memo cache. A cached read must be
 // indistinguishable from a recomputed one, and any change to the evidence —
-// a new focus event, a new correction, a changed focusApps setting — must
-// invalidate. Pinned here because a stale hit would silently desynchronize
-// the Apps view, the AI's numbers, and the Timeline.
+// a new focus event, a new website visit, a new correction, a changed
+// focusApps setting — must invalidate. Pinned here because a stale hit would
+// silently desynchronize the Apps view, the AI's numbers, and the Timeline.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import type Database from 'better-sqlite3'
@@ -94,6 +94,41 @@ test('new evidence invalidates the cached window', () => {
   const after = queryCorrectedActivityFactsForRange(db, FROM, TO)
   assert.equal(after.sessions.length, 3)
   assert.ok(after.totalSeconds > before.totalSeconds)
+  db.close()
+  clearRangeFactsCache()
+})
+
+test('a new website visit invalidates the cached window', () => {
+  clearRangeFactsCache()
+  const db = createProductionTestDatabase()
+  seedMorning(db)
+
+  const before = queryCorrectedActivityFactsForRange(db, FROM, TO)
+  assert.equal(before.websiteVisitCount, 0)
+  assert.equal(before.captureCoverage, 'full')
+
+  const visitTime = ms(14, 0)
+  db.prepare(`
+    INSERT INTO website_visits (
+      domain, page_title, url, visit_time, visit_time_us, duration_sec,
+      browser_bundle_id, canonical_browser_id, source
+    ) VALUES (?, ?, ?, ?, ?, ?, 'com.google.Chrome', 'chrome', 'history')
+  `).run(
+    'github.com',
+    'daylens pull request',
+    'https://github.com/irachrist1/daylens/pull/277',
+    visitTime,
+    visitTime * 1000,
+    120,
+  )
+
+  const after = queryCorrectedActivityFactsForRange(db, FROM, TO)
+  assert.equal(after.websiteVisitCount, 1)
+  assert.equal(after.captureCoverage, 'partial')
+  assert.ok(
+    after.gaps.some((gap) => gap.kind === 'capture_unavailable'),
+    `imported visit outside sessions must infer a capture gap, got ${JSON.stringify(after.gaps)}`,
+  )
   db.close()
   clearRangeFactsCache()
 })

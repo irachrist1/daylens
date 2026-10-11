@@ -116,6 +116,7 @@ function gapKind(gap: { label: string; kind?: string | null }): string {
   const label = gap.label.toLowerCase()
   if (kind.includes('asleep') || label.includes('asleep')) return 'asleep'
   if (kind.includes('locked') || label.includes('locked')) return 'locked'
+  if (kind.includes('capture_unavailable') || label.includes('window capture unavailable')) return 'capture_unavailable'
   if (kind.includes('untracked') || label.includes('no data captured') || label.includes('tracking failure')) return 'untracked'
   return 'quiet'
 }
@@ -129,6 +130,8 @@ function gapDescription(gap: { label: string; kind?: string | null } | null): st
       return 'the machine was locked'
     case 'untracked':
       return 'nothing was captured here, which can mean tracking stopped'
+    case 'capture_unavailable':
+      return 'window capture was unavailable'
     default:
       return 'nothing was captured here'
   }

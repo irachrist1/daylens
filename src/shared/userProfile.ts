@@ -139,7 +139,7 @@ function normalizeFocusToken(value: string | null | undefined): string {
  * exact or as a contained phrase ("Figma" matches "Figma Desktop").
  */
 export function appMatchesFocusList(
-  focusApps: string[] | undefined,
+  focusApps: readonly string[] | undefined,
   bundleId: string | null | undefined,
   appName: string | null | undefined,
 ): boolean {

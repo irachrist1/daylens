@@ -314,3 +314,77 @@ test('same evidence + corrections + projection version is byte-stable across rep
   assert.equal(a.projectionVersion, b.projectionVersion)
   assert.equal(a.queryVersion, b.queryVersion)
 })
+
+test('idle lock and sleep gaps do not mark a captured day as partial coverage', () => {
+  const db = createProductionTestDatabase()
+  seedCanonicalMorning(db)
+  insertFocusEvents(db, [
+    focusEvent(ms(11, 0), 'lock', {
+      app_bundle_id: null,
+      app_name: null,
+      pid: null,
+      window_title: null,
+    }),
+    focusEvent(ms(11, 20), 'unlock', {
+      app_bundle_id: null,
+      app_name: null,
+      pid: null,
+      window_title: null,
+    }),
+    focusEvent(ms(12, 0), 'sleep', {
+      app_bundle_id: null,
+      app_name: null,
+      pid: null,
+      window_title: null,
+    }),
+    focusEvent(ms(12, 30), 'wake', {
+      app_bundle_id: null,
+      app_name: null,
+      pid: null,
+      window_title: null,
+    }),
+  ])
+  const facts = queryCorrectedActivityFactsForDay(db, DATE, { asOfMs: DAY_END, nowMs: DAY_END })
+  assert.ok(facts.gaps.some((gap) => gap.kind === 'idle'))
+  assert.ok(facts.gaps.some((gap) => gap.kind === 'locked'))
+  assert.ok(facts.gaps.some((gap) => gap.kind === 'asleep'))
+  assert.ok(facts.sessions.length > 0)
+  assert.equal(facts.captureCoverage, 'full')
+})
+
+test('uncovered website visits become one capture gap per contiguous run', () => {
+  const db = createProductionTestDatabase()
+  insertFocusEvents(db, [
+    focusEvent(ms(9, 0), 'app_activated'),
+    focusEvent(ms(10, 0), 'app_deactivated'),
+  ])
+  const seedVisit = (hour: number, minute = 0, durationSec = 120) => {
+    const visitTime = ms(hour, minute)
+    db.prepare(`
+      INSERT INTO website_visits (
+        domain, page_title, url, visit_time, visit_time_us, duration_sec,
+        browser_bundle_id, canonical_browser_id, source
+      ) VALUES (?, ?, ?, ?, ?, ?, 'com.google.Chrome', 'chrome', 'history')
+    `).run(
+      'github.com',
+      'daylens',
+      `https://github.com/example/${hour}${minute}`,
+      visitTime,
+      visitTime * 1000,
+      durationSec,
+    )
+  }
+  // Adjacent visits merge into one run (8:00 duration 120s covers 8:01).
+  seedVisit(8, 0)
+  seedVisit(8, 1)
+  seedVisit(15, 0)
+  const facts = queryCorrectedActivityFactsForDay(db, DATE, { asOfMs: DAY_END, nowMs: DAY_END })
+  const captureGaps = facts.gaps.filter((gap) => gap.kind === 'capture_unavailable')
+  assert.equal(captureGaps.length, 2, `expected one merged morning run and one afternoon run, got ${JSON.stringify(captureGaps)}`)
+  const morning = captureGaps.find((gap) => gap.startMs === ms(8, 0))
+  assert.ok(morning, 'contiguous 8:00 and 8:01 visits must share one gap')
+  assert.ok(morning.endMs >= ms(8, 3), 'the merged run must cover both visit durations')
+  assert.ok(captureGaps.some((gap) => gap.startMs === ms(15, 0)))
+  assert.ok(!captureGaps.some((gap) => gap.startMs <= ms(9, 0) && gap.endMs >= ms(10, 0)))
+  assert.equal(facts.captureCoverage, 'partial')
+})

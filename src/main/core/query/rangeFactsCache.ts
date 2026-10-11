@@ -8,11 +8,14 @@
 //
 // The signature covers every input the query reads:
 //   - focus_events in the window (count + max ts + max id — deletes shift all)
+//   - website_visits in the window (count + max visit_time + max id — inferred
+//     capture gaps, websiteVisitCount, and coverage depend on visits)
 //   - the correction ledger (timeline_block_reviews count + max updated_at,
 //     evidence_exclusions count + max created_at; global on purpose —
 //     corrections are rare and small, so any change flushes every window)
 //   - legacy app_sessions in the window, when that table still exists
-//   - the focusApps setting (feeds isFocused) and both query versions
+//   - the focusApps setting (feeds isFocused / sustained-focus eligibility)
+//     and both query versions
 //
 // Windows that extend past "now" (a live day) additionally expire after a
 // short TTL, because the trailing open session's clip point moves with the
@@ -87,10 +90,19 @@ export function computeRangeEvidenceSignature(
       `).get(fromMs, toMs) as { n: number; i: number }
     : { n: 0, i: 0 }
 
+  const visits = tableExists(db, 'website_visits')
+    ? db.prepare(`
+        SELECT COUNT(*) AS n, COALESCE(MAX(visit_time), 0) AS t, COALESCE(MAX(id), 0) AS i
+        FROM website_visits
+        WHERE visit_time >= ? AND visit_time < ?
+      `).get(fromMs, toMs) as { n: number; t: number; i: number }
+    : { n: 0, t: 0, i: 0 }
+
   return JSON.stringify([
     versionTag,
     readEvidenceEpoch(db),
     events.n, events.t, events.i,
+    visits.n, visits.t, visits.i,
     reviews.n, reviews.u,
     exclusions.n, exclusions.u,
     legacy.n, legacy.i,

@@ -115,11 +115,11 @@ test('the day summary matches chat once chat’s capture-state superset is remov
   seedDay(db)
   const { mcp, chat } = await bothPaths(db, 'getDaySummary', 'get_day_overview', { date: DATE })
   const chatShared = { ...(chat as Record<string, unknown>) }
-  // The chat tool merges capture state (machine sleep/lock spans, untracked
-  // gaps) onto the same summary; the MCP path serves the summary itself.
+  // The chat tool merges machine sleep/lock spans onto the same summary;
+  // the MCP path serves the summary itself. captureCoverage and gaps now
+  // live on the shared summary.
   delete chatShared.machineStateSpans
   delete chatShared.untrackedGaps
-  delete chatShared.captureCoverage
   assert.deepEqual(mcp, chatShared)
   db.close()
 })

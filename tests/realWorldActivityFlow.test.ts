@@ -19,8 +19,8 @@ test('real-world day projection shows the activity a user actually did', () => {
 
   assert.equal(day.date, REAL_WORLD_DATE)
   assert.equal(day.totalSeconds, 12_300, 'self-capture noise must not count toward tracked time')
-  assert.equal(day.focusSeconds, 8_700, 'development, research, and AI-tool time should count as focus')
-  assert.equal(day.focusPct, 71)
+  assert.equal(day.focusSeconds, 6_300, 'focus is sustained single-app time; AI-tool time does not count')
+  assert.equal(day.focusPct, 51)
   assert.equal(day.appCount, 5)
   assert.equal(day.siteCount, 3)
   assert.deepEqual(
