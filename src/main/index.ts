@@ -183,7 +183,9 @@ import {
   createBackupManifest,
   isHealthyUserDataState,
   selectLatestRestorableBackup,
+  windowsStoreUserDataPath,
 } from './services/userData'
+import { HIDDEN_LAUNCH_ARG, isWindowsStoreBuild } from './lib/windowsStore'
 import {
   checkDatabaseIntegrity,
   consumeCleanShutdownMarker,
@@ -203,6 +205,8 @@ const REAL_DAY_HARNESS = isRealDayHarness()
 const SMOKE_REPORT_PATH = process.env.DAYLENS_SMOKE_REPORT_PATH?.trim() || path.join(os.tmpdir(), 'daylens-smoke-report.json')
 const SMOKE_FOREGROUND_TITLE = process.env.DAYLENS_SMOKE_EXPECT_FOREGROUND_TITLE?.trim() || null
 const SMOKE_FULLSCREEN_TITLE = process.env.DAYLENS_SMOKE_EXPECT_FULLSCREEN_TITLE?.trim() || null
+// The Store StartupTask cannot pass arguments, so its launcher adds this one.
+const LAUNCHED_HIDDEN = process.argv.includes(HIDDEN_LAUNCH_ARG)
 
 function logStartupTiming(stage: string): void {
   console.log(`[startup] ${stage} +${Math.round(process.uptime() * 1_000)}ms`)
@@ -224,6 +228,14 @@ function configureUserDataPath(): void {
     return
   }
   const appDataPath = app.getPath('appData')
+  if (isWindowsStoreBuild()) {
+    // Chromium's caches stay in (virtualized) AppData so uninstall removes them.
+    app.setPath('sessionData', path.join(appDataPath, APP_DISPLAY_NAME))
+    const storePath = windowsStoreUserDataPath(os.homedir())
+    app.setPath('userData', storePath)
+    console.log('[app] using Microsoft Store userData path', storePath)
+    return
+  }
   const selectedPath = chooseUserDataPath(appDataPath, process.platform)
   app.setPath('userData', selectedPath)
   console.log('[app] using userData path', selectedPath)
@@ -248,8 +260,9 @@ if (!gotTheLock) {
 }
 const previousShutdownWasClean = gotTheLock && consumeCleanShutdownMarker(app.getPath('userData'))
 
-// Pin taskbar icon correctly on Windows
-app.setAppUserModelId(APP_USER_MODEL_ID)
+// Pin taskbar icon correctly on Windows. A Store install's AUMID comes from
+// the package (PackageFamilyName!App); overriding it breaks toasts and pinning.
+if (!isWindowsStoreBuild()) app.setAppUserModelId(APP_USER_MODEL_ID)
 
 if (process.platform === 'linux' && SMOKE_TEST) {
   app.disableHardwareAcceleration()
@@ -961,6 +974,18 @@ function showFatalStartupError(title: string, err: unknown): void {
   }
 }
 
+let hiddenLaunchConsumed = false
+
+// A login launch stays in the tray, but only once onboarding is done and the
+// tray exists; otherwise the person would have no way back to the window.
+function startsHiddenInTray(): boolean {
+  if (!LAUNCHED_HIDDEN || hiddenLaunchConsumed || SMOKE_TEST) return false
+  hiddenLaunchConsumed = true
+  if (!shouldUseTrayBehavior()) return false
+  if (!REAL_DAY_HARNESS) ensureTray()
+  return hasTray()
+}
+
 function createWindow(): BrowserWindow {
   const iconExt = process.platform === 'darwin'
     ? 'icns'
@@ -1005,6 +1030,11 @@ function createWindow(): BrowserWindow {
   }
 
   win.once('ready-to-show', () => {
+    if (startsHiddenInTray()) {
+      logStartupTiming('window ready, kept hidden for login launch')
+      win.emit('daylens:ready-hidden')
+      return
+    }
     win.show()
     logStartupTiming('window visible')
     maybeRunSmokeValidation('ready-to-show')
@@ -1319,7 +1349,9 @@ app.whenReady()
     logStartupTiming('onboarding state ready')
     installApplicationMenu()
     if (!REAL_DAY_HARNESS && app.isPackaged && !SMOKE_TEST) {
-      app.setLoginItemSettings({ openAtLogin: reconciledSettings.launchOnLogin })
+      // Store builds launch at login through the manifest StartupTask; Run keys
+      // written from a package are virtualized and Windows never reads them.
+      if (!isWindowsStoreBuild()) app.setLoginItemSettings({ openAtLogin: reconciledSettings.launchOnLogin })
       await syncLinuxLaunchOnLogin(reconciledSettings.launchOnLogin)
     }
 
@@ -1398,7 +1430,10 @@ app.whenReady()
     setDistractionAlertWindow(mainWindow)
     setSpendAlertWindow(mainWindow)
     setPermissionWatcherWindow(mainWindow)
-    startupWindow.once('show', () => {
+    let postPaintStarted = false
+    const startPostPaintServices = () => {
+      if (postPaintStarted) return
+      postPaintStarted = true
       setImmediate(() => {
         if (isQuitting || startupWindow.isDestroyed()) return
         if (!REAL_DAY_HARNESS) ensureTray()
@@ -1443,7 +1478,9 @@ app.whenReady()
         }
         logStartupTiming('post-paint services started')
       })
-    })
+    }
+    startupWindow.once('show', startPostPaintServices)
+    ;(startupWindow as NodeJS.EventEmitter).once('daylens:ready-hidden', startPostPaintServices)
 
     // Push OS appearance changes to all renderer windows so the theme updates
     // in real time when the user switches dark/light mode in System Settings.

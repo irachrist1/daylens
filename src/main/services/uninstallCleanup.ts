@@ -9,6 +9,7 @@ import path from 'node:path'
 import { app, dialog, shell } from 'electron'
 import { APP_DISPLAY_NAME, listUserDataCandidatePaths } from './userData'
 import { getLinuxPackageDiagnostics, syncLinuxLaunchOnLogin } from './linuxDesktop'
+import { isWindowsStoreBuild } from '../lib/windowsStore'
 import { clearApiKey } from './settings'
 import type { AIProviderMode } from '@shared/types'
 
@@ -166,7 +167,7 @@ export async function performUninstallCleanup(options: { deleteLocalData: boolea
     await clearAllStoredApiKeys()
   }
 
-  if (plan.disableLoginItem) {
+  if (plan.disableLoginItem && !isWindowsStoreBuild()) {
     app.setLoginItemSettings({ openAtLogin: false })
   }
   await syncLinuxLaunchOnLogin(false)

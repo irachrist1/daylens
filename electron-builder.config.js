@@ -20,6 +20,18 @@ const appx = {
   publisher: process.env.DAYLENS_APPX_PUBLISHER || 'CN=Daylens',
   languages: ['en-US'],
   backgroundColor: '#111827',
+  // Own manifest so the StartupTask has a Daylens TaskId and a launcher that
+  // marks login launches; electron-builder's addAutoLaunchExtension hard-codes
+  // TaskId "SlackStartup". See docs/windows-store.md.
+  customManifestPath: 'win/store/AppxManifest.xml',
+  addAutoLaunchExtension: false,
+  // runFullTrust only. Anything else under rescap needs a Partner Center
+  // justification (unvirtualizedResources was rejected for non-game apps).
+  capabilities: ['runFullTrust'],
+  // 19041 (Windows 10 2004) is the floor for uap10 and the 1903+ AppData rules
+  // the data-path logic assumes.
+  minVersion: '10.0.19041.0',
+  maxVersionTested: '10.0.26100.0',
 }
 
 const mac = {
@@ -79,17 +91,24 @@ const linux = {
   },
 }
 
+// electron-builder 26 moved the signtool fields from `win` to `win.signtoolOptions`.
+const signtoolOptions = {}
+
 if (process.env.WIN_CERTIFICATE_FILE_PATH) {
-  win.certificateFile = process.env.WIN_CERTIFICATE_FILE_PATH
+  signtoolOptions.certificateFile = process.env.WIN_CERTIFICATE_FILE_PATH
 }
 
 if (process.env.WIN_CERTIFICATE_PASSWORD) {
-  win.certificatePassword = process.env.WIN_CERTIFICATE_PASSWORD
+  signtoolOptions.certificatePassword = process.env.WIN_CERTIFICATE_PASSWORD
 }
 
 if (process.env.WIN_CERT_SUBJECT_NAME) {
-  win.certificateSubjectName = process.env.WIN_CERT_SUBJECT_NAME
-  win.publisherName = [process.env.WIN_CERT_SUBJECT_NAME]
+  signtoolOptions.certificateSubjectName = process.env.WIN_CERT_SUBJECT_NAME
+  signtoolOptions.publisherName = [process.env.WIN_CERT_SUBJECT_NAME]
+}
+
+if (Object.keys(signtoolOptions).length > 0) {
+  win.signtoolOptions = signtoolOptions
 }
 
 if (

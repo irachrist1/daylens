@@ -95,6 +95,53 @@ jobs:
             Write-Host "Created Store package: $($package.FullName)"
           }
 
+      - name: Verify Store manifest
+        # The submission must carry exactly one restricted capability
+        # (runFullTrust) and the Daylens StartupTask from
+        # build/win/store/AppxManifest.xml, not electron-builder's default.
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $package = Get-ChildItem -Path 'dist-release' -Filter '*.appx' -File | Select-Object -First 1
+          if (-not $package) { Write-Error "No .appx to inspect."; exit 1 }
+          $zip = [System.IO.Compression.ZipFile]::OpenRead($package.FullName)
+          try {
+            $entry = $zip.GetEntry('AppxManifest.xml')
+            $reader = New-Object System.IO.StreamReader($entry.Open())
+            $text = $reader.ReadToEnd()
+            $reader.Close()
+          } finally {
+            $zip.Dispose()
+          }
+          New-Item -ItemType Directory -Force -Path 'dist-release/manifest' | Out-Null
+          Set-Content -Path 'dist-release/manifest/AppxManifest.xml' -Value $text
+          [xml]$manifest = $text
+          $ns = New-Object System.Xml.XmlNamespaceManager($manifest.NameTable)
+          $ns.AddNamespace('m', 'http://schemas.microsoft.com/appx/manifest/foundation/windows10')
+          $ns.AddNamespace('uap5', 'http://schemas.microsoft.com/appx/manifest/uap/windows10/5')
+          $ns.AddNamespace('uap10', 'http://schemas.microsoft.com/appx/manifest/uap/windows10/10')
+          $ns.AddNamespace('rescap', 'http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities')
+          $caps = @($manifest.SelectNodes('/m:Package/m:Capabilities/*', $ns) | ForEach-Object { "$($_.Prefix):$($_.Name)" })
+          Write-Host "Capabilities: $($caps -join ', ')"
+          if ($caps.Count -ne 1 -or $caps[0] -ne 'rescap:runFullTrust') {
+            Write-Error "Expected only rescap:runFullTrust, got: $($caps -join ', ')"
+            exit 1
+          }
+          $tasks = @($manifest.SelectNodes('//uap5:StartupTask', $ns))
+          if ($tasks.Count -ne 1 -or $tasks[0].TaskId -ne 'DaylensStartup') {
+            Write-Error "Expected one StartupTask with TaskId DaylensStartup."
+            exit 1
+          }
+          $parameters = $tasks[0].ParentNode.GetAttribute('Parameters', 'http://schemas.microsoft.com/appx/manifest/uap/windows10/10')
+          if ($parameters -ne '--hidden') {
+            Write-Error "StartupTask must pass --hidden, got '$parameters'."
+            exit 1
+          }
+          Write-Host "StartupTask: $($tasks[0].TaskId) (Enabled=$($tasks[0].Enabled), Parameters=$parameters)"
+          $app = $manifest.SelectSingleNode('/m:Package/m:Applications/m:Application', $ns)
+          Write-Host "Application: $($app.Id) -> $($app.Executable)"
+          Write-Host "Identity: $($manifest.Package.Identity.Name) / $($manifest.Package.Identity.Publisher) / $($manifest.Package.Identity.Version)"
+
       - name: Upload Store submission package
         uses: actions/upload-artifact@v6
         with:
@@ -107,3 +154,4 @@ jobs:
             dist-release/*.appxbundle
             dist-release/*.msix
             dist-release/*.msixbundle
+            dist-release/manifest/AppxManifest.xml

@@ -117,7 +117,7 @@
     "cross-env": "^10.0.0",
     "depcheck": "^1.4.7",
     "electron": "^34.5.8",
-    "electron-builder": "^25.1.8",
+    "electron-builder": "^26.17.0",
     "electron-rebuild": "^3.2.9",
     "eslint": "^9.39.4",
     "eslint-config-prettier": "^10.1.8",

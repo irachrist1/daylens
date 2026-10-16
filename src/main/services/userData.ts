@@ -2,6 +2,11 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 export const APP_DISPLAY_NAME = 'Daylens'
+// MSIX redirects NEW files under %APPDATA% into the package's private
+// LocalCache while existing files stay in place, so a database could end up
+// split from its -wal/-shm and invisible to the standalone MCP server and CLI.
+// Store installs therefore keep userData in the profile, outside AppData.
+const WINDOWS_STORE_USER_DATA_DIR = '.daylens'
 const MAC_USER_DATA_DIR = 'Daylens Desktop'
 const LEGACY_USER_DATA_DIRS = ['Daylens', 'DaylensWindows']
 const PRIMARY_DB_FILES = ['daylens.sqlite', 'daylens.sqlite-wal']
@@ -48,7 +53,7 @@ function statIfPresent(targetPath: string): fs.Stats | null {
   }
 }
 
-function directoryStateRank(state: UserDataDirectoryState, preferredPath: string): number {
+function directoryStateRank(state: UserDataDirectoryState, preferredPath: string | null): number {
   const preferredBonus = state.path === preferredPath ? 1 : 0
   return (
     (state.hasMeaningfulData ? 1_000_000 : 0)
@@ -131,15 +136,28 @@ export function listUserDataCandidatePaths(appDataPath: string, platform: NodeJS
   return candidatePaths.filter((candidate, index) => candidatePaths.indexOf(candidate) === index)
 }
 
+export function windowsStoreUserDataPath(homedir: string): string {
+  return path.join(homedir, WINDOWS_STORE_USER_DATA_DIR)
+}
+
 export function chooseUserDataPath(appDataPath: string, platform: NodeJS.Platform): string {
   const { preferredDirName } = getUserDataDirNames(platform)
-  const preferredPath = path.join(appDataPath, preferredDirName)
-  const uniqueCandidatePaths = listUserDataCandidatePaths(appDataPath, platform)
+  return pickUserDataPath(listUserDataCandidatePaths(appDataPath, platform), path.join(appDataPath, preferredDirName))
+}
+
+// Returns the candidate holding the meaningful data, or fallbackPath when none
+// does. preferredPath wins ties ahead of recency; pass null to rank on recency.
+export function pickUserDataPath(
+  candidatePaths: string[],
+  fallbackPath: string,
+  preferredPath: string | null = fallbackPath,
+): string {
+  const uniqueCandidatePaths = candidatePaths.filter((candidate, index) => candidatePaths.indexOf(candidate) === index)
   const states = uniqueCandidatePaths.map((candidate) => describeUserDataDirectory(candidate))
   const meaningfulStates = states.filter((state) => state.hasMeaningfulData)
 
   if (meaningfulStates.length === 0) {
-    return preferredPath
+    return fallbackPath
   }
 
   meaningfulStates.sort((left, right) => {
@@ -150,7 +168,7 @@ export function chooseUserDataPath(appDataPath: string, platform: NodeJS.Platfor
     return 0
   })
 
-  return meaningfulStates[0]?.path ?? preferredPath
+  return meaningfulStates[0]?.path ?? fallbackPath
 }
 
 export function createBackupManifest(sourceDir: string, sourceVersion: string): BackupManifest {

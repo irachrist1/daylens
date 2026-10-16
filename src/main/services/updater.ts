@@ -20,6 +20,7 @@ import {
 import { capture, captureException } from './analytics'
 import { getLinuxPackageDiagnostics, type LinuxPackageType } from './linuxDesktop'
 import { isRealDayHarness } from '../lib/realDayHarness'
+import { isWindowsStoreBuild } from '../lib/windowsStore'
 
 const MANUAL_DOWNLOAD_URL = 'https://christian-tonny.dev/daylens'
 const REMOTE_UPDATE_FEED_URL = process.env.DAYLENS_UPDATE_FEED_URL?.trim() || 'https://christian-tonny.dev/daylens/api/update-feed'
@@ -210,6 +211,14 @@ function getAutoUpdateSupport(): { supported: boolean; message: string | null; p
     return {
       supported: false,
       message: 'Automatic updates are only available in packaged builds.',
+      packageType: null,
+    }
+  }
+
+  if (isWindowsStoreBuild()) {
+    return {
+      supported: false,
+      message: 'This copy of Daylens came from the Microsoft Store, which installs its updates.',
       packageType: null,
     }
   }

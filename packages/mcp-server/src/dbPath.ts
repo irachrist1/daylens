@@ -12,7 +12,7 @@
 // (vite.mcp.config.ts) and the dev ts-loader can pull it in directly.
 import os from 'node:os'
 import path from 'node:path'
-import { chooseUserDataPath } from '../../../src/main/services/userData'
+import { chooseUserDataPath, pickUserDataPath, windowsStoreUserDataPath } from '../../../src/main/services/userData'
 
 // Mirrors Electron's app.getPath('appData') per platform — the base directory
 // the app's userData folders live under.
@@ -36,5 +36,11 @@ export function resolveDefaultDbPath(
   homedir: string = os.homedir(),
 ): string {
   const appData = defaultAppDataPath(platform, env, homedir)
-  return path.join(chooseUserDataPath(appData, platform), 'daylens.sqlite')
+  const desktopDir = chooseUserDataPath(appData, platform)
+  if (platform !== 'win32') return path.join(desktopDir, 'daylens.sqlite')
+  // A Microsoft Store install keeps its data in the profile (see
+  // windowsStoreUserDataPath). With both installs present, the one written to
+  // most recently is the live one.
+  const storeDir = windowsStoreUserDataPath(homedir)
+  return path.join(pickUserDataPath([desktopDir, storeDir], desktopDir, null), 'daylens.sqlite')
 }

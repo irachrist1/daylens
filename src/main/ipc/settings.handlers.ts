@@ -10,6 +10,7 @@ import {
 import { capture } from '../services/analytics'
 import { recordTrackingPauseTransition } from '../services/tracking'
 import { syncLinuxLaunchOnLogin } from '../services/linuxDesktop'
+import { isWindowsStoreBuild } from '../lib/windowsStore'
 import { validateProviderConnection } from '../services/providerValidation'
 import { getMcpServerConfig, isMcpServerRunning, startMcpServer, stopMcpServer } from '../services/mcpServer'
 import { detectFocusApps, discoverMcpServers } from '../services/enrichmentDiscovery'
@@ -66,7 +67,7 @@ export function registerSettingsHandlers(): void {
     }
 
     if (!isRealDayHarness() && 'launchOnLogin' in partial && app.isPackaged) {
-      app.setLoginItemSettings({ openAtLogin: Boolean(partial.launchOnLogin) })
+      if (!isWindowsStoreBuild()) app.setLoginItemSettings({ openAtLogin: Boolean(partial.launchOnLogin) })
       await syncLinuxLaunchOnLogin(Boolean(partial.launchOnLogin))
     }
 

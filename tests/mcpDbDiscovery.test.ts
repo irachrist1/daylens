@@ -80,3 +80,65 @@ test('appData base matches Electron conventions per platform', () => {
   )
   assert.equal(defaultAppDataPath('linux', {}, '/home/x'), path.join('/home/x', '.config'))
 })
+
+// Fake Windows profile: discovery reads APPDATA for the installer build and
+// <home>\.daylens for the Microsoft Store build.
+function makeWindowsHome(): { home: string; appData: string; env: NodeJS.ProcessEnv } {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'daylens-mcp-discovery-win-'))
+  const appData = path.join(home, 'AppData', 'Roaming')
+  fs.mkdirSync(appData, { recursive: true })
+  return { home, appData, env: { APPDATA: appData } }
+}
+
+function setMtime(dir: string, ms: number): void {
+  const when = new Date(ms)
+  for (const file of ['daylens.sqlite', 'config.json']) fs.utimesSync(path.join(dir, file), when, when)
+}
+
+test('win32: finds a Microsoft Store install in the profile when APPDATA holds nothing', () => {
+  const { home, env } = makeWindowsHome()
+  try {
+    const store = seedUserDataDir(home, '.daylens')
+    assert.equal(resolveDefaultDbPath('win32', env, home), path.join(store, 'daylens.sqlite'))
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('win32: the installer build stays found when there is no Store install', () => {
+  const { home, appData, env } = makeWindowsHome()
+  try {
+    const installer = seedUserDataDir(appData, 'Daylens')
+    assert.equal(resolveDefaultDbPath('win32', env, home), path.join(installer, 'daylens.sqlite'))
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('win32: with both installs present the most recently written one wins', () => {
+  const { home, appData, env } = makeWindowsHome()
+  try {
+    const installer = seedUserDataDir(appData, 'Daylens')
+    const store = seedUserDataDir(home, '.daylens')
+    const now = Date.now()
+
+    setMtime(installer, now - 86_400_000)
+    setMtime(store, now)
+    assert.equal(resolveDefaultDbPath('win32', env, home), path.join(store, 'daylens.sqlite'))
+
+    setMtime(installer, now)
+    setMtime(store, now - 86_400_000)
+    assert.equal(resolveDefaultDbPath('win32', env, home), path.join(installer, 'daylens.sqlite'))
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('win32: empty machine still resolves to the installer path under APPDATA', () => {
+  const { home, appData, env } = makeWindowsHome()
+  try {
+    assert.equal(resolveDefaultDbPath('win32', env, home), path.join(appData, 'Daylens', 'daylens.sqlite'))
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
