@@ -20,9 +20,9 @@ const appx = {
   publisher: process.env.DAYLENS_APPX_PUBLISHER || 'CN=Daylens',
   languages: ['en-US'],
   backgroundColor: '#111827',
-  // Own manifest so the StartupTask has a Daylens TaskId and a launcher that
-  // marks login launches; electron-builder's addAutoLaunchExtension hard-codes
-  // TaskId "SlackStartup". See docs/windows-store.md.
+  // Own manifest so the StartupTask has a Daylens TaskId and passes --hidden;
+  // electron-builder's addAutoLaunchExtension hard-codes TaskId "SlackStartup".
+  // See docs/operations/windows-store.md.
   customManifestPath: 'win/store/AppxManifest.xml',
   addAutoLaunchExtension: false,
   // runFullTrust only. Anything else under rescap needs a Partner Center

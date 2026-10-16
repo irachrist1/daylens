@@ -205,7 +205,7 @@ const REAL_DAY_HARNESS = isRealDayHarness()
 const SMOKE_REPORT_PATH = process.env.DAYLENS_SMOKE_REPORT_PATH?.trim() || path.join(os.tmpdir(), 'daylens-smoke-report.json')
 const SMOKE_FOREGROUND_TITLE = process.env.DAYLENS_SMOKE_EXPECT_FOREGROUND_TITLE?.trim() || null
 const SMOKE_FULLSCREEN_TITLE = process.env.DAYLENS_SMOKE_EXPECT_FULLSCREEN_TITLE?.trim() || null
-// The Store StartupTask cannot pass arguments, so its launcher adds this one.
+// The Store StartupTask passes this through uap10:Parameters (build/win/store/AppxManifest.xml).
 const LAUNCHED_HIDDEN = process.argv.includes(HIDDEN_LAUNCH_ARG)
 
 function logStartupTiming(stage: string): void {
